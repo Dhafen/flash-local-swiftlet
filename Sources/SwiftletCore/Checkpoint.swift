@@ -259,7 +259,8 @@ public final class Checkpoint {
     /// so stacked experts slice as `expert * innerRows ..< (expert+1) * innerRows`).
     public func moduleWeightSlice(_ path: String, rowRange: Range<Int>) throws -> [Float] {
         if let packedReference, packedReference.handles(path) {
-            return try packedReference.rows(path, range: rowRange, quant: quantSpec(for: path))
+            return try packedReference.rows(path, range: rowRange,
+                quant: Self.quantSpec(for: path, default: defaultQuant, overrides: quantOverrides))
         }
         if isQuantized(path) {
             return try dequantized(path, rowRange: rowRange)
