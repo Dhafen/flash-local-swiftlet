@@ -1,0 +1,76 @@
+name: Bounded QPack CPU reference
+on:
+  push:
+    branches: [codex/qpack-reference]
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: bounded-reference-${{ github.ref }}
+  cancel-in-progress: true
+defaults:
+  run:
+    shell: bash
+jobs:
+  synthetic-reference:
+    runs-on: macos-26
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - name: Use the pinned Core validation harness
+        run: |
+          test "$(uname -m)" = arm64
+          sudo xcode-select -s /Applications/Xcode_26.2.app
+          python3 - <<'PY'
+          import hashlib
+          from pathlib import Path
+          from urllib.request import urlopen
+          url = 'https://raw.githubusercontent.com/Dhafen/flash-local/86f3f6611a6795999b04c6878ee8182740cedb99/Experiments/OrnithPerformance/ValidationPackage.swift'
+          with urlopen(url, timeout=30) as r:
+              data = r.read(65537)
+          assert hashlib.sha256(data).hexdigest() == '06a261614a575480148170de408411133352955589141e6b8b0297699ee028f7'
+          Path('Package.swift').write_bytes(data)
+          for suite in ('SwiftletSessionTests', 'TextGeneratorTests'):
+              path = Path('Tests/SwiftletCoreTests') / (suite + '.swift')
+              text = path.read_text()
+              old = '@Suite struct ' + suite + ' '
+              assert text.count(old) == 1
+              path.write_text(text.replace(old, '@Suite(.serialized) struct ' + suite + ' '))
+          PY
+          git diff -- Package.swift Tests > validation-harness.patch
+      - name: All synthetic numerical and placement controls
+        run: |
+          xcodebuild test -scheme SwiftletValidation -destination 'platform=macOS' \
+            -skipPackagePluginValidation -skipMacroValidation \
+            -skip-testing:SwiftletCoreTests/SwiftletSessionTests \
+            -skip-testing:SwiftletCoreTests/TextGeneratorTests \
+            -resultBundlePath reference-tests.xcresult 2>&1 | tee reference-tests.log | tail -80
+          test "$(grep -c 'QPACK_CPU_REFERENCE model=' reference-tests.log)" -eq 3
+          grep -E 'Test run with [1-9][0-9]* tests?.*passed' reference-tests.log
+      - name: Required lifecycle controls in isolation
+        run: |
+          for suite in SwiftletSessionTests TextGeneratorTests; do
+            xcodebuild test -scheme SwiftletValidation -destination 'platform=macOS' \
+              -skipPackagePluginValidation -skipMacroValidation -parallel-testing-enabled NO \
+              -only-testing:"SwiftletCoreTests/$suite" \
+              -resultBundlePath "$suite.xcresult" 2>&1 | tee "$suite.log" | tail -50
+            grep -E 'Test run with [1-9][0-9]* tests?.*passed' "$suite.log"
+          done
+      - name: iOS compile
+        run: |
+          xcodebuild build -scheme SwiftletValidation -destination 'generic/platform=iOS Simulator' \
+            -skipPackagePluginValidation -skipMacroValidation CODE_SIGNING_ALLOWED=NO \
+            2>&1 | tee reference-ios.log | tail -60
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: qpack-reference-text
+          path: |
+            reference-tests.log
+            reference-ios.log
+            SwiftletSessionTests.log
+            TextGeneratorTests.log
+            validation-harness.patch
+          retention-days: 7

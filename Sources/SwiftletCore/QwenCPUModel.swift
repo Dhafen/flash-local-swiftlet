@@ -112,18 +112,71 @@ public final class QwenCPUModel {
     var embed: [Float]
     var finalNorm: [Float]
     var lmHead: [Float]
+    private let referenceTableTileRows: Int?
     private var layerCache: (index: Int, weights: LayerWeights)?
     private var allLayers: [Int: LayerWeights] = [:]
     /// Keep every layer's dense weights resident (f32). Costs ~4 bytes/dense
     /// param but avoids re-dequantizing per decode step. ~10 GB for the 80B.
     public var retainAllLayers = false
 
-    public init(modelDir: URL) throws {
+    /// Optional bounded diagnostic placement. Defaults preserve the original
+    /// CPU implementation; the app's Metal engine does not use this mode.
+    public init(modelDir: URL, referenceTableTileRows: Int? = nil) throws {
+        if let tile = referenceTableTileRows, !(1...1024).contains(tile) {
+            throw Checkpoint.Error.badShape("reference head tile must contain 1...1024 rows")
+        }
+        self.referenceTableTileRows = referenceTableTileRows
         config = try QwenConfig(url: modelDir.appendingPathComponent("config.json"))
-        ckpt = try Checkpoint(dir: modelDir)
-        embed = try ckpt.moduleWeight("model.embed_tokens")
+        ckpt = try Checkpoint(dir: modelDir, readPackedExpertSlices: referenceTableTileRows != nil)
+        embed = referenceTableTileRows == nil ? try ckpt.moduleWeight("model.embed_tokens") : []
         finalNorm = try ckpt.tensor("model.norm.weight")
-        lmHead = config.tieWordEmbeddings ? embed : try ckpt.moduleWeight("lm_head")
+        lmHead = referenceTableTileRows != nil ? [] :
+            (config.tieWordEmbeddings ? embed : try ckpt.moduleWeight("lm_head"))
+    }
+
+    private func referenceAdmission(_ tokens: [Int]) throws {
+        guard tokens.allSatisfy({ (0..<config.vocabSize).contains($0) }) else {
+            throw Checkpoint.Error.badShape("invalid reference token")
+        }
+        if referenceTableTileRows != nil, (tokens.isEmpty || tokens.count > 8 || retainAllLayers) {
+            throw Checkpoint.Error.badShape("bounded reference requires 1...8 tokens and one-layer placement")
+        }
+    }
+    private func embedRows(_ tokens: [Int]) throws -> [Float] {
+        let d = config.hiddenSize
+        var output = [Float](repeating: 0, count: tokens.count * d)
+        if referenceTableTileRows == nil {
+            for (position, token) in tokens.enumerated() {
+                for column in 0..<d { output[position * d + column] = embed[token * d + column] }
+            }
+            return output
+        }
+        for (position, token) in tokens.enumerated() {
+            let row = try ckpt.moduleWeightSlice("model.embed_tokens", rowRange: token..<(token + 1))
+            output.replaceSubrange(position * d..<(position + 1) * d, with: row)
+        }
+        return output
+    }
+    private func projectHead(_ h: [Float], rows: Int, shouldCancel: () -> Bool) throws -> [Float] {
+        guard let requested = referenceTableTileRows else {
+            return Self.linear(h, rows: rows, inDim: config.hiddenSize, weight: lmHead, outDim: config.vocabSize)
+        }
+        let d = config.hiddenSize, vocabulary = config.vocabSize
+        // At most 16 MiB of dequantized output weights at once.
+        let tile = min(requested, max(1, (16 << 20) / 4 / d))
+        var output = [Float](repeating: 0, count: rows * vocabulary)
+        for start in stride(from: 0, to: vocabulary, by: tile) {
+            try checkGenerationCancellation(shouldCancel)
+            let end = min(start + tile, vocabulary)
+            let weight = try ckpt.moduleWeightSlice(config.tieWordEmbeddings ? "model.embed_tokens" : "lm_head",
+                                                   rowRange: start..<end)
+            let values = Self.linear(h, rows: rows, inDim: d, weight: weight, outDim: end - start)
+            for row in 0..<rows {
+                output.replaceSubrange(row * vocabulary + start..<row * vocabulary + end,
+                                       with: values[row * (end - start)..<(row + 1) * (end - start)])
+            }
+        }
+        return output
     }
 
     func layerWeights(_ i: Int) throws -> LayerWeights {
@@ -203,16 +256,14 @@ public final class QwenCPUModel {
     }
 
     public func forward(tokens: [Int], captureLayers: Bool = true) throws -> Captures {
+        try referenceAdmission(tokens)
         let cfg = config
         let S = tokens.count
         let D = cfg.hiddenSize
         var caps = Captures()
         let state = DecodeState()
 
-        var h = [Float](repeating: 0, count: S * D)
-        for (s, t) in tokens.enumerated() {
-            for i in 0..<D { h[s * D + i] = embed[t * D + i] }
-        }
+        var h = try embedRows(tokens)
         caps.embed = h
 
         for li in 0..<cfg.numHiddenLayers {
@@ -222,7 +273,7 @@ public final class QwenCPUModel {
 
         Self.rmsNorm(&h, rows: S, dim: D, weight: finalNorm, eps: Float(cfg.rmsNormEps))
         caps.finalNorm = h
-        let logits = Self.linear(h, rows: S, inDim: D, weight: lmHead, outDim: cfg.vocabSize)
+        let logits = try projectHead(h, rows: S, shouldCancel: { false })
         caps.logits = logits
         for s in 0..<S {
             var best = 0
@@ -249,17 +300,15 @@ public final class QwenCPUModel {
         shouldCancel: () -> Bool
     ) throws -> [Float] {
         try checkGenerationCancellation(shouldCancel)
+        try referenceAdmission(tokens)
         let cfg = config
         let S = tokens.count
         let D = cfg.hiddenSize
-        try ContextWindow(maximumTokens: cfg.maxPositionEmbeddings).validateStep(
+        try ContextWindow(maximumTokens: referenceTableTileRows == nil ? cfg.maxPositionEmbeddings : min(64, cfg.maxPositionEmbeddings)).validateStep(
             processedTokens: state.position, incomingTokens: S
         )
 
-        var h = [Float](repeating: 0, count: S * D)
-        for (s, t) in tokens.enumerated() {
-            for i in 0..<D { h[s * D + i] = embed[t * D + i] }
-        }
+        var h = try embedRows(tokens)
         for li in 0..<cfg.numHiddenLayers {
             try checkGenerationCancellation(shouldCancel)
             h = try layerForward(h, S: S, layerIndex: li, state: state)
@@ -270,7 +319,7 @@ public final class QwenCPUModel {
         var last = Array(h[(S - 1) * D..<S * D])
         Self.rmsNorm(&last, rows: 1, dim: D, weight: finalNorm, eps: Float(cfg.rmsNormEps))
         try checkGenerationCancellation(shouldCancel)
-        let logits = Self.linear(last, rows: 1, inDim: D, weight: lmHead, outDim: cfg.vocabSize)
+        let logits = try projectHead(last, rows: 1, shouldCancel: shouldCancel)
         try checkGenerationCancellation(shouldCancel)
         return logits
     }
