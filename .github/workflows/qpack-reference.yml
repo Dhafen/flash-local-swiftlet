@@ -47,7 +47,7 @@ jobs:
             -skip-testing:SwiftletCoreTests/SwiftletSessionTests \
             -skip-testing:SwiftletCoreTests/TextGeneratorTests \
             -resultBundlePath reference-tests.xcresult 2>&1 | tee reference-tests.log | tail -80
-          test "$(grep -c 'QPACK_CPU_REFERENCE model=' reference-tests.log)" -eq 3
+          test "$(grep -c 'QPACK_CPU_REFERENCE model=' reference-tests.log)" -eq 4
           grep -E 'Test run with [1-9][0-9]* tests?.*passed' reference-tests.log
       - name: Required lifecycle controls in isolation
         run: |

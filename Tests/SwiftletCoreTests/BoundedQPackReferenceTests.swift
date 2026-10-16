@@ -78,4 +78,85 @@ import Testing
         #expect(throws: ContextWindowError.self) { try model.step([1], state: state) }
         #expect(state.position == 64)
     }
+
+    @Test func mixedEightBitRoutersAndBF16ScalesMatchRawCPU() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let source = root.appendingPathComponent("source")
+        try Self.makeMixedSynthetic(in: source)
+        let output = root.appendingPathComponent("mixed.qpack")
+        var packer = QpackRepacker(checkpointDir: source, outputDir: output)
+        packer.log = { _ in }; try packer.repack()
+        let raw = try QwenCPUModel(modelDir: source)
+        let bounded = try QwenCPUModel(modelDir: output, referenceTableTileRows: 7)
+        let a = QwenCPUModel.DecodeState(), b = QwenCPUModel.DecodeState()
+        #expect(raw.ckpt.quantSpec(for: "model.layers.0.mlp.gate")?.bits == 8)
+        #expect(raw.ckpt.quantSpec(for: "model.layers.0.mlp.switch_mlp.gate_proj")?.bits == 4)
+        var worst: Float = 0
+        for token in [1, 5, 9, 3, 7] {
+            let expected = try raw.step([token], state: a)
+            let actual = try bounded.step([token], state: b)
+            #expect(actual.count == expected.count)
+            for (x, y) in zip(actual, expected) { worst = max(worst, abs(x - y)) }
+            #expect(worst <= 0.00001)
+            #expect(actual.indices.max(by: { actual[$0] < actual[$1] }) == expected.indices.max(by: { expected[$0] < expected[$1] }))
+        }
+        print("QPACK_CPU_REFERENCE model=synthetic-mixed-bf16 routerBits=8 expertBits=4 rawCheckpointControl=true sameGreedy=true maxAbs=\(worst) syntheticOnly=true")
+    }
+
+    /// Rewrites the existing untrained fixture, never trained model bytes.
+    /// Integer code values are retained when expanding routers from 4 to 8
+    /// bits; BF16 rounding applies to both independent comparison paths.
+    private static func makeMixedSynthetic(in directory: URL) throws {
+        let original = fixtures.appendingPathComponent("tiny-model-q4")
+        let checkpoint = try Checkpoint(dir: original)
+        var config = try Checkpoint.readConfig(inDirectory: original)
+        var quant = config["quantization"] as! [String: Any]
+        var header: [String: Any] = [:]
+        var body = Data()
+        for name in checkpoint.tensorNames.sorted() {
+            let tensor = try checkpoint.rawTensor(name)
+            var shape = tensor.info.shape, dtype = tensor.info.dtype, data = tensor.bytes
+            if dtype == "F32" {
+                var converted = Data()
+                data.withUnsafeBytes { raw in
+                    for offset in stride(from: 0, to: raw.count, by: 4) {
+                        let bits = raw.loadUnaligned(fromByteOffset: offset, as: UInt32.self).littleEndian
+                        var bf16 = UInt16(bits >> 16).littleEndian
+                        withUnsafeBytes(of: &bf16) { converted.append(contentsOf: $0) }
+                    }
+                }
+                dtype = "BF16"; data = converted
+            } else if dtype == "U32" && (name.hasSuffix(".mlp.gate.weight") || name.hasSuffix(".mlp.shared_expert_gate.weight")) {
+                var converted = Data()
+                data.withUnsafeBytes { raw in
+                    for offset in stride(from: 0, to: raw.count, by: 4) {
+                        let old = raw.loadUnaligned(fromByteOffset: offset, as: UInt32.self).littleEndian
+                        for group in 0..<2 {
+                            var word: UInt32 = 0
+                            for element in 0..<4 {
+                                word |= ((old >> UInt32((group * 4 + element) * 4)) & 15) << UInt32(element * 8)
+                            }
+                            var little = word.littleEndian
+                            withUnsafeBytes(of: &little) { converted.append(contentsOf: $0) }
+                        }
+                    }
+                }
+                shape[shape.count - 1] *= 2
+                quant[String(name.dropLast(7))] = ["bits": 8, "group_size": 32]
+                data = converted
+            }
+            header[name] = ["shape": shape, "dtype": dtype, "data_offsets": [body.count, body.count + data.count]]
+            body.append(data)
+        }
+        config["quantization"] = quant
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        try JSONSerialization.data(withJSONObject: config, options: [.sortedKeys])
+            .write(to: directory.appendingPathComponent("config.json"))
+        let metadata = try JSONSerialization.data(withJSONObject: header, options: [.sortedKeys])
+        var length = UInt64(metadata.count).littleEndian
+        var file = withUnsafeBytes(of: &length) { Data($0) }
+        file.append(metadata); file.append(body)
+        try file.write(to: directory.appendingPathComponent("model.safetensors"))
+    }
 }
