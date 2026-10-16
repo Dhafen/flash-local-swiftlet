@@ -187,6 +187,10 @@ public final class QwenMetalModel {
     }
 
     public let config: QwenConfig
+    /// The CPU KV copy is an introspection surface, never an input to the
+    /// fast attention kernels. A single-owner phone session can omit it.
+    /// Default true preserves the upstream state inspection contract.
+    public let retainsCPUKVMirror: Bool
     let ckpt: Checkpoint
     let engine: MetalEngine
     let store: MetalShardStore
@@ -356,7 +360,8 @@ public final class QwenMetalModel {
     var prefillSlotCapacity = 0
     var prefillStage = PrefillStage()
 
-    public init(modelDir: URL, cacheBudgetGB: Double = 8) throws {
+    public init(modelDir: URL, cacheBudgetGB: Double = 8, retainCPUKVMirror: Bool = true) throws {
+        retainsCPUKVMirror = retainCPUKVMirror
         config = try QwenConfig(url: modelDir.appendingPathComponent("config.json"))
         ckpt = try Checkpoint(dir: modelDir)
         engine = try MetalEngine()
@@ -517,6 +522,9 @@ public final class QwenMetalModel {
 
         print("[QwenMetalModel] descriptors ready; building fast path...")
         try setupFastPath(denseLinear: denseLinear)
+        guard retainCPUKVMirror || (sBuf != nil && hBuf != nil) else {
+            throw RuntimeError.fastPathRequiredWithoutKVMirror
+        }
         print("[QwenMetalModel] fast path ready")
     }
 
@@ -968,6 +976,13 @@ public final class QwenMetalModel {
         try ContextWindow(maximumTokens: config.maxPositionEmbeddings).validateStep(
             processedTokens: state.position, incomingTokens: tokens.count
         )
+        // An unmirrored session owns one live GPU state. An old/foreign
+        // DecodeState cannot restore KV rows which it deliberately never kept.
+        // Refuse before any state, cache, command buffer or hidden row changes.
+        if !retainsCPUKVMirror, state.position > 0,
+           boundStateID != ObjectIdentifier(state) {
+            throw RuntimeError.foreignDecodeStateWithoutKVMirror
+        }
 
         var logits: [Float] = []
         // S1b: multi-token prompt calls take the layer-major chunked schedule
@@ -1935,6 +1950,8 @@ extension QwenMetalModel {
     /// for attention, so the step surfaces the allocation failure.
     public enum RuntimeError: Swift.Error {
         case kvCacheAllocationFailed(layer: Int, rows: Int)
+        case fastPathRequiredWithoutKVMirror
+        case foreignDecodeStateWithoutKVMirror
     }
 
     private var kvRowFloats: Int { config.numKeyValueHeads * config.headDim }
@@ -1971,6 +1988,7 @@ extension QwenMetalModel {
     func appendKVMirror(
         _ state: QwenCPUModel.DecodeState, layer li: Int, position: Int, count: Int
     ) {
+        guard retainsCPUKVMirror else { return }
         guard let k = fastLayers[li].kCache, let v = fastLayers[li].vCache else { return }
         let n = count * kvRowFloats
         let byteOff = position * kvRowFloats * 4
