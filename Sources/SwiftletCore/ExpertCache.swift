@@ -56,6 +56,8 @@ public final class ExpertCache {
 
     public private(set) var hits = 0
     public private(set) var misses = 0
+    public private(set) var evictions = 0
+    public var ioStatistics: QpackIOStatistics { reader.ioStatistics }
 
     private var maxSlots: Int
     private var physicalBudget: ExpertCacheBudget
@@ -130,7 +132,10 @@ public final class ExpertCache {
             }
             misses += 1
             let s = try slotForFill(excluding: protectedSlots)
-            if slotKey[s] >= 0 { keyToSlot.removeValue(forKey: slotKey[s]) }
+            if slotKey[s] >= 0 {
+                keyToSlot.removeValue(forKey: slotKey[s])
+                evictions += 1
+            }
             slotKey[s] = k
             keyToSlot[k] = s
             slotLastUse[s] = tick

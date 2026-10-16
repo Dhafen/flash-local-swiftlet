@@ -369,10 +369,37 @@ public struct QpackRepacker {
 }
 
 /// Reads expert blobs back out of a `.qpack` container, one pread per expert.
+public struct QpackIOStatistics: Equatable, Sendable {
+    public let readCalls: Int
+    public let returnedBytes: UInt64
+    /// Sum of individual pread durations. Concurrent reads overlap, so this
+    /// is not elapsed I/O-wait time and is not a controller bandwidth counter.
+    public let summedReadSeconds: Double
+}
+
+private final class QpackIORecorder: @unchecked Sendable {
+    private let lock = NSLock()
+    private var calls = 0
+    private var bytes: UInt64 = 0
+    private var seconds = 0.0
+    func record(_ count: Int, _ duration: Double) {
+        lock.lock(); defer { lock.unlock() }
+        calls += 1
+        bytes += UInt64(max(0, count))
+        seconds += max(0, duration)
+    }
+    var snapshot: QpackIOStatistics {
+        lock.lock(); defer { lock.unlock() }
+        return .init(readCalls: calls, returnedBytes: bytes, summedReadSeconds: seconds)
+    }
+}
+
 public final class QpackExpertReader {
     public let layout: Qpack.Layout
     private let dir: URL
     private var fds: [Int32]
+    private let ioRecorder = QpackIORecorder()
+    public var ioStatistics: QpackIOStatistics { ioRecorder.snapshot }
 
     public init(containerDir: URL) throws {
         dir = containerDir.appendingPathComponent("packed_experts")
@@ -396,7 +423,8 @@ public final class QpackExpertReader {
     /// at least `layout.expertStride` bytes.
     public func readExpert(layer: Int, expert: Int, into buffer: UnsafeMutableRawPointer) throws {
         let fd = try descriptor(layer: layer)
-        try Self.readBlob(fd, layer: layer, expert: expert, stride: layout.expertStride, into: buffer)
+        try Self.readBlob(fd, layer: layer, expert: expert, stride: layout.expertStride, into: buffer,
+                          recorder: ioRecorder)
     }
 
     /// Several expert blobs of one layer, each into its own buffer. Two or
@@ -412,15 +440,16 @@ public final class QpackExpertReader {
         let stride = layout.expertStride
         if requests.count == 1 {
             try Self.readBlob(fd, layer: layer, expert: requests[0].expert, stride: stride,
-                           into: requests[0].into)
+                           into: requests[0].into, recorder: ioRecorder)
             return
         }
         let lock = NSLock()
+        let recorder = ioRecorder
         var failure: Swift.Error?
         DispatchQueue.concurrentPerform(iterations: requests.count) { i in
             do {
                 try Self.readBlob(fd, layer: layer, expert: requests[i].expert, stride: stride,
-                               into: requests[i].into)
+                               into: requests[i].into, recorder: recorder)
             } catch {
                 lock.lock()
                 if failure == nil { failure = error }
@@ -441,9 +470,12 @@ public final class QpackExpertReader {
     }
 
     private static func readBlob(
-        _ fd: Int32, layer: Int, expert: Int, stride: Int, into buffer: UnsafeMutableRawPointer
+        _ fd: Int32, layer: Int, expert: Int, stride: Int, into buffer: UnsafeMutableRawPointer,
+        recorder: QpackIORecorder
     ) throws {
+        let start = ProcessInfo.processInfo.systemUptime
         let n = pread(fd, buffer, stride, off_t(expert * stride))
+        recorder.record(n, ProcessInfo.processInfo.systemUptime - start)
         guard n == stride else {
             throw Checkpoint.Error.badShape("short read: layer \(layer) expert \(expert)")
         }
