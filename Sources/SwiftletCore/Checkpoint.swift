@@ -69,6 +69,7 @@ public final class Checkpoint {
     private var files: [SafetensorsFile] = []
     private var fileURLs: [URL] = []
     private var tensorToFile: [String: Int] = [:]
+    private var packedReference: QPackCPUWeightReader?
 
     /// Parses mlx-lm's quantization block and refuses any mode this reader
     /// cannot dequantize, so every entry point (checkpoint open, repack, the
@@ -132,7 +133,7 @@ public final class Checkpoint {
         return cfg
     }
 
-    public init(dir: URL) throws {
+    public init(dir: URL, readPackedExpertSlices: Bool = false) throws {
         self.dir = dir
 
         // Refuses a directory that is not a checkpoint here, by name, before
@@ -162,6 +163,10 @@ public final class Checkpoint {
             files.append(try SafetensorsFile(url: url))
             fileURLs.append(url)
             for name in files[0].tensors.keys { tensorToFile[name] = 0 }
+        }
+        if readPackedExpertSlices,
+           FileManager.default.fileExists(atPath: dir.appendingPathComponent("packed_experts/layout.json").path) {
+            packedReference = try QPackCPUWeightReader(directory: dir)
         }
     }
 
@@ -239,6 +244,9 @@ public final class Checkpoint {
     /// Dequantized (or plain) weights for a linear/embedding module `path`,
     /// returned row-major with the checkpoint's logical shape.
     public func moduleWeight(_ path: String) throws -> [Float] {
+        if packedReference?.handles(path) == true {
+            throw Error.badShape("full packed expert stacks are not admitted by the CPU reference")
+        }
         if isQuantized(path) {
             return try dequantized(path, rowRange: nil)
         }
@@ -250,6 +258,10 @@ public final class Checkpoint {
     /// axis and all leading axes are flattened (matches the quantized layout,
     /// so stacked experts slice as `expert * innerRows ..< (expert+1) * innerRows`).
     public func moduleWeightSlice(_ path: String, rowRange: Range<Int>) throws -> [Float] {
+        if let packedReference, packedReference.handles(path) {
+            return try packedReference.rows(path, range: rowRange,
+                quant: Self.quantSpec(for: path, default: defaultQuant, overrides: quantOverrides))
+        }
         if isQuantized(path) {
             return try dequantized(path, rowRange: rowRange)
         }
