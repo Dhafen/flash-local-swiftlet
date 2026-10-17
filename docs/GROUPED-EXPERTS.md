@@ -20,7 +20,8 @@ projections per dispatch and original GEMV for a one-projection tail.
 Validation covers separate blobs, nonzero offsets, F32/F16/BF16 scales,
 mixed output sizes, distinct/shared inputs, one/sixteen/seventeen jobs,
 fallback layouts and full synthetic QPack models with top-2 and top-8.
-Full-model comparisons require bitwise logits, identical routing and KV,
+Full-model comparisons require bitwise logits, identical routing and KV
+agreement within the existing 1e-6 tolerance,
 continued decoding after eviction and after layer-major prefill, and exactly
 the expected dispatch reduction. Existing controls run unchanged with the
 feature off. Blocking lifecycle suites run separately with serialized
@@ -30,3 +31,18 @@ Only small untrained fixtures run in CI. Passing these controls does not
 establish trained Ornith parity, phone speed, memory peaks, sustained
 temperature behavior, or model quality. Those require the physical iPhone
 and the installed pinned checkpoint before integration/default activation.
+
+## Validation checkpoint
+
+[Run 39027165387](https://github.com/Dhafen/flash-local-swiftlet/actions/runs/39027165387),
+code/test source `1e348e7b61289d70ba5bde2c212bcfa7867f4323`, passed
+174 Core test functions, five session controls, seven generator controls
+and generic iOS Simulator compilation under Xcode 26.2. Parameterized
+controls include both actual Ornith projection directions (2048→512 and
+512→2048), g64/BF16 scales and completed Metal command-buffer checks.
+
+The eight-layer synthetic whole-model top-8 control saved exactly 232
+dispatches per decode while retaining bitwise logits and identical routes;
+top-2 saved 40. This is dispatch accounting on untrained fixtures, with no
+claim of trained-model or physical-phone speed. The app remains pinned to
+its previous runtime and the experimental grouping remains off by default.
