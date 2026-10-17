@@ -44,12 +44,12 @@ import Testing
         let x = engine.makeBuffer((0..<xCount).map { _ in rng.float() })
         let original = engine.makeBuffer([Float](repeating: -987, count: yCount))
         let grouped = engine.makeBuffer([Float](repeating: -987, count: yCount))
-        let originalCount = try MetalKernelTests.runEncoded(engine) { enc in
+        let originalCount = try Self.runEncoded(engine) { enc in
             for job in jobs {
                 try engine.encodeGemv(enc, job.linear, x: x, xOff: job.xOff, y: original, yOff: job.yOff)
             }
         }
-        let groupedCount = try MetalKernelTests.runEncoded(engine) { enc in
+        let groupedCount = try Self.runEncoded(engine) { enc in
             try engine.encodeIndependentGEMVs(enc, jobs, x: x, y: grouped)
         }
         #expect(originalCount == jobs.count)
@@ -57,6 +57,22 @@ import Testing
         let a = UnsafeBufferPointer(start: original.contents().bindMemory(to: Float.self, capacity: yCount), count: yCount)
         let b = UnsafeBufferPointer(start: grouped.contents().bindMemory(to: Float.self, capacity: yCount), count: yCount)
         #expect(a.map(\.bitPattern) == b.map(\.bitPattern), "grouped output or untouched sentinel changed")
+    }
+
+    static func runEncoded(_ engine: MetalEngine,
+                           _ body: (MTLComputeCommandEncoder) throws -> Void) throws -> Int {
+        var count = 0
+        engine.computeDispatchObserver = { count += 1 }
+        defer { engine.computeDispatchObserver = nil }
+        let cb = try #require(engine.queue.makeCommandBuffer())
+        let enc = try #require(cb.makeComputeCommandEncoder())
+        do { try body(enc) }
+        catch { enc.endEncoding(); throw error }
+        enc.endEncoding()
+        cb.commit()
+        cb.waitUntilCompleted()
+        try #require(cb.status == .completed, "Metal command buffer did not complete")
+        return count
     }
 
     @Test(arguments: [UInt32(0), UInt32(1), UInt32(2)], [1, 3, 8, 16, 17])
@@ -70,28 +86,35 @@ import Testing
         try Self.compare(engine, jobs, expectedGroupedDispatches: (count + 15) / 16)
     }
 
-    @Test func ornithExpertProjectionGeometryIsBitwiseIdentical() throws {
+    @Test(arguments: [false, true])
+    func ornithExpertProjectionGeometryIsBitwiseIdentical(down: Bool) throws {
         let engine = try MetalEngine()
-        let jobs = (0..<16).map { index in
+        let input = down ? 512 : 2048, output = down ? 2048 : 512
+        let jobs = (0..<(down ? 8 : 16)).map { index in
             MetalEngine.IndependentGEMV(
-                linear: Self.linear(engine, index: index, dtype: 2, input: 2048, output: 512),
-                xOff: 7, yOff: index * 512 + 3)
+                linear: Self.linear(engine, index: index, dtype: 2, input: input, output: output),
+                xOff: 7 + (down ? index * input : 0), yOff: index * output + 3)
         }
         try Self.compare(engine, jobs, expectedGroupedDispatches: 1)
     }
 
     @Test func unsupportedLayoutsUseOriginalPath() throws {
         let engine = try MetalEngine()
+        let supported = MetalKernelTests.quantizedLinear(engine, bits: 4, pad: 0)
+        var split = supported
+        split.sBuffer = engine.makeBuffer(Data(bytes: supported.sBuffer.contents(), count: supported.sBuffer.length))
         let linears = [
-            MetalKernelTests.quantizedLinear(engine, bits: 4, pad: 0),
             MetalKernelTests.quantizedLinear(engine, bits: 8, pad: 0),
             MetalKernelTests.quantizedLinear(engine, bits: 4, pad: 2),
             MetalKernelTests.plainLinear(engine, dtype: 2),
+            split,
         ]
-        let jobs = linears.enumerated().map {
-            MetalEngine.IndependentGEMV(linear: $0.element, xOff: 2, yOff: 1 + $0.offset * 55)
+        for linear in linears {
+            let jobs = [supported, linear].enumerated().map {
+                MetalEngine.IndependentGEMV(linear: $0.element, xOff: 2, yOff: 1 + $0.offset * 55)
+            }
+            try Self.compare(engine, jobs, expectedGroupedDispatches: jobs.count)
         }
-        try Self.compare(engine, jobs, expectedGroupedDispatches: jobs.count)
         try Self.compare(engine, [], expectedGroupedDispatches: 0)
     }
 
