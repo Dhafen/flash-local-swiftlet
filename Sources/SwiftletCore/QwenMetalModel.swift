@@ -315,6 +315,12 @@ public final class QwenMetalModel {
     /// expert-traffic savings. `.tokenMajor` restores the S1a schedule.
     public var prefillMode: PrefillMode = .layerMajor(chunkTokens: 32)
 
+    /// Experimental grouping of independent QPack expert projections. Off by
+    /// default until trained-model phone parity and sustained A/B measurements.
+    /// Routing, per-row arithmetic, shared experts and accumulation are unchanged.
+    /// The first prototype covers decode/token-major, not layer-major prefill.
+    public var groupExpertDispatches = false
+
     // MARK: Fast path (split DeltaNet layout): one command buffer per layer.
     struct Regions {
         var x0 = 0, qkv = 0, z = 0, b = 0, a = 0, conv = 0, gb = 0
@@ -1491,6 +1497,12 @@ extension QwenMetalModel {
         let fl = fastLayers[pend.stacksLayer]
         let projs = expertProjs
 
+        if groupExpertDispatches, let projs, !pend.picks.isEmpty,
+           pend.bufs.count == pend.picks.count {
+            try encodeGroupedPendingMoE(enc, pend, slot: slot, projs: projs)
+            return
+        }
+
         for (ki, pick) in pend.picks.enumerated() {
             let gLin: GPULinear
             let uLin: GPULinear
@@ -1553,6 +1565,49 @@ extension QwenMetalModel {
         barrier(enc)
 
         try encWeightedAccum(enc, weights: pend.weights, count: pend.picks.count, slot: slot)
+        barrier(enc)
+    }
+
+    private func encodeGroupedPendingMoE(
+        _ enc: MTLComputeCommandEncoder, _ pend: PendingMoE,
+        slot: TokenSlot, projs: (gate: ExpertProj, up: ExpertProj, down: ExpertProj)
+    ) throws {
+        let D = config.hiddenSize, inter = config.moeIntermediateSize
+        let shInter = config.sharedExpertIntermediateSize, K = pend.picks.count
+        let moe = layers[pend.stacksLayer].moe, fl = fastLayers[pend.stacksLayer]
+        var gateUp: [MetalEngine.IndependentGEMV] = []
+        var down: [MetalEngine.IndependentGEMV] = []
+        for ki in 0..<K {
+            let buf = pend.bufs[ki]
+            gateUp.append(.init(linear: projs.gate.linear(on: buf),
+                xOff: slot.base + reg.xmoe, yOff: slot.base + reg.exp + ki * inter))
+            gateUp.append(.init(linear: projs.up.linear(on: buf),
+                xOff: slot.base + reg.xmoe, yOff: slot.base + reg.exp + K * inter + ki * inter))
+            down.append(.init(linear: projs.down.linear(on: buf),
+                xOff: slot.base + reg.exp + 2 * K * inter + ki * inter,
+                yOff: slot.base + reg.dexp + ki * D))
+        }
+        try engine.encodeIndependentGEMVs(enc, gateUp, x: slot.scratch, y: slot.scratch)
+        try engine.encodeGemv(enc, moe.sharedGate, x: slot.scratch, xOff: slot.base + reg.xmoe,
+            y: slot.scratch, yOff: slot.base + reg.sh)
+        try engine.encodeGemv(enc, moe.sharedUp, x: slot.scratch, xOff: slot.base + reg.xmoe,
+            y: slot.scratch, yOff: slot.base + reg.sh + shInter)
+        try engine.encodeGemv(enc, fl.sharedGateLin, x: slot.scratch, xOff: slot.base + reg.xmoe,
+            y: slot.scratch, yOff: slot.base + reg.shg)
+        barrier(enc)
+        // The existing batch SiLU kernel has exactly the single-slot arithmetic.
+        try engine.encodeSiluMulBatch(enc, buf: slot.scratch, count: inter,
+            gOff: slot.base + reg.exp, uOff: slot.base + reg.exp + K * inter,
+            dstOff: slot.base + reg.exp + 2 * K * inter, stride: inter, tokens: K)
+        try engine.encodeSiluMul(enc, buf: slot.scratch, count: shInter,
+            gOff: slot.base + reg.sh, uOff: slot.base + reg.sh + shInter,
+            dstOff: slot.base + reg.sh + 2 * shInter)
+        barrier(enc)
+        try engine.encodeIndependentGEMVs(enc, down, x: slot.scratch, y: slot.scratch)
+        try engine.encodeGemv(enc, moe.sharedDown, x: slot.scratch, xOff: slot.base + reg.sh + 2 * shInter,
+            y: slot.scratch, yOff: slot.base + reg.sh + 3 * shInter)
+        barrier(enc)
+        try encWeightedAccum(enc, weights: pend.weights, count: K, slot: slot)
         barrier(enc)
     }
 
