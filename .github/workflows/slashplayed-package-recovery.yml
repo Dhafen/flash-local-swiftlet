@@ -1,0 +1,118 @@
+# Repackage already successful Slashplayed components, without rebuilding them.
+name: Slashplayed - recover Windows ZIP
+
+on:
+  pull_request:
+    paths:
+      - .github/workflows/slashplayed-package-recovery.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  recover:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Download successful outputs from original run
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
+        with:
+          repository: Dhafen/flash-local-swiftlet
+          run-id: 42835929399
+          github-token: ${{ github.token }}
+          pattern: sp-*
+          path: downloads
+          merge-multiple: true
+
+      - name: Normalize Windows ZIP paths and build the final download
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path, PurePosixPath
+          from zipfile import ZipFile
+          import shutil
+
+          archive = Path("downloads/slashplayed-companion-windows-x86_64.zip")
+          kit = Path("downloads/slashplayed-device-kit.zip")
+          root = Path("out")
+          folder = root / "slashplayed-companion-windows-x86_64"
+
+          if not archive.is_file() or not kit.is_file():
+              raise SystemExit("Missing one of the original build artifacts")
+
+          # PowerShell stores backslash-separated file paths inside ZIPs.
+          with ZipFile(archive) as zip_in:
+              for item in zip_in.infolist():
+                  normalized = item.filename.replace("\\", "/").rstrip("/")
+                  parts = PurePosixPath(normalized).parts
+                  if not parts:
+                      continue
+                  if (normalized.startswith("/") or ":" in parts[0] or
+                      ".." in parts or "." in parts or
+                      parts[0] != "slashplayed-companion-windows-x86_64"):
+                      raise SystemExit(f"Unsafe or unexpected ZIP entry: {item.filename!r}")
+                  mode = (item.external_attr >> 16) & 0o170000
+                  if mode == 0o120000:
+                      raise SystemExit(f"Refusing symlink: {item.filename!r}")
+                  target = root.joinpath(*parts)
+                  if item.is_dir() or item.filename.endswith("\\"):
+                      target.mkdir(parents=True, exist_ok=True)
+                  else:
+                      target.parent.mkdir(parents=True, exist_ok=True)
+                      with zip_in.open(item) as source, target.open("wb") as dest:
+                          shutil.copyfileobj(source, dest)
+
+          exe = folder / "slashplayed-companion.exe"
+          if not exe.is_file() or exe.stat().st_size < 100000:
+              raise SystemExit("Windows executable missing or unexpectedly small")
+          with ZipFile(kit) as z:
+              if z.testzip() is not None:
+                  raise SystemExit("Device kit ZIP failed validation")
+              required = {
+                  "ios/Slashplayed.app/slashplayed",
+                  "ios/Slashplayed.app/Info.plist",
+                  "ios/Slashplayed.app/PlugIns/SPJitHelper.appex/SPJitHelper",
+                  "ios/entitlements.plist"
+              }
+              if not required.issubset(set(z.namelist())):
+                  raise SystemExit("Device kit missing required iPhone files")
+          shutil.copy2(kit, folder / "slashplayed-device-kit.zip")
+          print(f"Windows installer: {exe.stat().st_size} bytes")
+          print(f"iPhone kit: {kit.stat().st_size} bytes")
+          print("Both original builds validated.")
+          PY
+
+          cat > out/slashplayed-companion-windows-x86_64/INSTALL.txt <<'TEXT'
+          Slashplayed for iPhone, installed using Windows 11 over USB
+
+          1. Install Apple Devices from Microsoft Store on Windows.
+          2. Install LocalDevVPN from the App Store on iPhone.
+          3. Connect the unlocked iPhone with a USB data cable.
+          4. Open PowerShell in this folder; run:
+             .\slashplayed-companion.exe devices
+             .\slashplayed-companion.exe --kit .\slashplayed-device-kit.zip
+          5. Follow prompts for Developer Mode, Apple ID signing and trust.
+          6. Enable LocalDevVPN, open Slashplayed and install WoW from Blizzard.
+
+          Free Apple ID signing needs refreshing on Windows every 7 days.
+          Use a secondary Apple ID. Never put account credentials in GitHub.
+          Slashplayed is unofficial; Blizzard can take action on accounts.
+          Guide: https://github.com/paulstraw/slashplayed/blob/main/docs/setup-without-a-mac.md
+          TEXT
+
+          (cd out && zip -qr ../Slashplayed-iPhone-Windows.zip slashplayed-companion-windows-x86_64)
+          unzip -t Slashplayed-iPhone-Windows.zip | tail -2
+          sha256sum Slashplayed-iPhone-Windows.zip > SHA256SUMS
+
+      - name: Upload ready-to-install Windows ZIP
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: Slashplayed-iPhone-Windows
+          path: |
+            Slashplayed-iPhone-Windows.zip
+            SHA256SUMS
+          retention-days: 7
+          if-no-files-found: error
