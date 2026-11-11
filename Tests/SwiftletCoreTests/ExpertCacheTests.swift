@@ -170,6 +170,35 @@ import Testing
         #expect(cache.allocatedSlots == 16)
     }
 
+    @Test func protectingBatchHitsAvoidsEvictingAnExpertNeededLaterInTheBatch() throws {
+        let out = try Self.repackedTiny()
+        defer { try? FileManager.default.removeItem(at: out) }
+        let device = try #require(MTLCreateSystemDefaultDevice())
+        let budget = try Self.budget(slots: 16, container: out)
+        let reference = try ExpertCache(containerDir: out, device: device, budgetBytes: budget)
+        let candidate = try ExpertCache(containerDir: out, device: device, budgetBytes: budget)
+        candidate.protectResidentBatchExperts = true
+        for cache in [reference, candidate] {
+            // Every entry has equal frequency. Layer 0 expert 0 is the oldest.
+            _ = try cache.buffers(layer: 0, experts: Array(0..<7))
+            _ = try cache.buffers(layer: 1, experts: Array(0..<8))
+            _ = try cache.buffers(layer: 2, experts: [0])
+        }
+        let referenceReads = reference.ioStatistics.readCalls
+        let candidateReads = candidate.ioStatistics.readCalls
+        let original = try reference.buffers(layer: 0, experts: [7, 0])
+        let optimized = try candidate.buffers(layer: 0, experts: [7, 0])
+        #expect(reference.ioStatistics.readCalls - referenceReads == 2)
+        #expect(candidate.ioStatistics.readCalls - candidateReads == 1)
+        #expect(candidate.hits == 1)
+        #expect(candidate.allocatedSlots == reference.allocatedSlots)
+        for index in original.indices {
+            let expected = Array(UnsafeRawBufferPointer(start: original[index].contents(), count: reference.stride))
+            let actual = Array(UnsafeRawBufferPointer(start: optimized[index].contents(), count: candidate.stride))
+            #expect(actual == expected)
+        }
+    }
+
     /// A short read must throw, and the cache must not advertise the batch's
     /// keys as resident afterwards.
     @Test func failedReadLeavesNoResidentKey() throws {
