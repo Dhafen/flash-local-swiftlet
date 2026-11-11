@@ -57,6 +57,10 @@ public final class ExpertCache {
     public private(set) var hits = 0
     public private(set) var misses = 0
     public private(set) var evictions = 0
+    /// Opt-in cache policy. Protect every resident member of a requested batch
+    /// before filling misses, so an earlier miss cannot evict a later hit.
+    /// Expert order and bytes are unchanged. Mutate only between model steps.
+    public var protectResidentBatchExperts = false
     public var ioStatistics: QpackIOStatistics { reader.ioStatistics }
 
     private var maxSlots: Int
@@ -114,6 +118,13 @@ public final class ExpertCache {
     func buffers(layer: Int, experts: [Int]) throws -> [MTLBuffer] {
         tick += 1
         var protectedSlots = Set<Int>()
+        if protectResidentBatchExperts {
+            for expert in experts {
+                if let slot = keyToSlot[key(layer, expert)] {
+                    protectedSlots.insert(slot)
+                }
+            }
+        }
         var result: [MTLBuffer] = []
         result.reserveCapacity(experts.count)
         var fills: [(slot: Int, expert: Int)] = []

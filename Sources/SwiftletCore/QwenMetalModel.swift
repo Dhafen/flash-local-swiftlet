@@ -612,6 +612,7 @@ public final class QwenMetalModel {
         guard let replacement = try? ExpertCache(
             containerDir: ckpt.dir, device: engine.device, budgetBytes: budget
         ) else { return }
+        replacement.protectResidentBatchExperts = expertCache?.protectResidentBatchExperts ?? false
         expertCache = replacement
     }
 
