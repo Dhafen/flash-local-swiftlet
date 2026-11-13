@@ -121,6 +121,7 @@ s = once(s, "    CGPoint _scroll_last;\n",
     "#if !TARGET_OS_VISION\n"
     "    SPSoftKeyboardField *_softField;\n"
     "    UIButton *_softToggle;\n"
+    "    UIButton *_softEscape;\n"
     "#endif\n")
 init_anchor = "    sp_cursor_view.layer.zPosition = 2000;\n    [self addSubview:sp_cursor_view];\n"
 init_extra = r'''#if !TARGET_OS_VISION
@@ -141,6 +142,19 @@ init_extra = r'''#if !TARGET_OS_VISION
         [_softToggle addTarget:self action:@selector(sp_toggle_soft_keyboard:)
              forControlEvents:UIControlEventTouchUpInside];
         [self addSubview:_softToggle];
+        _softEscape = [UIButton buttonWithType:UIButtonTypeSystem];
+        [_softEscape setTitle:@"Esc" forState:UIControlStateNormal];
+        _softEscape.titleLabel.font = [UIFont systemFontOfSize:15 weight:UIFontWeightSemibold];
+        [_softEscape setTitleColor:UIColor.whiteColor forState:UIControlStateNormal];
+        _softEscape.backgroundColor = [UIColor colorWithWhite:0 alpha:0.72];
+        _softEscape.layer.cornerRadius = 10;
+        _softEscape.layer.borderWidth = 1;
+        _softEscape.layer.borderColor = [UIColor colorWithWhite:1 alpha:0.4].CGColor;
+        _softEscape.layer.zPosition = 3000;
+        _softEscape.accessibilityLabel = @"Escape key for World of Warcraft";
+        [_softEscape addTarget:self action:@selector(sp_press_soft_escape:)
+             forControlEvents:UIControlEventTouchUpInside];
+        [self addSubview:_softEscape];
     }
 #endif
 '''
@@ -154,9 +168,15 @@ layout_impl = r'''
         CGRect game = sp_game_rect();
         CGFloat right = CGRectGetMaxX(game);
         // Stay inside the game rect, away from the Dynamic Island strip.
-        _softToggle.frame = CGRectMake(MAX(8, right - 58),
-                                      MAX(8, self.safeAreaInsets.top + 4), 50, 38);
+        CGFloat top = MAX(8, self.safeAreaInsets.top + 4);
+        _softToggle.frame = CGRectMake(MAX(8, right - 58), top, 50, 38);
+        _softEscape.frame = CGRectMake(MAX(8, right - 116), top, 50, 38);
     }
+}
+- (void)sp_press_soft_escape:(UIButton *)button {
+    // Send the AppKit Escape key (kVK_Escape 0x35) through the
+    // same NSEvent queue as a connected physical keyboard.
+    sp_soft_emit([NSString stringWithFormat:@"%C", (unichar)0x1b], 0x35, NO);
 }
 - (void)sp_toggle_soft_keyboard:(UIButton *)button {
     if (_softField.isFirstResponder) {
