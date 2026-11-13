@@ -1,0 +1,9 @@
+## Interface: 16001
+## Title: SP Mobile Combat Modes
+## Notes: Phone-friendly combat mode selector for WoW Forever; no auto-casting.
+## Version: 0.1.0
+## Author: Slashplayed Mobile experiment
+## SavedVariablesPerCharacter: SPMobileCombatDB
+## OptionalDeps: Hekili, SPTouchBars, StandAndHit, Tempo
+
+SPMobileCombat.lua
