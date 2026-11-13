@@ -44,11 +44,8 @@ static void sp_install_hekili_if_absent(NSFileManager *fm, NSString *source, NSS
         [failed addObject:@"Hekili (couldn't create AddOns directory)"];
         return;
     }
-    NSString *stage = [dest stringByAppendingPathComponent:@".slashplayed-hekili-stage"];
-    if ([fm fileExistsAtPath:stage]) {
-        [failed addObject:@"Hekili (previous staging folder exists)"];
-        return;
-    }
+    NSString *stage = [dest stringByAppendingPathComponent:
+                        [@".slashplayed-hekili-" stringByAppendingString:NSUUID.UUID.UUIDString]];
     if (![fm createDirectoryAtPath:stage withIntermediateDirectories:NO attributes:nil error:nil]) {
         [failed addObject:@"Hekili (couldn't stage)"];
         return;
@@ -103,6 +100,9 @@ once(kit, copy, copy + f'''
 
 # The overlay is purely visual. The secure SPTouchBars bindings and click path stay in the original addon.
 bars = "addon/SPTouchBars/SPTouchBars.lua"
+once(bars,
+     'local RETAIL = WOW_PROJECT_ID and WOW_PROJECT_MAINLINE and WOW_PROJECT_ID == WOW_PROJECT_MAINLINE',
+     'local RETAIL = select(4, GetBuildInfo()) ~= 16001 and WOW_PROJECT_ID == WOW_PROJECT_MAINLINE')
 once(bars, "local function refresh()\n", '''local function updateCombatHint()
     if not SPMobileCombatHint then return end
     local recommended, oneButton = SPMobileCombatHint()
@@ -111,13 +111,14 @@ once(bars, "local function refresh()\n", '''local function updateCombatHint()
         local visible = button:IsShown() and not editing
         local entry = visible and binding(button)
         local spell = recommended and entry and content(entry)
-        local recommend = spell and readable(spell) and spell == recommended
+        local resolved = spell and readable(spell) and C_Spell.GetOverrideSpell and C_Spell.GetOverrideSpell(spell)
+        local recommend = spell and readable(spell) and (spell == recommended or readable(resolved) and resolved == recommended)
         local one = visible and oneButton and button.index == 1 and entry and entry.kind == "macro"
         button.combatHint:SetShown(recommend and true or false)
         button.oneButtonLabel:SetShown(one and true or false)
         if recommend then matched = true end
     end
-    SPMobileCombatShowHint(matched)
+    if SPMobileCombatShowHint then SPMobileCombatShowHint(matched, editing) end
 end
 
 local function refresh()

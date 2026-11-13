@@ -1,6 +1,6 @@
 local root = assert(arg[1])
 local private = {}
-assert(loadfile(root .. "/addon/SPMobileCombat/Rotation.lua"))("SPMobileCombat", private)
+assert(loadfile(root .. "/SPMobileCombat/Rotation.lua"))("SPMobileCombat", private)
 local rotation = assert(private.rotation)
 local known = { [11] = true, [12] = true, [13] = true }
 local usable = { [11] = false, [12] = true, [13] = true }

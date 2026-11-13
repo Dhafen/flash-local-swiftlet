@@ -2,7 +2,7 @@ local _, addon = ...
 local rotation = addon.rotation
 local modes = { "Recommended", "Manual", "Custom", "One button" }
 local db, hint, panel, status, edit, modeButton
-local currentSpell, currentTexture
+local currentSpell, currentTexture, powerBar, powerText
 local defaultStatus = {
     "Tap the highlighted spell. Configure Hekili with /hekili.",
     "Your spell circles and action sets are available as configured.",
@@ -15,8 +15,9 @@ local function readable(value)
 end
 
 local function isReady(spell)
-    local known = C_SpellBook and C_SpellBook.IsSpellKnownOrOverridesKnown or IsPlayerSpell
-    if known and not known(spell) then return false end
+    local known = C_SpellBook and (C_SpellBook.IsSpellKnownOrOverridesKnown or C_SpellBook.IsSpellKnown) or IsPlayerSpell
+    local isKnown = not known or known(spell)
+    if not readable(isKnown) or not isKnown then return false end
     local usable = C_Spell.IsSpellUsable(spell)
     if not readable(usable) or not usable then return false end
     local range = C_Spell.IsSpellInRange and C_Spell.IsSpellInRange(spell, "target")
@@ -54,10 +55,21 @@ function SPMobileCombatHint()
     if db then return currentSpell, db.mode == 4 end
 end
 
-function SPMobileCombatShowHint(matched)
+function SPMobileCombatShowHint(matched, editing)
     if not hint then return end
-    hint:SetShown(currentTexture ~= nil and not matched)
+    local visible = not editing and (not panel:IsShown())
+    hint:SetShown(visible and currentTexture ~= nil and not matched)
     if hint:IsShown() then hint.icon:SetTexture(currentTexture) end
+    powerBar:SetShown(visible and db.mode ~= 2)
+    if not powerBar:IsShown() then return end
+    local value, maximum = UnitPower("player"), UnitPowerMax("player")
+    if not readable(value) or not readable(maximum) or not maximum or maximum <= 0 then powerBar:Hide(); return end
+    local _, token = UnitPowerType("player")
+    local color = readable(token) and PowerBarColor and PowerBarColor[token]
+    powerBar:SetStatusBarColor(color and color.r or 0.2, color and color.g or 0.7, color and color.b or 0.6)
+    powerBar:SetMinMaxValues(0, maximum)
+    powerBar:SetValue(value or 0)
+    powerText:SetFormattedText("%d / %d", value or 0, maximum)
 end
 
 local function button(parent, title, w, h, point, anchor, relative, x, y, callback)
@@ -93,14 +105,26 @@ local function createUI()
     toolbar:SetSize(200, 42)
     toolbar:SetPoint("BOTTOMLEFT", 8, 8)
     button(toolbar, "Combat", 72, 42, "LEFT", toolbar, "LEFT", 0, 0, togglePanel)
-    button(toolbar, "Bags", 52, 42, "LEFT", toolbar, "LEFT", 76, 0, function() ToggleAllBags() end)
-    button(toolbar, "Quests", 66, 42, "LEFT", toolbar, "LEFT", 132, 0, function()
-        if ToggleQuestLog then ToggleQuestLog() end
+    button(toolbar, "Bags", 52, 42, "LEFT", toolbar, "LEFT", 76, 0, function()
+        if ToggleAllBags then ToggleAllBags() end
     end)
+    button(toolbar, "Quests", 66, 42, "LEFT", toolbar, "LEFT", 132, 0, function()
+        if ToggleQuestLog then ToggleQuestLog()
+        elseif ToggleWorldMap then ToggleWorldMap() end
+    end)
+
+    powerBar = CreateFrame("StatusBar", nil, UIParent)
+    powerBar:SetSize(118, 14)
+    powerBar:SetPoint("BOTTOMLEFT", toolbar, "TOPLEFT", 0, 5)
+    powerBar:SetStatusBarTexture("Interface\\Buttons\\WHITE8X8")
+    powerBar:EnableMouse(false)
+    powerText = powerBar:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+    powerText:SetPoint("CENTER")
+    powerBar:Hide()
 
     hint = CreateFrame("Frame", nil, UIParent)
     hint:SetSize(44, 44)
-    hint:SetPoint("BOTTOMLEFT", toolbar, "TOPLEFT", 0, 5)
+    hint:SetPoint("BOTTOMLEFT", toolbar, "TOPLEFT", 0, 24)
     hint:EnableMouse(false)
     hint.icon = hint:CreateTexture(nil, "ARTWORK")
     hint.icon:SetAllPoints()
@@ -109,6 +133,9 @@ local function createUI()
     panel = CreateFrame("Frame", "SPMobileCombatPanel", UIParent, "BackdropTemplate")
     panel:SetSize(370, 220)
     panel:SetPoint("CENTER")
+    panel:SetScript("OnShow", function(self)
+        self:SetScale(math.max(0.1, math.min(1, (UIParent:GetWidth() - 16) / 370, (UIParent:GetHeight() - 16) / 220)))
+    end)
     panel:SetFrameStrata("DIALOG")
     panel:EnableMouse(true)
     panel:SetBackdrop({ bgFile = "Interface\\Buttons\\WHITE8X8" })
@@ -157,6 +184,7 @@ events:SetScript("OnEvent", function()
     if not modes[db.mode] then db.mode = 1 end
     if type(db.priorities) ~= "table" then db.priorities = {} end
     createUI()
+    events:UnregisterEvent("PLAYER_LOGIN")
 end)
 
 SLASH_SPMOBILECOMBAT1 = "/spcombat"
