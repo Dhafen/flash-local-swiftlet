@@ -98,8 +98,10 @@ once("    UILabel *_title;\n}\n- (instancetype)initWithFrame:(CGRect)frame {",
      "    self.layer.borderColor = (editing ? UIColor.systemTealColor : UIColor.whiteColor).CGColor;\n"
      "}\n"
      "- (instancetype)initWithFrame:(CGRect)frame {")
-once('    self.backgroundColor = [UIColor colorWithWhite:0 alpha:0.53];',
-     '    self.backgroundColor = [UIColor colorWithWhite:0 alpha:0.32];')
+once('    self.backgroundColor = [UIColor colorWithWhite:0 alpha:0.53];\n'
+     '    _title = [[UILabel alloc] initWithFrame:self.bounds];',
+     '    self.backgroundColor = [UIColor colorWithWhite:0 alpha:0.32];\n'
+     '    _title = [[UILabel alloc] initWithFrame:self.bounds];')
 once('    self.backgroundColor = [UIColor colorWithWhite:0 alpha:0.53];\n}',
      '    self.backgroundColor = [UIColor colorWithWhite:0 alpha:0.32];\n}')
 once('        _finger = t;\n        _previous = [t locationInView:self.superview];\n'
