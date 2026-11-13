@@ -1,88 +1,146 @@
 #!/usr/bin/env python3
-"""Install optional Hekili Forever recommendation addon alongside SPTouchBars.
-
-Run AFTER keyboard/patch.py, mobile/patch.py, mobile/polish.py in the fixed
-upstream Slashplayed 1.5.1 checkout. Stage src/Hekili* from the pinned GPLv3
-Forever release in addon/ first. This is independent Lua, NOT merged into
-the native MIT code: the complete runtime source + licenses ship in the kit.
-No automated casting, keypress loops or protected combat manipulation.
-"""
+"""Stage Hekili Forever as independent GPL source and install the phone combat UI."""
+import shutil
 from pathlib import Path
 
 root = Path.cwd()
-cdn = root / "apps/client/spcdn.m"
-kit = root / "scripts/release/device-kit.sh"
-vendor = sorted(p.name for p in (root/"addon").glob("Hekili*") if p.is_dir())
-expected = {"Hekili", "Hekili_Shared", "Hekili_Warrior", "Hekili_Druid",
-            "Hekili_Hunter", "Hekili_Rogue", "Hekili_Mage",
-            "Hekili_Paladin", "Hekili_Priest", "Hekili_Shaman", "Hekili_Warlock"}
-if not expected.issubset(vendor):
-    raise SystemExit(f"Missing expected Hekili Forever source folders: {sorted(expected - set(vendor))}")
-if not (root/"addon/Hekili/LICENSE").is_file():
-    raise SystemExit("Hekili GPLv3 license missing from full addon source")
+vendor = root / ".hekili" / "src"
+modules = sorted(path.name for path in vendor.glob("Hekili*") if path.is_dir())
+expected = {
+    "Hekili", "Hekili_Shared", "Hekili_Warrior", "Hekili_Druid", "Hekili_Hunter",
+    "Hekili_Rogue", "Hekili_Mage", "Hekili_Paladin", "Hekili_Priest",
+    "Hekili_Shaman", "Hekili_Warlock",
+}
+if set(modules) != expected:
+    raise SystemExit(f"Unexpected Hekili source folders: {modules}")
+for name in ("LICENSE", "LICENSE-wowsims.txt", "Libs/CREDITS.md"):
+    if not (vendor / "Hekili" / name).is_file():
+        raise SystemExit(f"Missing Hekili license notice: {name}")
 
-def once(path: Path, before: str, after: str):
-    s = path.read_text()
-    count = s.count(before)
-    if count != 1:
-        raise SystemExit(f"Expected single anchor in {path}; got {count}: {before[:90]!r}")
-    path.write_text(s.replace(before, after, 1))
+for name in modules:
+    folder = root / "addon" / name
+    shutil.copytree(vendor / name, folder)
+    for toc in folder.glob("*.toc"):
+        toc.write_text(toc.read_text().replace("@project-version@", "v0.8.1"))
 
-# sp_addons_place() already copies SPTouchBars only into Forever.
-# Copy complete Hekili module trees (not just the .toc/.lua root) on Forever
-# launches, preserving all account and character SavedVariables (those live
-# elsewhere in WTF). Maintain the full addon source code and 3P licenses.
-anchor = '    NSMutableString *text = [NSMutableString stringWithFormat:@"addons: %lu up to date", (unsigned long)same];'
-snippet = r'''    if ([game.lastPathComponent isEqualToString:@"_forever_"]) {
-        // Hekili Forever is a separate GPLv3 addon with its own sources,
-        // licenses, and user settings. Only copy files that differ.
-        for (NSString *name in @[@"Hekili", @"Hekili_Shared", @"Hekili_Warrior", @"Hekili_Druid",
-                                 @"Hekili_Hunter", @"Hekili_Rogue", @"Hekili_Mage", @"Hekili_Paladin",
-                                 @"Hekili_Priest", @"Hekili_Shaman", @"Hekili_Warlock"]) {
-            NSString *folder = [addons stringByAppendingPathComponent:name];
-            NSDirectoryEnumerator *files = [fm enumeratorAtPath:folder];
-            if (!files) {
-                [failed addObject:[name stringByAppendingString:@" (no bundled sources)"]];
-                continue;
-            }
-            for (NSString *rel in files) {
-                NSString *src = [folder stringByAppendingPathComponent:rel];
-                BOOL isDirectory = NO;
-                if (![fm fileExistsAtPath:src isDirectory:&isDirectory] || isDirectory) continue;
-                NSString *dst = [game stringByAppendingPathComponent:
-                                 [@"Interface/AddOns" stringByAppendingPathComponent:
-                                  [name stringByAppendingPathComponent:rel]]];
-                NSData *bytes = [NSData dataWithContentsOfFile:src];
-                if (!bytes) {
-                    [failed addObject:[name stringByAppendingFormat:@"/%@ (couldn't read)", rel]];
-                    continue;
-                }
-                if ([[NSData dataWithContentsOfFile:dst] isEqualToData:bytes]) { same++; continue; }
-                [fm createDirectoryAtPath:dst.stringByDeletingLastPathComponent
-                     withIntermediateDirectories:YES attributes:nil error:nil];
-                if ([bytes writeToFile:dst atomically:YES])
-                    [written addObject:[name stringByAppendingPathComponent:rel]];
-                else [failed addObject:[name stringByAppendingFormat:@"/%@ (couldn't write)", rel]];
-            }
+shutil.copytree(Path(__file__).parent / "addons/SPMobileCombat", root / "addon/SPMobileCombat")
+
+def once(path: str, before: str, after: str):
+    file = root / path
+    source = file.read_text()
+    if source.count(before) != 1:
+        raise SystemExit(f"Expected one anchor in {path}: {before[:100]!r}")
+    file.write_text(source.replace(before, after, 1))
+
+cdn = "apps/client/spcdn.m"
+module_list = ", ".join(f'@"{name}"' for name in modules)
+once(cdn, "BOOL sp_addons_place(", r'''// Keep independently installed Hekili versions and their settings intact.
+static void sp_install_hekili_if_absent(NSFileManager *fm, NSString *source, NSString *dest,
+                                        NSMutableArray *written, NSMutableArray *failed) {
+    NSArray<NSString *> *names = @[MODULES];
+    for (NSString *name in names)
+        if ([fm fileExistsAtPath:[dest stringByAppendingPathComponent:name]]) return;
+    if (![fm createDirectoryAtPath:dest withIntermediateDirectories:YES attributes:nil error:nil]) {
+        [failed addObject:@"Hekili (couldn't create AddOns directory)"];
+        return;
+    }
+    NSString *stage = [dest stringByAppendingPathComponent:@".slashplayed-hekili-stage"];
+    if ([fm fileExistsAtPath:stage]) {
+        [failed addObject:@"Hekili (previous staging folder exists)"];
+        return;
+    }
+    if (![fm createDirectoryAtPath:stage withIntermediateDirectories:NO attributes:nil error:nil]) {
+        [failed addObject:@"Hekili (couldn't stage)"];
+        return;
+    }
+    NSMutableArray<NSString *> *installed = [NSMutableArray array];
+    BOOL copied = YES;
+    for (NSString *name in names) {
+        if (![fm copyItemAtPath:[source stringByAppendingPathComponent:name]
+                       toPath:[stage stringByAppendingPathComponent:name] error:nil]) {
+            copied = NO;
+            break;
         }
     }
-'''
-once(cdn,anchor,snippet+anchor)
+    if (copied) for (NSString *name in names) {
+        if (![fm moveItemAtPath:[stage stringByAppendingPathComponent:name]
+                       toPath:[dest stringByAppendingPathComponent:name] error:nil]) break;
+        [installed addObject:name];
+    }
+    if (installed.count == names.count) {
+        [written addObject:@"Hekili Forever"];
+    } else {
+        for (NSString *name in installed) [fm removeItemAtPath:[dest stringByAppendingPathComponent:name] error:nil];
+        [failed addObject:@"Hekili (couldn't install all modules)"];
+    }
+    [fm removeItemAtPath:stage error:nil];
+}
 
-needle='    cp "$ROOT/addon/SPTouchBars/SPTouchBars.tga" "$APP/addons/SPTouchBars/"'
-replace=needle+'''
-    # Independent GPLv3 Hekili Forever recommendation addon: ship its full
-    # source distribution including LICENSE and bundled third-party licenses.
-    # Do not overwrite character SavedVariables or touch program binaries.
-    for a in Hekili Hekili_Shared Hekili_Warrior Hekili_Druid Hekili_Hunter Hekili_Rogue Hekili_Mage Hekili_Paladin Hekili_Priest Hekili_Shaman Hekili_Warlock; do
-      cp -R "$ROOT/addon/$a" "$APP/addons/$a"
-    done'''
-once(kit,needle,replace)
+BOOL sp_addons_place('''.replace("MODULES", module_list))
+once(cdn,
+     'if ([game.lastPathComponent isEqualToString:@"_forever_"]) [names addObject:@"SPTouchBars"];',
+     '''if ([game.lastPathComponent isEqualToString:@"_forever_"]) {
+        [names addObjectsFromArray:@[@"SPTouchBars", @"SPMobileCombat"]];
+        sp_install_hekili_if_absent(fm, addons, [game stringByAppendingPathComponent:@"Interface/AddOns"], written, failed);
+    }''')
+once(cdn,
+     '''        for (NSString *ext in [name isEqualToString:@"SPTouchBars"] ? @[@"toc", @"lua", @"tga"]
+                              : @[@"toc", @"lua"]) {
+            NSString *file = [NSString stringWithFormat:@"%@/%@.%@", name, name, ext];''',
+     '''        for (NSString *fileName in [name isEqualToString:@"SPMobileCombat"]
+                ? @[@"SPMobileCombat.toc", @"SPMobileCombat.lua", @"Rotation.lua", @"SPMobileCombat.license"]
+                : [name isEqualToString:@"SPTouchBars"] ? @[@"SPTouchBars.toc", @"SPTouchBars.lua", @"SPTouchBars.tga"]
+                : @[[name stringByAppendingPathExtension:@"toc"], [name stringByAppendingPathExtension:@"lua"]]) {
+            NSString *file = [name stringByAppendingPathComponent:fileName];''')
 
-# The distribution uses full source and attribution from the pinned release.
-# .toc Version is normally template-substituted by CurseForge packagers.
-for path in (root/"addon").glob("Hekili*/*.toc"):
-    src=path.read_text()
-    if "@project-version@" in src:
-        path.write_text(src.replace("@project-version@", "v0.8.1"))
-print(f"Added {len(expected)} standalone GPLv3 Hekili Forever addon packages to Forever-only build")
+kit = "scripts/release/device-kit.sh"
+copy = '    cp "$ROOT/addon/SPTouchBars/SPTouchBars.tga" "$APP/addons/SPTouchBars/"'
+once(kit, copy, copy + f'''
+    # Independent Hekili distribution, including all license and source files.
+    for addon in SPMobileCombat {" ".join(modules)}; do
+      cp -R "$ROOT/addon/$addon" "$APP/addons/$addon"
+    done''')
+
+# The overlay is purely visual. The secure SPTouchBars bindings and click path stay in the original addon.
+bars = "addon/SPTouchBars/SPTouchBars.lua"
+once(bars, "local function refresh()\n", '''local function updateCombatHint()
+    if not SPMobileCombatHint then return end
+    local recommended, oneButton = SPMobileCombatHint()
+    local matched = false
+    for _, button in ipairs(spells) do
+        local visible = button:IsShown() and not editing
+        local entry = visible and binding(button)
+        local spell = recommended and entry and content(entry)
+        local recommend = spell and readable(spell) and spell == recommended
+        local one = visible and oneButton and button.index == 1 and entry and entry.kind == "macro"
+        button.combatHint:SetShown(recommend and true or false)
+        button.oneButtonLabel:SetShown(one and true or false)
+        if recommend then matched = true end
+    end
+    SPMobileCombatShowHint(matched)
+end
+
+local function refresh()
+''')
+once(bars, '''        end
+    end
+end
+
+local function cursorBinding()''', '''        end
+    end
+    updateCombatHint()
+end
+
+local function cursorBinding()''')
+once(bars, '    button.slotLabel:SetPoint("CENTER")', '''    button.slotLabel:SetPoint("CENTER")
+    if kind == "spells" then
+        button.combatHint = circle(textFrame, "OVERLAY", 2, 0.32, 1, 0.72, 0.85)
+        button.combatHint:SetTexture("Interface\\\\AddOns\\\\SPTouchBars\\\\SPTouchBars")
+        button.combatHint:SetTexCoord(0.5, 0.75, 0, 1)
+        button.combatHint:Hide()
+        button.oneButtonLabel = textFrame:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+        button.oneButtonLabel:SetPoint("TOP", button, "TOP", 0, -5)
+        button.oneButtonLabel:SetText("1-Tap")
+        button.oneButtonLabel:Hide()
+    end''')
+print(f"Staged {len(modules)} Hekili source modules and the mobile combat UI")
