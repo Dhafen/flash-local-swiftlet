@@ -4,8 +4,9 @@ This is an **unverified prototype** built against the upstream **v1.5.1** source
 
 ## What it attempts
 - Adds a small **⌨** button over the iPhone game scene.
-- Shows/hides the normal iOS keyboard.
-- Converts committed characters, Backspace, and Return into the existing emulated AppKit NSEvent input queue that receives physical keyboard events.
+- Shows/hides the normal iOS keyboard; autocapitalization is disabled inside the overlay only.
+- Adds a separate **Esc** button beside the keyboard toggle for menus/dialogs.
+- Converts committed characters, Backspace, Return, and Escape into the existing emulated AppKit NSEvent input queue that receives physical keyboard events.
 - Avoids writing text entered from the overlay into the shim input-event diagnostic log.
 - Does not change the current installed Slashplayed app until you deliberately re-install with this test kit.
 
@@ -29,7 +30,7 @@ The GitHub Actions workflow .github/workflows/slashplayed-keyboard.yml checks ou
     .\slashplayed-cli.exe --kit .\slashplayed-keyboard-device-kit.zip
 
 5. Use the same Apple ID/team as your existing installation. Don't delete the already-installed Slashplayed first. Never paste Apple or Battle.net credentials into chat or GitHub Actions.
-6. Start Slashplayed, select Forever, and look for a small keyboard button inside the game. Tap it and test character naming with a non-sensitive test string before using chat.
+6. Start Slashplayed, select Forever, and look for the keyboard and Esc buttons inside the game. Tap it and test character naming with a non-sensitive test string before using chat.
 
 The upstream companion accepts a custom kit with the explicit --kit option; otherwise it uses the official release's unmodified kit.
 
