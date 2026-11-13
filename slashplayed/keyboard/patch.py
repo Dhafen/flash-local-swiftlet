@@ -77,6 +77,7 @@ static void sp_soft_emit(NSString *characters, unsigned short code, BOOL shift) 
 - (instancetype)initWithFrame:(CGRect)frame {
     if (!(self = [super initWithFrame:frame])) return nil;
     self.delegate = self;
+    self.autocapitalizationType = UITextAutocapitalizationTypeNone;
     self.autocorrectionType = UITextAutocorrectionTypeNo;
     self.spellCheckingType = UITextSpellCheckingTypeNo;
     self.smartQuotesType = UITextSmartQuotesTypeNo;
