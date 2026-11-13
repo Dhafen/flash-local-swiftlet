@@ -1,0 +1,73 @@
+# Experimental unsigned iOS device kit. No Apple or Battle.net secrets.
+name: Slashplayed iPhone keyboard test
+on:
+  pull_request:
+    paths:
+      - .github/workflows/slashplayed-keyboard.yml
+      - slashplayed/keyboard/**
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  keyboard-device-kit:
+    runs-on: xcode-27
+    timeout-minutes: 85
+    env:
+      XCODE_APP: /Applications/Xcode_27.1.app
+      XCODEGEN_VERSION: 2.46.0
+      XCODEGEN_SHA256: 4d9e34b62172d645eed6457cac13fc222569974098ef4ee9c3368bedf0196806
+      RUSTUP_VERSION: 1.29.2
+      RUSTUP_SHA256: f7c7e11eb2e07f006e532a8aaac77b32f4527d305ac386c0c633ca6133d35ca9
+      IDEVICE_CACHE_PATHS: |
+        work/idevice/BUILD.txt
+        work/idevice/include
+        work/idevice/ios
+        work/idevice/xros
+        work/idevice/macos
+      SPAPPLE_CACHE_PATHS: |
+        work/spapple/ios
+        work/spapple/xros
+    steps:
+      - name: Checkout Slashplayed 1.5.1 source at fixed commit
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          repository: paulstraw/slashplayed
+          ref: 976f9248971238187a82c8c55f69b23054055343
+          persist-credentials: false
+
+      - name: Checkout experimental patch from this repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          path: .edits
+          persist-credentials: false
+
+      - name: Apply iPhone keyboard overlay
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 .edits/slashplayed/keyboard/patch.py shims/appkit/spevent.m
+          grep -q 'SPSoftKeyboardField' shims/appkit/spevent.m
+          grep -q 'sp_toggle_soft_keyboard' shims/appkit/spevent.m
+
+      - name: Build prerequisites
+        uses: ./.github/actions/companion-deps
+
+      - name: Build unsigned iPhone device kit
+        shell: bash
+        run: |
+          set -euo pipefail
+          scripts/fetch-font.sh
+          sh apps/companion/bundle-resources.sh --build "$RUNNER_TEMP/keyboard-stage"
+          scripts/release/device-kit.sh "$RUNNER_TEMP/keyboard-stage" "$RUNNER_TEMP/slashplayed-keyboard-device-kit.zip"
+          unzip -t "$RUNNER_TEMP/slashplayed-keyboard-device-kit.zip" >/dev/null
+          shasum -a 256 "$RUNNER_TEMP/slashplayed-keyboard-device-kit.zip"
+
+      - name: Upload experimental kit
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: Slashplayed-iPhone-Keyboard-Kit
+          path: ${{ runner.temp }}/slashplayed-keyboard-device-kit.zip
+          retention-days: 7
+          if-no-files-found: error
