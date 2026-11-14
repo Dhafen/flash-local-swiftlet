@@ -15,7 +15,8 @@ anchor = "\nCore.lua\n"
 if manifest.count(anchor) != 1:
     raise SystemExit("Wolkara manifest no longer has its expected entry point")
 toc.write_text(manifest.replace(anchor, "\n## OptionalDeps: SPTouchBars\n\nCore.lua\nWolkaraSetup.lua\n", 1))
-files = sorted(path.name for path in addon.iterdir() if path.is_file())
+files = sorted(path.name for path in addon.iterdir() if path.is_file() and path != toc)
+files.append(toc.name)
 
 # Keep the old SavedVariables available to the import on upgrade. Both old
 # addons must be inert on the phone so they cannot draw a second HUD.
@@ -35,6 +36,13 @@ def replace(path, before, after):
         raise SystemExit(f"Expected one anchor in {path}: {before[:100]!r}")
     file.write_text(text.replace(before, after, 1))
 
+
+# Lua 5.1's xpcall does not forward arguments. Keep the same callback
+# behavior on both stock Lua 5.1 and clients that accept varargs in xpcall.
+replace("addon/WolkaraRoue/Core.lua",
+        "    local ok, problem = xpcall(fn, Trace, ...)",
+        """    local args, count = { ... }, select("#", ...)
+    local ok, problem = xpcall(function() return fn(unpack(args, 1, count)) end, Trace)""")
 
 cdn = "apps/client/spcdn.m"
 replace(cdn, "#include <stdatomic.h>", "#include <stdatomic.h>\n#include <stdlib.h>")
@@ -57,7 +65,24 @@ replace(cdn, '            NSData *bytes = [NSData dataWithContentsOfFile:[addons
                 if (ready) source = [[addons stringByAppendingPathComponent:@"SlashplayedLegacyHUD"]
                                      stringByAppendingPathComponent:fileName];
             }
+            if ([name isEqualToString:@"WolkaraRoue"] && [fileName.pathExtension isEqualToString:@"toc"]) {
+                BOOL ready = YES;
+                for (NSString *failure in failed)
+                    if ([failure hasPrefix:@"WolkaraRoue/"]) { ready = NO; break; }
+                if (!ready) continue;
+            }
             NSData *bytes = [NSData dataWithContentsOfFile:source];''')
+
+event = "shims/appkit/spevent.m"
+replace(event,
+        """    } else {
+        [_softField becomeFirstResponder];
+        button.backgroundColor""",
+        """    } else {
+        if (sp_client_window && getenv("SP_PHONE_UI_RECTS"))
+            sp_soft_emit([NSString stringWithFormat:@"%C", (unichar)0xF70F], 0x6F, NO);
+        [_softField becomeFirstResponder];
+        button.backgroundColor""")
 
 hover = "addon/SPHover/SPHover.lua"
 replace(hover, '    if SPMobileCombatHint then', '    if SPPhoneTouchRects then')

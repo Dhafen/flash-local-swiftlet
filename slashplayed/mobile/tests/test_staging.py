@@ -13,6 +13,7 @@ assert 'sp_mobile_end_interface' in event
 assert '@interface SPMobileJumpButton' in event
 assert 'event->modifierFlags = 0;' in event
 assert 'sp_mobile_send_jump' in event
+assert 'sp_soft_emit([NSString stringWithFormat:@"%C", (unichar)0xF70F], 0x6F, NO);' in event
 bars = (root / "addon/SPTouchBars/SPTouchBars.lua").read_text()
 assert 'phoneLayout.enabled(db.phoneArc, SPPhoneTouchRects)' in bars
 assert 'sp_mobile_touch_zone' in event, "Missing floating touch routing"
@@ -25,7 +26,16 @@ assert 'SPMobileCombat' in cdn and 'SPMobileCombat' in kit
 wolkara = root / "addon/WolkaraRoue"
 reference = root / ".wolkara/addons/WolkaraRoue"
 for source in reference.iterdir():
-    if source.name != "WolkaraRoue.toc" and source.is_file():
+    if not source.is_file() or source.name == "WolkaraRoue.toc":
+        continue
+    if source.name == "Core.lua":
+        expected = source.read_text().replace(
+            "    local ok, problem = xpcall(fn, Trace, ...)",
+            '    local args, count = { ... }, select("#", ...)\n'
+            "    local ok, problem = xpcall(function() return fn(unpack(args, 1, count)) end, Trace)",
+        )
+        assert (wolkara / source.name).read_text() == expected
+    else:
         assert (wolkara / source.name).read_bytes() == source.read_bytes(), source.name
 assert "ui = { scale = 170 }" in (wolkara / "Core.lua").read_text()
 assert "hideBars = true" in (wolkara / "Core.lua").read_text()
