@@ -1,5 +1,6 @@
 // Included by patch.py in the pinned Slashplayed AppKit shim.
 #if !TARGET_OS_VISION
+#include "touch-zone.h"
 // The virtual left stick uses the GameController path from Slashplayed Enhanced (MIT).
 @interface SPMobileStick : UIView
 - (void)setOrigin:(CGPoint)origin displacement:(CGPoint)delta;
@@ -94,13 +95,19 @@ static CGFloat sp_mobile_speed(void) {
     return isfinite(speed) && speed >= 0.5 && speed <= 2 ? speed : 1;
 }
 
-static NSInteger sp_mobile_touch_zone(CGPoint point, CGRect game) {
-    if (!CGRectContainsPoint(game, point) || CGRectIsEmpty(game)) return 0;
-    CGFloat x = (point.x - game.origin.x) / game.size.width;
-    CGFloat y = (point.y - game.origin.y) / game.size.height;
-    if (x < 0.43 && y >= 0.50) return 1;
-    if (x >= 0.50 && y >= 0.18 && y <= 0.88) return 2;
-    return 0;
+static enum SPMobileZone sp_mobile_touch_zone(CGPoint point, CGRect game) {
+    if (CGRectIsEmpty(game)) return SPMobileDefault;
+    double x = (point.x - game.origin.x) / game.size.width;
+    double y = (point.y - game.origin.y) / game.size.height;
+    BOOL interface = NO;
+    if (getenv("SP_PHONE_UI_RECTS")) {
+        for (size_t i = 0; i < sp_hover_count; i++) {
+            if (!CGRectContainsPoint(sp_hover_rects[i], CGPointMake(x, 1 - y))) continue;
+            interface = YES;
+            break;
+        }
+    }
+    return sp_mobile_zone(x, y, interface);
 }
 
 static UIButton *sp_mobile_button(NSString *title, NSString *label, id owner, SEL action) {
@@ -149,6 +156,7 @@ static UIButton *sp_mobile_button(NSString *title, NSString *label, id owner, SE
     [_mobileStick stop];
     [self sp_mobile_release_look];
     [self sp_mobile_jump:NO];
+    [self sp_mobile_end_interface];
     // Keep the touch identities until UIKit delivers their end/cancel. An
     // interrupted drag must not be reinterpreted as a tap or restart.
     _mobileMoving = _mobileLeft != nil;
@@ -288,12 +296,20 @@ static UIButton *sp_mobile_button(NSString *title, NSString *label, id owner, SE
 }
 
 - (NSSet<UITouch *> *)sp_mobile_base_touches:(NSSet<UITouch *> *)touches {
-    if ((!_mobileLeft || ![touches containsObject:_mobileLeft]) &&
+    if ((!_mobileInterface || ![touches containsObject:_mobileInterface]) &&
+        (!_mobileLeft || ![touches containsObject:_mobileLeft]) &&
         (!_mobileRight || ![touches containsObject:_mobileRight])) return touches;
     NSMutableSet<UITouch *> *base = [touches mutableCopy];
     if (_mobileLeft) [base removeObject:_mobileLeft];
     if (_mobileRight) [base removeObject:_mobileRight];
+    if (_mobileInterface) [base removeObject:_mobileInterface];
     return base;
+}
+
+- (void)sp_mobile_end_interface {
+    if (!_mobileInterfaceDown) return;
+    _mobileInterfaceDown = NO;
+    sp_mouse_button(0, NO, sp_pointer);
 }
 
 - (void)sp_mobile_tap:(CGPoint)start {
@@ -308,16 +324,21 @@ static UIButton *sp_mobile_button(NSString *title, NSString *label, id owner, SE
 - (void)touchesBegan:(NSSet<UITouch *> *)touches withEvent:(UIEvent *)event {
 #if !TARGET_OS_VISION
     if (_mobileDirect && !_mobileEditing && !_softField.isFirstResponder && sp_client_window &&
-        !_touches.count && !sp_mouse_buttons) {
+        !_touches.count && (sp_mouse_buttons == 0 || (_mobileLooking && sp_mouse_buttons == 2))) {
         for (UITouch *touch in touches) {
             if (!sp_finger(touch)) continue;
             CGPoint point = [touch locationInView:self];
-            NSInteger zone = sp_mobile_touch_zone(point, sp_game_rect());
-            if (zone == 1 && !_mobileLeft) {
+            enum SPMobileZone zone = sp_mobile_touch_zone(point, sp_game_rect());
+            if (zone == SPMobileInterface && !_mobileInterface) {
+                [self sp_mobile_release_look];
+                _mobileInterface = touch;
+                _mobileInterfaceDown = YES;
+                sp_mouse_button(0, YES, sp_from_uikit(point));
+            } else if (zone == SPMobileMove && !_mobileLeft) {
                 _mobileLeft = touch;
                 _mobileLeftStart = point;
                 _mobileMoving = NO;
-            } else if (zone == 2 && !_mobileRight) {
+            } else if (zone == SPMobileLook && !_mobileRight) {
                 _mobileRight = touch;
                 _mobileRightStart = point;
                 _mobileLookDrag = _mobileLookCancelled = NO;
@@ -325,7 +346,7 @@ static UIButton *sp_mobile_button(NSString *title, NSString *label, id owner, SE
         }
     }
     touches = [self sp_mobile_base_touches:touches];
-    if (!touches.count) return;
+    if (!touches.count || _mobileInterfaceDown) return;
     [self sp_mobile_release_look];
 #endif
     [self sp_base_touchesBegan:touches withEvent:event];
@@ -343,6 +364,10 @@ static UIButton *sp_mobile_button(NSString *title, NSString *label, id owner, SE
             [_mobileStick setOrigin:_mobileLeftStart displacement:delta];
         }
     }
+    if (_mobileInterfaceDown && [touches containsObject:_mobileInterface]) {
+        CGPoint p = sp_from_uikit([_mobileInterface locationInView:self]);
+        if (!CGPointEqualToPoint(p, sp_pointer)) sp_mouse_moved_to(p, SPLeftMouseDragged, NO);
+    }
     if (_mobileRight && !_mobileLookCancelled && [touches containsObject:_mobileRight])
         [self sp_mobile_move_look:[_mobileRight locationInView:self]];
     touches = [self sp_mobile_base_touches:touches];
@@ -354,6 +379,15 @@ static UIButton *sp_mobile_button(NSString *title, NSString *label, id owner, SE
 #if !TARGET_OS_VISION
 - (NSSet<UITouch *> *)sp_mobile_finish:(NSSet<UITouch *> *)touches cancelled:(BOOL)cancelled {
     NSSet<UITouch *> *base = [self sp_mobile_base_touches:touches];
+    if (_mobileInterface && [touches containsObject:_mobileInterface]) {
+        if (!cancelled && _mobileInterfaceDown) {
+            CGPoint p = sp_from_uikit([_mobileInterface locationInView:self]);
+            sp_mouse_button(0, NO, p);
+            _mobileInterfaceDown = NO;
+        }
+        [self sp_mobile_end_interface];
+        _mobileInterface = nil;
+    }
     if (_mobileLeft && [touches containsObject:_mobileLeft]) {
         [_mobileStick stop];
         if (!cancelled && !_mobileMoving) [self sp_mobile_tap:_mobileLeftStart];

@@ -24,6 +24,7 @@ def require(path: Path, terms: list[str]) -> None:
 def patch_input():
     path = ROOT / "shims/appkit/spevent.m"
     source = Path(__file__).with_name("phone-input.m").read_text()
+    source = source.replace('#include "touch-zone.h"', Path(__file__).with_name("touch-zone.h").read_text())
     declarations, methods = source.split("// SPInputView methods follow.\n")
     require(path, ["SPSoftKeyboardField", "sp_press_soft_escape:"])
     replace_once(path, "@implementation SPInputView {",
@@ -33,12 +34,12 @@ def patch_input():
     SPMobileStick *_mobileStick;
     UIButton *_mobileJump, *_mobileEdit, *_mobileUI, *_mobileReset, *_mobileSpeed;
     UIPanGestureRecognizer *_mobileJumpPan;
-    UITouch *_mobileLeft, *_mobileRight;
+    UITouch *_mobileLeft, *_mobileRight, *_mobileInterface;
     CGPoint _mobileLeftStart, _mobileRightStart, _mobilePrevious;
     CGRect _mobileGameRect;
     CGFloat _mobileLookSpeed;
     BOOL _mobileMoving, _mobileLookDrag, _mobileLooking, _mobileLookCancelled;
-    BOOL _mobileJumpHeld, _mobileEditing, _mobileDirect;
+    BOOL _mobileJumpHeld, _mobileEditing, _mobileDirect, _mobileInterfaceDown;
 """)
     replace_once(path, "        [self addSubview:_softEscape];",
                  "        [self addSubview:_softEscape];\n        [self sp_mobile_setup];")
@@ -60,6 +61,56 @@ def patch_input():
 
 
 patch_input()
+
+# Reuse the stock rect transport on Forever/iPhone. Keep hover-only UIKit
+# views off the phone; the input router consumes the rects directly.
+launcher = ROOT / "apps/client/launcher.m"
+replace_once(launcher, "    sp_addons_place([dir", """    BOOL hoverRects = TARGET_OS_VISION;
+#if !TARGET_OS_VISION
+    if (UIDevice.currentDevice.userInterfaceIdiom == UIUserInterfaceIdiomPhone &&
+        [flavor isEqualToString:@"forever"]) {
+        hoverRects = YES;
+        setenv("SP_PHONE_UI_RECTS", "1", 1);
+    }
+#endif
+    sp_addons_place([dir""")
+replace_once(launcher, "                    TARGET_OS_VISION, &addons);",
+             "                    hoverRects, &addons);")
+event = ROOT / "shims/appkit/spevent.m"
+replace_once(event, "    memcpy(sp_hover_rects, rects, n * sizeof *rects);",
+             "    if (n) memcpy(sp_hover_rects, rects, n * sizeof *rects);")
+replace_once(event, "    sp_hover_count = n;\n    [sp_hover_layer setNeedsLayout];",
+             """    sp_hover_count = n;
+#if !TARGET_OS_VISION
+    if (getenv("SP_PHONE_UI_RECTS")) return;
+#endif
+    [sp_hover_layer setNeedsLayout];""")
+hover = ROOT / "addon/SPHover/SPHover.lua"
+hover.with_name("SPHover.vision.lua").write_bytes(hover.read_bytes())
+replace_once(hover, "    local f = EnumerateFrames()",
+             """    local function addPanel(frame)
+        if not frame or isForbidden(frame) or not frame:IsVisible() then return end
+        local l, b, r, t = screenRect(frame)
+        if not l then return end
+        l, b, r, t = max(l, 0), max(b, 0), min(r, sw), min(t, sh)
+        if r - l < 4 or t - b < 4 then return end
+        local x, y = quantize(l / sw), quantize(b / sh)
+        local w, h = quantize((r - l) / sw), quantize((t - b) / sh)
+        n = n + 1
+        out[n] = string.char(floor(x / 16), x % 16 * 16 + floor(y / 256), y % 256,
+                             floor(w / 16), w % 16 * 16 + floor(h / 256), h % 256)
+    end
+    if SPMobileCombatHint then
+        for _, name in ipairs({
+            "SPMobileMenu", "SPMobileCombatPanel", "SPTouchBarsEditor",
+            "WorldMapFrame", "ContainerFrameCombinedBags", "CharacterFrame",
+            "PlayerSpellsFrame", "QuestFrame", "QuestLogFrame", "GossipFrame",
+            "LootFrame", "SettingsPanel", "GameMenuFrame", "ItemRefTooltip",
+            "CommunitiesFrame", "MerchantFrame", "PVEFrame", "BankFrame",
+        }) do pcall(addPanel, _G[name]) end
+        for index = 1, 13 do pcall(addPanel, _G["ContainerFrame" .. index]) end
+    end
+    local f = EnumerateFrames()""")
 
 # Bundled addon files, copied from pinned standalone Touchbars project in CI.
 addon = ROOT / "addon/SPTouchBars"
@@ -89,6 +140,9 @@ replace_once(kit,
       cp "$ROOT/addon/$a/$a.toc" "$ROOT/addon/$a/$a.lua" "$APP/addons/$a/"
     done
     cp "$ROOT/addon/SPTouchBars/SPTouchBars.tga" "$APP/addons/SPTouchBars/"
+    if [ "$p" = xros ]; then
+      cp "$ROOT/addon/SPHover/SPHover.vision.lua" "$APP/addons/SPHover/SPHover.lua"
+    fi
     cp "$ROOT/.mobile-source/LICENSE" "$APP/licenses/SlashplayedEnhanced-MIT.txt"
     cp "$ROOT/.touchbars/LICENSE" "$APP/licenses/Touchbars-MIT.txt"''')
 # Do not claim this source changes the install's version; the parent

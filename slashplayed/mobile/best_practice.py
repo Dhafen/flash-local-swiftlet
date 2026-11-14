@@ -85,7 +85,7 @@ once(cdn,
                               : @[@"toc", @"lua"]) {
             NSString *file = [NSString stringWithFormat:@"%@/%@.%@", name, name, ext];''',
      '''        for (NSString *fileName in [name isEqualToString:@"SPMobileCombat"]
-                ? @[@"SPMobileCombat.toc", @"SPMobileCombat.lua", @"Rotation.lua", @"SPMobileCombat.license"]
+                ? @[@"SPMobileCombat.toc", @"SPMobileCombat.lua", @"Rotation.lua", @"Menu.lua", @"SPMobileCombat.license"]
                 : [name isEqualToString:@"SPTouchBars"] ? @[@"SPTouchBars.toc", @"SPTouchBars.lua", @"SPTouchBars.tga"]
                 : @[[name stringByAppendingPathExtension:@"toc"], [name stringByAppendingPathExtension:@"lua"]]) {
             NSString *file = [name stringByAppendingPathComponent:fileName];''')
@@ -144,4 +144,68 @@ once(bars, '    button.slotLabel:SetPoint("CENTER")', '''    button.slotLabel:Se
         button.oneButtonLabel:SetText("1-Tap")
         button.oneButtonLabel:Hide()
     end''')
+# Keep the stock action button bindings and the client cooldown widgets.
+model = Path(__file__).with_name("SpellCooldowns.lua").read_text().removesuffix("return model\n")
+source = (root / bars).read_text()
+start = source.index("local function cooldown(button, spell, item)")
+end = source.index("local function updateButton(", start)
+widgets = Path(__file__).with_name("CooldownWidgets.lua").read_text()
+(root / bars).write_text(source[:start] + model + widgets + "\n" + source[end:])
+once(bars, 'ipairs({ "cooldown", "chargeCooldown" })',
+     'ipairs({ "globalCooldown", "cooldown", "chargeCooldown" })')
+once(bars, 'cd:SetHideCountdownNumbers(field == "chargeCooldown")',
+     'cd:SetHideCountdownNumbers(field ~= "cooldown")')
+once(bars, '    button.chargeCooldown:SetDrawSwipe(false)',
+     '    button.globalCooldown:SetSwipeColor(0, 0, 0, 0.30)\n'
+     '    button.chargeCooldown:SetDrawSwipe(false)')
+once(bars, '    cooldown(button, spell, item)',
+     '    button.icon:SetDesaturated(cooldown(button, spell, item, count))')
+once(bars, 'if readable(count) and (count == nil or count == 1) then',
+     'if readable(count) and (count == nil or (item and count == 1)) then')
+# Opt-in phone layout uses existing bindings. The secure handler only reveals
+# preassigned buttons, and the existing set switch remains available.
+once(bars, "local function defaultUtility(i)", '''local function phoneSpell(i)
+    local points = { {0.92, 0.40}, {0.84, 0.51}, {0.94, 0.61}, {0.79, 0.35},
+        {0.82, 0.70}, {0.75, 0.62}, {0.69, 0.52}, {0.64, 0.41},
+        {0.62, 0.30}, {0.65, 0.19}, {0.72, 0.12}, {0.80, 0.13} }
+    return { x = points[i][1], y = points[i][2], size = i == 1 and 70 or 56 }
+end
+
+local function defaultUtility(i)''')
+once(bars, '    local config = configFor(button)\n    local w, h',
+     '''    local config = configFor(button)
+    if db.phoneArc and button.kind == "spells" and not editing then config = phoneSpell(button.index) end
+    local w, h''')
+once(bars, '        if visible then button:Show() else button:Hide() end',
+     '''        if self:GetAttribute("phone-arc") and not self:GetAttribute("editing") and i > 4
+            and not self:GetAttribute("phone-wheel") then visible = false end
+        if visible then button:Show() else button:Hide() end''')
+once(bars, '    header:SetAttribute("editpage", editPage)',
+     '''    header:SetAttribute("editpage", editPage)
+    header:SetAttribute("phone-arc", db.phoneArc == true)
+    if SPTouchBarsWheel then SPTouchBarsWheel:SetShown(db.phoneArc == true and not editing) end''')
+once(bars, 'i <= (button.kind == "spells" and db.count or db.utilityCount)',
+     'i <= (button.kind == "spells" and (db.phoneArc and 12 or db.count) or db.utilityCount)')
+once(bars, '    createPanel()\n    createSettings()', '''    local wheel = CreateFrame("Button", "SPTouchBarsWheel", header, "SecureHandlerClickTemplate,UIPanelButtonTemplate")
+    wheel:SetSize(74, 48)
+    wheel:SetPoint("RIGHT", UIParent, "RIGHT", -9, 125)
+    wheel:SetText("Wheel")
+    wheel:RegisterForClicks("LeftButtonUp")
+    SecureHandlerSetFrameRef(wheel, "header", header)
+    wheel:SetAttribute("_onclick", [[
+        local header = self:GetFrameRef("header")
+        header:SetAttribute("phone-wheel", not header:GetAttribute("phone-wheel"))
+        header:RunAttribute("update-page")
+    ]])
+    createPanel()
+    createSettings()''')
+once(bars, 'SLASH_SPTOUCHBARS1 = "/sptouch"', '''function SPTouchBarsTogglePhoneArc()
+    if not initialized or InCombatLockdown() then return end
+    db.phoneArc = not db.phoneArc
+    header:SetAttribute("phone-wheel", false)
+    apply()
+    return db.phoneArc
+end
+
+SLASH_SPTOUCHBARS1 = "/sptouch"''')
 print(f"Staged {len(modules)} Hekili source modules and the mobile combat UI")

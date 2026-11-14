@@ -8,6 +8,8 @@ root = Path(sys.argv[1])
 event = (root / "shims/appkit/spevent.m").read_text()
 cdn = (root / "apps/client/spcdn.m").read_text()
 kit = (root / "scripts/release/device-kit.sh").read_text()
+assert 'SP_PHONE_UI_RECTS' in (root / 'apps/client/launcher.m').read_text()
+assert 'sp_mobile_end_interface' in event
 assert 'sp_mobile_touch_zone' in event, "Missing floating touch routing"
 assert 'SPMobileCameraPad' not in event and '@"LOOK"' not in event
 assert 'sp_mobile_release_look' in event and 'SPRightMouseDragged' in event
@@ -34,7 +36,8 @@ if len(sys.argv) > 2:
             assert {base + name for name in (
                 "slashplayed", "PlugIns/SPJitHelper.appex/SPJitHelper",
                 "licenses/SlashplayedEnhanced-MIT.txt", "licenses/Touchbars-MIT.txt",
-                "addons/SPMobileCombat/SPMobileCombat.lua", "addons/SPTouchBars/SPTouchBars.tga",
+                "addons/SPMobileCombat/SPMobileCombat.lua", "addons/SPMobileCombat/Menu.lua",
+                "addons/SPTouchBars/SPTouchBars.tga",
                 "addons/Hekili/LICENSE", "addons/Hekili/LICENSE-wowsims.txt",
             )} <= names
             for toc in (root / "addon").glob("Hekili*/*.toc"):

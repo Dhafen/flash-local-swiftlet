@@ -20,13 +20,16 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           persist-credentials: false
-      - name: Check Lua syntax and combat priorities
+      - name: Test combat priorities, cooldowns and touch routing
         shell: bash
         run: |
           set -euo pipefail
           sudo apt-get install -y -q --no-install-recommends lua5.1
           for file in slashplayed/mobile/addons/SPMobileCombat/*.lua; do luac5.1 -p "$file"; done
           lua5.1 slashplayed/mobile/tests/test_combat.lua slashplayed/mobile/addons
+          lua5.1 slashplayed/mobile/tests/test_cooldowns.lua slashplayed/mobile/SpellCooldowns.lua
+          cc -Wall -Wextra -Werror -o "$RUNNER_TEMP/touch-zone" slashplayed/mobile/tests/test_touch_zone.c
+          "$RUNNER_TEMP/touch-zone"
 
   keyboard-device-kit:
     runs-on: xcode-27
@@ -113,19 +116,19 @@ jobs:
           set -euo pipefail
           scripts/fetch-font.sh
           sh apps/companion/bundle-resources.sh --build "$RUNNER_TEMP/keyboard-stage"
-          output="$RUNNER_TEMP/slashplayed-floating-controls-device-kit.zip"
+          output="$RUNNER_TEMP/slashplayed-mobile-combat-device-kit.zip"
           scripts/release/device-kit.sh "$RUNNER_TEMP/keyboard-stage" "$output"
           python3 .edits/slashplayed/mobile/tests/test_staging.py . "$output"
           delivery="$RUNNER_TEMP/slashplayed-windows-companion-kit"
           mkdir -p "$delivery"
           cp "$output" "$delivery/"
           cp .edits/slashplayed/mobile/INSTALL.md "$delivery/Installera.md"
-          (cd "$delivery" && shasum -a 256 slashplayed-floating-controls-device-kit.zip > SHA256SUMS.txt)
+          (cd "$delivery" && shasum -a 256 slashplayed-mobile-combat-device-kit.zip > SHA256SUMS.txt)
 
       - name: Upload Windows Companion device kit
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         with:
-          name: Slashplayed-iPhone-FloatingControls-Windows-Companion
+          name: Slashplayed-iPhone-MobileCombat-Windows-Companion
           path: ${{ runner.temp }}/slashplayed-windows-companion-kit
           retention-days: 30
           if-no-files-found: error

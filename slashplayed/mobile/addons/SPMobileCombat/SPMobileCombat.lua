@@ -101,17 +101,7 @@ local function togglePanel()
 end
 
 local function createUI()
-    local toolbar = CreateFrame("Frame", nil, UIParent)
-    toolbar:SetSize(200, 42)
-    toolbar:SetPoint("BOTTOMLEFT", 8, 8)
-    button(toolbar, "Combat", 72, 42, "LEFT", toolbar, "LEFT", 0, 0, togglePanel)
-    button(toolbar, "Bags", 52, 42, "LEFT", toolbar, "LEFT", 76, 0, function()
-        if ToggleAllBags then ToggleAllBags() end
-    end)
-    button(toolbar, "Quests", 66, 42, "LEFT", toolbar, "LEFT", 132, 0, function()
-        if ToggleQuestLog then ToggleQuestLog()
-        elseif ToggleWorldMap then ToggleWorldMap() end
-    end)
+    local toolbar = addon.createMenu(togglePanel)
 
     powerBar = CreateFrame("StatusBar", nil, UIParent)
     powerBar:SetSize(118, 14)
@@ -124,7 +114,7 @@ local function createUI()
 
     hint = CreateFrame("Frame", nil, UIParent)
     hint:SetSize(44, 44)
-    hint:SetPoint("BOTTOMLEFT", toolbar, "TOPLEFT", 0, 24)
+    hint:SetPoint("BOTTOMRIGHT", UIParent, "BOTTOMRIGHT", -108, 74)
     hint:EnableMouse(false)
     hint.icon = hint:CreateTexture(nil, "ARTWORK")
     hint.icon:SetAllPoints()
@@ -169,6 +159,11 @@ local function createUI()
     edit:SetScript("OnEnterPressed", save)
     button(panel, "Save IDs", 86, 42, "BOTTOMRIGHT", panel, "BOTTOMRIGHT", -8, 12, save)
     panel:SetScript("OnHide", function() edit:ClearFocus() end)
+    button(panel, "Toggle phone wheel", 176, 36, "BOTTOMRIGHT", panel, "BOTTOMRIGHT", -8, 60, function()
+        if InCombatLockdown() then status:SetText("Finish combat before changing the wheel layout."); return end
+        if not SPTouchBarsTogglePhoneArc then return end
+        status:SetText(SPTouchBarsTogglePhoneArc() and "Phone wheel enabled." or "Saved layout restored.")
+    end)
     button(panel, "Edit spell layout", 145, 36, "BOTTOMLEFT", panel, "BOTTOMLEFT", 10, 60, function()
         if InCombatLockdown() then status:SetText("Finish combat before editing your spell layout."); return end
         panel:Hide()
