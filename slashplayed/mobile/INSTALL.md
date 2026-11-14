@@ -12,4 +12,4 @@ Wolkaras gränssnitt är förvalt på iPhone för Forever och visas på engelska
 
 WoW sparar de tidigare spellplatserna i sina befintliga inställningar. Det tidigare MobileCombat-paketet återställer dess menyer om du installerar det igen med samma appidentitet.
 
-Installera Tactara i Forever och kör `/tac bind` utanför strid. Stäng iOS-tangentbordet och tryck sedan på **Rotation** för att binda F8. Varje knapptryck skickar en F8-tangenttryckning till spelet. Lämna F8 ledig från andra funktioner.
+Installera Tactara i Forever och kör `/tac bind` utanför strid. Stäng iOS-tangentbordet och tryck sedan på **Rotation** nere till höger för att binda F8. Varje knapptryck skickar en F8-tangenttryckning till spelet. Lämna F8 ledig från andra funktioner. Skriv `/tac hide` för att dölja Tactaras båda paneler och behålla tangentbindningen.

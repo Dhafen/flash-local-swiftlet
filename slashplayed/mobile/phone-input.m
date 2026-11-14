@@ -271,7 +271,10 @@ static UIButton *sp_mobile_button(NSString *title, NSString *label, id owner, SE
     _mobileSpeed.frame = CGRectMake(left + 104, controlsY, 49, 44);
     _mobileReset.frame = CGRectMake(left + 157, controlsY, 53, 44);
     _mobileRotation.hidden = !wolkaraHUD || _mobileEditing;
-    _mobileRotation.frame = CGRectMake(left + 104, controlsY, 84, 44);
+    // Keep the rotation next to Jump, inside the right thumb's reach and
+    // inboard of the Wolkara spell arc.
+    CGFloat right = MIN(CGRectGetMaxX(game), CGRectGetMaxX(self.bounds) - self.safeAreaInsets.right);
+    _mobileRotation.frame = CGRectMake(MAX(left, right - 265), controlsY, 92, 52);
     _mobileJump.bounds = CGRectMake(0, 0, 66, 50);
     id saved = [NSUserDefaults.standardUserDefaults objectForKey:sp_mobile_jump_position_key()];
     CGPoint fraction = wolkaraHUD ? CGPointMake(0.74, 0.46) : CGPointMake(0.92, 0.53);

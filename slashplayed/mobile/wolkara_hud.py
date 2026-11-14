@@ -49,3 +49,14 @@ local function Short(value)'''),
             raise ValueError(f"Unexpected Wolkara HUD source near {before.splitlines()[0]}")
         source = source.replace(before, after)
     return source
+
+
+def protect_cooldowns(source):
+    anchor = "    if start and duration and duration > 0 and enable ~= 0 and enable ~= false then"
+    if source.count(anchor) != 1:
+        raise ValueError("Unexpected Wolkara cooldown source")
+    return source.replace(anchor, """    -- A nil or protected cooldown has no usable timer for this HUD.
+    if issecretvalue and (issecretvalue(start) or issecretvalue(duration) or issecretvalue(enable)) then
+        start, duration, enable = nil, nil, nil
+    end
+""" + anchor)
