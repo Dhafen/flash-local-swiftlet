@@ -4,6 +4,7 @@ import json
 import shutil
 from pathlib import Path
 from wolkara_english import translate
+from wolkara_hud import protect_hud
 
 root = Path.cwd()
 vendor = root / ".wolkara"
@@ -11,7 +12,7 @@ addon = root / "addon/WolkaraRoue"
 shutil.copytree(vendor / "addons/WolkaraRoue", addon)
 for path in addon.glob("*.lua"):
     original = path.read_text(encoding="utf-8")
-    english = translate(original)
+    english = translate(protect_hud(original) if path.name == "Hud.lua" else original)
     if english != original:
         path.write_text(english, encoding="utf-8", newline="\n")
 shutil.copyfile(Path(__file__).with_name("WolkaraSetup.lua"), addon / "WolkaraSetup.lua")

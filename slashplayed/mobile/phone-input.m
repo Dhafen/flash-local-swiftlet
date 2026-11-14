@@ -243,8 +243,10 @@ static UIButton *sp_mobile_button(NSString *title, NSString *label, id owner, SE
     _mobileSpeed = sp_mobile_button([NSString stringWithFormat:@"%.2g×", _mobileLookSpeed],
                                     @"Camera sensitivity", self, @selector(sp_mobile_cycle_speed:));
     _mobileReset = sp_mobile_button(@"Reset", @"Reset camera speed and jump position", self, @selector(sp_mobile_reset:));
+    _mobileRotation = sp_mobile_button(@"Rotation", @"Tactara rotation (F8)", self, @selector(sp_mobile_rotation:));
+    _mobileRotation.hidden = YES;
     _mobileReset.hidden = _mobileSpeed.hidden = YES;
-    for (UIButton *button in @[_mobileJump, _mobileUI, _mobileEdit, _mobileSpeed, _mobileReset]) {
+    for (UIButton *button in @[_mobileJump, _mobileUI, _mobileEdit, _mobileSpeed, _mobileReset, _mobileRotation]) {
         button.exclusiveTouch = NO;
         [self addSubview:button];
     }
@@ -268,6 +270,8 @@ static UIButton *sp_mobile_button(NSString *title, NSString *label, id owner, SE
     _mobileEdit.frame = CGRectMake(left + 50, controlsY, 50, 44);
     _mobileSpeed.frame = CGRectMake(left + 104, controlsY, 49, 44);
     _mobileReset.frame = CGRectMake(left + 157, controlsY, 53, 44);
+    _mobileRotation.hidden = !wolkaraHUD || _mobileEditing;
+    _mobileRotation.frame = CGRectMake(left + 104, controlsY, 84, 44);
     _mobileJump.bounds = CGRectMake(0, 0, 66, 50);
     id saved = [NSUserDefaults.standardUserDefaults objectForKey:sp_mobile_jump_position_key()];
     CGPoint fraction = wolkaraHUD ? CGPointMake(0.74, 0.46) : CGPointMake(0.92, 0.53);
@@ -313,7 +317,14 @@ static UIButton *sp_mobile_button(NSString *title, NSString *label, id owner, SE
     _mobileJump.configuring = _mobileEditing;
     _mobileJumpPan.enabled = _mobileEditing;
     _mobileReset.hidden = _mobileSpeed.hidden = !_mobileEditing;
+    [self setNeedsLayout];
     [button setTitle:_mobileEditing ? @"Done" : @"Edit" forState:UIControlStateNormal];
+}
+
+- (void)sp_mobile_rotation:(UIButton *)button {
+    if (!sp_client_window || _softField.isFirstResponder || _mobileEditing) return;
+    // One physical tap sends one ordinary F8 press. WoW owns the binding.
+    sp_soft_emit([NSString stringWithFormat:@"%C", (unichar)0xF70B], 0x64, NO);
 }
 
 - (void)sp_mobile_toggle_ui:(UIButton *)button {

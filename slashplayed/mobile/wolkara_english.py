@@ -4,6 +4,8 @@ import re
 
 
 LABELS = {
+    "|cffff5555erreur|r (": "|cffff5555error|r (",
+    "|cffff5555erreur au chargement|r : ": "|cffff5555load error|r: ",
     "Personnage": "Character", "Sacs": "Bags", "Sorts": "Spells",
     "Quêtes": "Quests", "Carte": "Map", "Guilde": "Guild",
     "Menu du jeu": "Game Menu", "Réglages du jeu": "Game Settings",

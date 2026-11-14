@@ -6,6 +6,7 @@ from zipfile import ZipFile
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from wolkara_english import translate
+from wolkara_hud import protect_hud
 
 root = Path(sys.argv[1])
 event = (root / "shims/appkit/spevent.m").read_text()
@@ -16,6 +17,8 @@ assert 'sp_mobile_end_interface' in event
 assert '@interface SPMobileJumpButton' in event
 assert 'event->modifierFlags = 0;' in event
 assert 'sp_mobile_send_jump' in event
+assert 'sp_soft_emit([NSString stringWithFormat:@"%C", (unichar)0xF70B], 0x64, NO);' in event
+assert '_mobileRotation.hidden = !wolkaraHUD || _mobileEditing;' in event
 assert 'sp_soft_emit([NSString stringWithFormat:@"%C", (unichar)0xF70F], 0x6F, NO);' in event
 bars = (root / "addon/SPTouchBars/SPTouchBars.lua").read_text()
 assert 'phoneLayout.enabled(db.phoneArc, SPPhoneTouchRects)' in bars
@@ -38,6 +41,8 @@ for source in reference.iterdir():
             "    local ok, problem = xpcall(function() return fn(unpack(args, 1, count)) end, Trace)",
         )
         assert (wolkara / source.name).read_text(encoding="utf-8") == translate(expected)
+    elif source.name == "Hud.lua":
+        assert (wolkara / source.name).read_text(encoding="utf-8") == translate(protect_hud(source.read_text(encoding="utf-8")))
     elif source.suffix == ".lua":
         assert (wolkara / source.name).read_text(encoding="utf-8") == translate(source.read_text(encoding="utf-8"))
     else:
