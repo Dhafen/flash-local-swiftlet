@@ -3,11 +3,17 @@
 import json
 import shutil
 from pathlib import Path
+from wolkara_english import translate
 
 root = Path.cwd()
 vendor = root / ".wolkara"
 addon = root / "addon/WolkaraRoue"
 shutil.copytree(vendor / "addons/WolkaraRoue", addon)
+for path in addon.glob("*.lua"):
+    original = path.read_text(encoding="utf-8")
+    english = translate(original)
+    if english != original:
+        path.write_text(english, encoding="utf-8", newline="\n")
 shutil.copyfile(Path(__file__).with_name("WolkaraSetup.lua"), addon / "WolkaraSetup.lua")
 toc = addon / "WolkaraRoue.toc"
 manifest = toc.read_text()
@@ -31,10 +37,10 @@ for name in ("SPTouchBars", "SPMobileCombat"):
 
 def replace(path, before, after):
     file = root / path
-    text = file.read_text()
+    text = file.read_text(encoding="utf-8")
     if text.count(before) != 1:
         raise SystemExit(f"Expected one anchor in {path}: {before[:100]!r}")
-    file.write_text(text.replace(before, after, 1))
+    file.write_text(text.replace(before, after, 1), encoding="utf-8")
 
 
 # Lua 5.1's xpcall does not forward arguments. Keep the same callback

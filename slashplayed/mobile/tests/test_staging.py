@@ -4,6 +4,9 @@ import sys
 from pathlib import Path
 from zipfile import ZipFile
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from wolkara_english import translate
+
 root = Path(sys.argv[1])
 event = (root / "shims/appkit/spevent.m").read_text()
 cdn = (root / "apps/client/spcdn.m").read_text()
@@ -34,11 +37,21 @@ for source in reference.iterdir():
             '    local args, count = { ... }, select("#", ...)\n'
             "    local ok, problem = xpcall(function() return fn(unpack(args, 1, count)) end, Trace)",
         )
-        assert (wolkara / source.name).read_text() == expected
+        assert (wolkara / source.name).read_text(encoding="utf-8") == translate(expected)
+    elif source.suffix == ".lua":
+        assert (wolkara / source.name).read_text(encoding="utf-8") == translate(source.read_text(encoding="utf-8"))
     else:
         assert (wolkara / source.name).read_bytes() == source.read_bytes(), source.name
 assert "ui = { scale = 170 }" in (wolkara / "Core.lua").read_text()
 assert "hideBars = true" in (wolkara / "Core.lua").read_text()
+for filename, labels in {
+    "Shortcuts.lua": ('"Bags"', '"Spells"', '"Map"'),
+    "Objectives.lua": ('"Quests (%d)  %s"', '"Ready to turn in"'),
+    "Chat.lua": ('"Chat"', '"System"', '"Hide"'),
+    "Settings.lua": ('"Mobile UI"', '"Reset Positions"'),
+}.items():
+    content = (wolkara / filename).read_text(encoding="utf-8")
+    assert all(label in content for label in labels), filename
 toc = (wolkara / "WolkaraRoue.toc").read_text()
 assert toc.index("Core.lua") < toc.index("WolkaraSetup.lua") < toc.index("Free.lua")
 assert "## OptionalDeps: SPTouchBars" in toc

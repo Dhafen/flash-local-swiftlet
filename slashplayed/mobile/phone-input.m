@@ -95,6 +95,10 @@ static CGFloat sp_mobile_speed(void) {
     return isfinite(speed) && speed >= 0.5 && speed <= 2 ? speed : 1;
 }
 
+static NSString *sp_mobile_jump_position_key(void) {
+    return getenv("SP_PHONE_UI_RECTS") ? @"sp_wolkara_jump_position" : @"sp_mobile_jump_position";
+}
+
 static enum SPMobileZone sp_mobile_touch_zone(CGPoint point, CGRect game) {
     if (CGRectIsEmpty(game)) return SPMobileDefault;
     double x = (point.x - game.origin.x) / game.size.width;
@@ -258,13 +262,15 @@ static UIButton *sp_mobile_button(NSString *title, NSString *label, id owner, SE
         _mobileGameRect = game;
     }
     CGFloat left = CGRectGetMinX(game) + MAX(8, self.safeAreaInsets.left - CGRectGetMinX(game));
-    _mobileUI.frame = CGRectMake(left, top, 46, 44);
-    _mobileEdit.frame = CGRectMake(left + 50, top, 50, 44);
-    _mobileSpeed.frame = CGRectMake(left + 104, top, 49, 44);
-    _mobileReset.frame = CGRectMake(left + 157, top, 53, 44);
+    BOOL wolkaraHUD = getenv("SP_PHONE_UI_RECTS") != NULL;
+    CGFloat controlsY = wolkaraHUD ? CGRectGetMaxY(game) - MAX(8, self.safeAreaInsets.bottom) - 44 : top;
+    _mobileUI.frame = CGRectMake(left, controlsY, 46, 44);
+    _mobileEdit.frame = CGRectMake(left + 50, controlsY, 50, 44);
+    _mobileSpeed.frame = CGRectMake(left + 104, controlsY, 49, 44);
+    _mobileReset.frame = CGRectMake(left + 157, controlsY, 53, 44);
     _mobileJump.bounds = CGRectMake(0, 0, 66, 50);
-    id saved = [NSUserDefaults.standardUserDefaults objectForKey:@"sp_mobile_jump_position"];
-    CGPoint fraction = CGPointMake(0.92, 0.53);
+    id saved = [NSUserDefaults.standardUserDefaults objectForKey:sp_mobile_jump_position_key()];
+    CGPoint fraction = wolkaraHUD ? CGPointMake(0.74, 0.46) : CGPointMake(0.92, 0.53);
     if ([saved isKindOfClass:NSArray.class] && [saved count] == 2 &&
         [saved[0] isKindOfClass:NSNumber.class] && [saved[1] isKindOfClass:NSNumber.class]) {
         CGFloat x = [saved[0] doubleValue], y = [saved[1] doubleValue];
@@ -295,7 +301,7 @@ static UIButton *sp_mobile_button(NSString *title, NSString *label, id owner, SE
         CGRect rect = _mobileGameRect;
         [NSUserDefaults.standardUserDefaults setObject:@[@((point.x - rect.origin.x) / rect.size.width),
                                                          @((point.y - rect.origin.y) / rect.size.height)]
-                                              forKey:@"sp_mobile_jump_position"];
+                                              forKey:sp_mobile_jump_position_key()];
     } else if (pan.state == UIGestureRecognizerStateCancelled) {
         [self setNeedsLayout];
     }
@@ -325,7 +331,7 @@ static UIButton *sp_mobile_button(NSString *title, NSString *label, id owner, SE
 
 - (void)sp_mobile_reset:(UIButton *)button {
     NSUserDefaults *prefs = NSUserDefaults.standardUserDefaults;
-    [prefs removeObjectForKey:@"sp_mobile_jump_position"];
+    [prefs removeObjectForKey:sp_mobile_jump_position_key()];
     [prefs removeObjectForKey:@"sp_mobile_look_speed"];
     _mobileLookSpeed = 1;
     [_mobileSpeed setTitle:@"1×" forState:UIControlStateNormal];

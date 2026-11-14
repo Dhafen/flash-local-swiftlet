@@ -8,6 +8,6 @@
 4. Uppgradera med samma Apple-ID, signeringsteam och bundle-ID, inklusive samma `--bundle-id` om du valde ett eget. Behåll den gamla appen installerad under uppgraderingen.
 5. Öppna Slashplayed och starta den befintliga Forever-installationen.
 
-Wolkaras gränssnitt är förvalt på iPhone för Forever. Du får originalets större gränssnitt, spellhjul, chatt, menyer, karaktärsramar och uppdragskort. Vid första start försöker det fylla hjulen med de befintliga SPTouchBars-platserna eller WoW:s vanliga actionplatser. Originalets franska etiketter följer med.
+Wolkaras gränssnitt är förvalt på iPhone för Forever och visas på engelska. Du får större gränssnitt, spellhjul, chatt, menyer, karaktärsramar och uppdragskort. Vid första start försöker det fylla hjulen med de befintliga SPTouchBars-platserna eller WoW:s vanliga actionplatser. Slashplayeds UI- och Edit-knappar ligger längst ner till vänster. Jump kan flyttas via Edit.
 
 WoW sparar de tidigare spellplatserna i sina befintliga inställningar. Det tidigare MobileCombat-paketet återställer dess menyer om du installerar det igen med samma appidentitet.
