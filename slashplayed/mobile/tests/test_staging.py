@@ -10,6 +10,11 @@ cdn = (root / "apps/client/spcdn.m").read_text()
 kit = (root / "scripts/release/device-kit.sh").read_text()
 assert 'SP_PHONE_UI_RECTS' in (root / 'apps/client/launcher.m').read_text()
 assert 'sp_mobile_end_interface' in event
+assert '@interface SPMobileJumpButton' in event
+assert 'event->modifierFlags = 0;' in event
+assert 'sp_mobile_send_jump' in event
+bars = (root / "addon/SPTouchBars/SPTouchBars.lua").read_text()
+assert 'phoneLayout.enabled(db.phoneArc, SPPhoneTouchRects)' in bars
 assert 'sp_mobile_touch_zone' in event, "Missing floating touch routing"
 assert 'SPMobileCameraPad' not in event and '@"LOOK"' not in event
 assert 'sp_mobile_release_look' in event and 'SPRightMouseDragged' in event

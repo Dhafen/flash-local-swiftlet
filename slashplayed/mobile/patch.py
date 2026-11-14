@@ -27,12 +27,16 @@ def patch_input():
     source = source.replace('#include "touch-zone.h"', Path(__file__).with_name("touch-zone.h").read_text())
     declarations, methods = source.split("// SPInputView methods follow.\n")
     require(path, ["SPSoftKeyboardField", "sp_press_soft_escape:"])
+    for phase in ("Began", "Moved", "Ended", "Cancelled"):
+        replace_once(path, f"- (void)touches{phase}:(NSSet<UITouch *> *)touches",
+                     f"- (void)sp_base_touches{phase}:(NSSet<UITouch *> *)touches")
     replace_once(path, "@implementation SPInputView {",
                  declarations + "@implementation SPInputView {")
     replace_once(path, "    UIButton *_softEscape;\n",
                  """    UIButton *_softEscape;
     SPMobileStick *_mobileStick;
-    UIButton *_mobileJump, *_mobileEdit, *_mobileUI, *_mobileReset, *_mobileSpeed;
+    SPMobileJumpButton *_mobileJump;
+    UIButton *_mobileEdit, *_mobileUI, *_mobileReset, *_mobileSpeed;
     UIPanGestureRecognizer *_mobileJumpPan;
     UITouch *_mobileLeft, *_mobileRight, *_mobileInterface;
     CGPoint _mobileLeftStart, _mobileRightStart, _mobilePrevious;
@@ -53,9 +57,6 @@ def patch_input():
 #if !TARGET_OS_VISION
     else [self sp_mobile_cancel];
 #endif""")
-    for phase in ("Began", "Moved", "Ended", "Cancelled"):
-        replace_once(path, f"- (void)touches{phase}:(NSSet<UITouch *> *)touches",
-                     f"- (void)sp_base_touches{phase}:(NSSet<UITouch *> *)touches")
     replace_once(path, "- (void)pressesBegan:(NSSet<UIPress *> *)presses",
                  methods + "- (void)pressesBegan:(NSSet<UIPress *> *)presses")
 
@@ -87,6 +88,7 @@ replace_once(event, "    sp_hover_count = n;\n    [sp_hover_layer setNeedsLayout
     [sp_hover_layer setNeedsLayout];""")
 hover = ROOT / "addon/SPHover/SPHover.lua"
 hover.with_name("SPHover.vision.lua").write_bytes(hover.read_bytes())
+hover.write_text("SPPhoneTouchRects = true\n" + hover.read_text())
 replace_once(hover, "    local f = EnumerateFrames()",
              """    local function addPanel(frame)
         if not frame or isForbidden(frame) or not frame:IsVisible() then return end

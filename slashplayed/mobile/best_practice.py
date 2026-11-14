@@ -162,19 +162,19 @@ once(bars, '    cooldown(button, spell, item)',
      '    button.icon:SetDesaturated(cooldown(button, spell, item, count))')
 once(bars, 'if readable(count) and (count == nil or count == 1) then',
      'if readable(count) and (count == nil or (item and count == 1)) then')
-# Opt-in phone layout uses existing bindings. The secure handler only reveals
-# preassigned buttons, and the existing set switch remains available.
-once(bars, "local function defaultUtility(i)", '''local function phoneSpell(i)
-    local points = { {0.92, 0.40}, {0.84, 0.51}, {0.94, 0.61}, {0.79, 0.35},
-        {0.82, 0.70}, {0.75, 0.62}, {0.69, 0.52}, {0.64, 0.41},
-        {0.62, 0.30}, {0.65, 0.19}, {0.72, 0.12}, {0.80, 0.13} }
-    return { x = points[i][1], y = points[i][2], size = i == 1 and 70 or 56 }
-end
-
-local function defaultUtility(i)''')
+# Default phone placement is computed without editing the original slot positions.
+layout = Path(__file__).with_name("PhoneLayout.lua").read_text().removesuffix("return phoneLayout\n")
+once(bars, "local function defaultUtility(i)", layout + "\nlocal function defaultUtility(i)")
 once(bars, '    local config = configFor(button)\n    local w, h',
-     '''    local config = configFor(button)
-    if db.phoneArc and button.kind == "spells" and not editing then config = phoneSpell(button.index) end
+     '''    local w, h = UIParent:GetWidth(), UIParent:GetHeight()
+    if phoneLayout.enabled(db.phoneArc, SPPhoneTouchRects) and button.kind == "spells" and not editing then
+        local x, y, size = phoneLayout.slot(button.index, w, h)
+        button:ClearAllPoints()
+        button:SetSize(size, size)
+        button:SetPoint("CENTER", UIParent, "BOTTOMLEFT", x, y)
+        return
+    end
+    local config = configFor(button)
     local w, h''')
 once(bars, '        if visible then button:Show() else button:Hide() end',
      '''        if self:GetAttribute("phone-arc") and not self:GetAttribute("editing") and i > 4
@@ -182,14 +182,19 @@ once(bars, '        if visible then button:Show() else button:Hide() end',
         if visible then button:Show() else button:Hide() end''')
 once(bars, '    header:SetAttribute("editpage", editPage)',
      '''    header:SetAttribute("editpage", editPage)
-    header:SetAttribute("phone-arc", db.phoneArc == true)
-    if SPTouchBarsWheel then SPTouchBarsWheel:SetShown(db.phoneArc == true) end''')
+    header:SetAttribute("phone-arc", phoneLayout.enabled(db.phoneArc, SPPhoneTouchRects))
+    if SPTouchBarsWheel then
+        SPTouchBarsWheel:SetShown(phoneLayout.enabled(db.phoneArc, SPPhoneTouchRects))
+        SPTouchBarsWheel:ClearAllPoints()
+        local _, y, size = phoneLayout.slot(2, UIParent:GetWidth(), UIParent:GetHeight())
+        SPTouchBarsWheel:SetPoint("BOTTOMRIGHT", UIParent, "BOTTOMRIGHT", -14, y + size / 2 + 7)
+    end''')
 once(bars, 'i <= (button.kind == "spells" and db.count or db.utilityCount)',
-     'i <= (button.kind == "spells" and (db.phoneArc and 12 or db.count) or db.utilityCount)')
+     'i <= (button.kind == "spells" and (phoneLayout.enabled(db.phoneArc, SPPhoneTouchRects) and 12 or db.count) or db.utilityCount)')
 once(bars, '    createPanel()\n    createSettings()', '''    local wheel = CreateFrame("Button", "SPTouchBarsWheel", header, "SecureHandlerClickTemplate,UIPanelButtonTemplate")
     wheel:SetSize(74, 48)
-    wheel:SetPoint("RIGHT", UIParent, "RIGHT", -9, 125)
-    wheel:SetText("Wheel")
+    wheel:SetPoint("BOTTOMRIGHT", UIParent, "BOTTOMRIGHT", -14, 12 + (UIParent:GetHeight() * 0.15 + 5) * 2)
+    wheel:SetText("Spells")
     wheel:RegisterForClicks("LeftButtonUp")
     SecureHandlerSetFrameRef(wheel, "header", header)
     wheel:SetAttribute("_onclick", [[
@@ -202,7 +207,7 @@ once(bars, '    createPanel()\n    createSettings()', '''    local wheel = Creat
     createSettings()''')
 once(bars, 'SLASH_SPTOUCHBARS1 = "/sptouch"', '''function SPTouchBarsTogglePhoneArc()
     if not initialized or InCombatLockdown() then return end
-    db.phoneArc = not db.phoneArc
+    db.phoneArc = not phoneLayout.enabled(db.phoneArc, SPPhoneTouchRects)
     header:SetAttribute("phone-wheel", false)
     apply()
     return db.phoneArc

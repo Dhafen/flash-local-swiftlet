@@ -110,6 +110,59 @@ static enum SPMobileZone sp_mobile_touch_zone(CGPoint point, CGRect game) {
     return sp_mobile_zone(x, y, interface);
 }
 
+// Like the reference phone layout, Jump owns one finger and emits an
+// unmodified Space down/up independently of the movement controller.
+@interface SPMobileJumpButton : UIButton
+@property(nonatomic, copy) void (^onPress)(BOOL);
+@property(nonatomic) BOOL configuring;
+@end
+
+@implementation SPMobileJumpButton {
+    UITouch *_finger;
+}
+- (BOOL)pointInside:(CGPoint)point withEvent:(UIEvent *)event {
+    return CGRectContainsPoint(CGRectInset(self.bounds, self.configuring ? 0 : -8,
+                                          self.configuring ? 0 : -8), point);
+}
+- (void)touchesBegan:(NSSet<UITouch *> *)touches withEvent:(UIEvent *)event {
+    if (self.configuring || _finger) return;
+    for (UITouch *touch in touches) {
+        if (!sp_finger(touch)) continue;
+        _finger = touch;
+        if (self.onPress) self.onPress(YES);
+        break;
+    }
+}
+- (void)touchesMoved:(NSSet<UITouch *> *)touches withEvent:(UIEvent *)event {}
+- (void)touchesEnded:(NSSet<UITouch *> *)touches withEvent:(UIEvent *)event {
+    if (!_finger || ![touches containsObject:_finger]) return;
+    _finger = nil;
+    if (self.onPress) self.onPress(NO);
+}
+- (void)touchesCancelled:(NSSet<UITouch *> *)touches withEvent:(UIEvent *)event {
+    [self touchesEnded:touches withEvent:event];
+}
+- (BOOL)accessibilityActivate {
+    if (self.configuring || !self.onPress) return NO;
+    self.onPress(YES);
+    self.onPress(NO);
+    return YES;
+}
+@end
+
+static void sp_mobile_send_jump(BOOL down) {
+    SPEvent *event = sp_event(down ? SPKeyDown : SPKeyUp);
+    event->keyCode = 0x31;
+    event->modifierFlags = 0;
+    event->characters = event->charactersIgnoringModifiers = @" ";
+    BOOL wasTyping = sp_soft_typing;
+    sp_soft_typing = YES;
+    sp_post(event);
+    sp_soft_typing = wasTyping;
+    static unsigned messages;
+    if (messages++ < 12) sp_stub_log(down ? "input: touch jump Space down" : "input: touch jump Space up");
+}
+
 static UIButton *sp_mobile_button(NSString *title, NSString *label, id owner, SEL action) {
     UIButton *button = [UIButton buttonWithType:UIButtonTypeSystem];
     [button setTitle:title forState:UIControlStateNormal];
@@ -129,20 +182,10 @@ static UIButton *sp_mobile_button(NSString *title, NSString *label, id owner, SE
 - (void)sp_mobile_jump:(BOOL)down {
     if (_mobileJumpHeld == down) return;
     _mobileJumpHeld = down;
-    SPEvent *event = sp_event(down ? SPKeyDown : SPKeyUp);
-    event->keyCode = 0x31;
-    event->characters = event->charactersIgnoringModifiers = @" ";
-    sp_soft_typing = YES;
-    sp_post(event);
-    sp_soft_typing = NO;
+    sp_mobile_send_jump(down);
+    _mobileJump.highlighted = down;
     _mobileJump.alpha = down ? 0.72 : 1;
 }
-
-- (void)sp_mobile_jump_down:(UIButton *)button {
-    if (!_mobileEditing && !_softField.isFirstResponder) [self sp_mobile_jump:YES];
-}
-
-- (void)sp_mobile_jump_up:(UIButton *)button { [self sp_mobile_jump:NO]; }
 
 - (void)sp_mobile_release_look {
     if (!_mobileLooking) return;
@@ -170,10 +213,23 @@ static UIButton *sp_mobile_button(NSString *title, NSString *label, id owner, SE
     _mobileStick = [[SPMobileStick alloc] initWithFrame:CGRectMake(0, 0, 76, 76)];
     [self addSubview:_mobileStick];
 
-    _mobileJump = sp_mobile_button(@"Jump", @"Jump or swim up", self, NULL);
-    [_mobileJump addTarget:self action:@selector(sp_mobile_jump_down:) forControlEvents:UIControlEventTouchDown];
-    [_mobileJump addTarget:self action:@selector(sp_mobile_jump_up:)
-          forControlEvents:UIControlEventTouchUpInside | UIControlEventTouchUpOutside | UIControlEventTouchCancel];
+    _mobileJump = [[SPMobileJumpButton alloc] initWithFrame:CGRectZero];
+    [_mobileJump setTitle:@"Jump" forState:UIControlStateNormal];
+    [_mobileJump setTitleColor:UIColor.whiteColor forState:UIControlStateNormal];
+    _mobileJump.titleLabel.font = [UIFont systemFontOfSize:15 weight:UIFontWeightSemibold];
+    _mobileJump.backgroundColor = [UIColor colorWithWhite:0.08 alpha:0.76];
+    _mobileJump.layer.cornerRadius = 12;
+    _mobileJump.layer.borderColor = [UIColor colorWithWhite:1 alpha:0.35].CGColor;
+    _mobileJump.layer.borderWidth = 1;
+    _mobileJump.layer.zPosition = 3000;
+    _mobileJump.accessibilityLabel = @"Jump or swim up";
+    __weak SPInputView *weakSelf = self;
+    _mobileJump.onPress = ^(BOOL down) {
+        SPInputView *input = weakSelf;
+        if (!input) return;
+        if (down && (input->_mobileEditing || input->_softField.isFirstResponder || !sp_client_window)) return;
+        [input sp_mobile_jump:down];
+    };
     _mobileJumpPan = [[UIPanGestureRecognizer alloc] initWithTarget:self action:@selector(sp_mobile_drag_jump:)];
     _mobileJumpPan.enabled = NO;
     [_mobileJump addGestureRecognizer:_mobileJumpPan];
@@ -206,9 +262,9 @@ static UIButton *sp_mobile_button(NSString *title, NSString *label, id owner, SE
     _mobileEdit.frame = CGRectMake(left + 50, top, 50, 44);
     _mobileSpeed.frame = CGRectMake(left + 104, top, 49, 44);
     _mobileReset.frame = CGRectMake(left + 157, top, 53, 44);
-    _mobileJump.bounds = CGRectMake(0, 0, 56, 48);
+    _mobileJump.bounds = CGRectMake(0, 0, 66, 50);
     id saved = [NSUserDefaults.standardUserDefaults objectForKey:@"sp_mobile_jump_position"];
-    CGPoint fraction = CGPointMake(0.70, 0.83);
+    CGPoint fraction = CGPointMake(0.92, 0.53);
     if ([saved isKindOfClass:NSArray.class] && [saved count] == 2 &&
         [saved[0] isKindOfClass:NSNumber.class] && [saved[1] isKindOfClass:NSNumber.class]) {
         CGFloat x = [saved[0] doubleValue], y = [saved[1] doubleValue];
@@ -219,7 +275,7 @@ static UIButton *sp_mobile_button(NSString *title, NSString *label, id owner, SE
 }
 
 - (CGPoint)sp_mobile_clamp_jump:(CGPoint)point {
-    CGRect inner = CGRectInset(_mobileGameRect, 32, 28);
+    CGRect inner = CGRectInset(_mobileGameRect, 42, 34);
     if (CGRectIsEmpty(inner)) return CGPointMake(CGRectGetMidX(_mobileGameRect), CGRectGetMidY(_mobileGameRect));
     return CGPointMake(MAX(CGRectGetMinX(inner), MIN(CGRectGetMaxX(inner), point.x)),
                        MAX(CGRectGetMinY(inner), MIN(CGRectGetMaxY(inner), point.y)));
@@ -248,6 +304,7 @@ static UIButton *sp_mobile_button(NSString *title, NSString *label, id owner, SE
 - (void)sp_mobile_toggle_edit:(UIButton *)button {
     [self sp_mobile_cancel];
     _mobileEditing = !_mobileEditing;
+    _mobileJump.configuring = _mobileEditing;
     _mobileJumpPan.enabled = _mobileEditing;
     _mobileReset.hidden = _mobileSpeed.hidden = !_mobileEditing;
     [button setTitle:_mobileEditing ? @"Done" : @"Edit" forState:UIControlStateNormal];

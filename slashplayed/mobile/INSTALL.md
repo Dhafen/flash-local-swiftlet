@@ -2,18 +2,18 @@
 
 Använd ditt befintliga Slashplayed Companion 1.5.1 på Windows. Paketet innehåller det osignerade enhetsbygget och dess SHA-256.
 
-1. Packa upp den yttre GitHub Actions-artefakten. Lämna `slashplayed-mobile-combat-device-kit.zip` som ZIP.
-2. Lägg enhetsbygget och `SHA256SUMS.txt` i mappen med `slashplayed-cli.exe`. Kontrollera filen i PowerShell med `Get-FileHash .\slashplayed-mobile-combat-device-kit.zip -Algorithm SHA256` och jämför med `SHA256SUMS.txt`.
+1. Packa upp den yttre GitHub Actions-artefakten. Lämna `slashplayed-mobile-hud-device-kit.zip` som ZIP.
+2. Lägg enhetsbygget och `SHA256SUMS.txt` i mappen med `slashplayed-cli.exe`. Kontrollera filen i PowerShell med `Get-FileHash .\slashplayed-mobile-hud-device-kit.zip -Algorithm SHA256` och jämför med `SHA256SUMS.txt`.
 3. Anslut och lås upp iPhone. Apple Devices ska känna igen den, och utvecklarläge ska vara aktiverat.
-4. Kör `.\slashplayed-cli.exe --kit .\slashplayed-mobile-combat-device-kit.zip`. Välj samma Apple-ID, signeringsteam och bundle-ID som den befintliga installationen. Om du tidigare angav ett eget bundle-ID, lägg till `--bundle-id` med exakt samma värde. **Avinstallera aldrig appen inför uppgraderingen.**
+4. Kör `.\slashplayed-cli.exe --kit .\slashplayed-mobile-hud-device-kit.zip`. Välj samma Apple-ID, signeringsteam och bundle-ID som den befintliga installationen. Om du tidigare angav ett eget bundle-ID, lägg till `--bundle-id` med exakt samma värde. **Avinstallera aldrig appen inför uppgraderingen.**
 5. Öppna Slashplayed och välj den befintliga Forever-installationen. Öppna WoW:s AddOns-meny vid behov och aktivera SPTouchBars, SP Mobile Combat Modes och Hekili Forever.
 
 ## Spela med touch
 
 - Dra med vänster tumme i nedre vänstra spelområdet för att röra dig. Släpp för att stanna. Dra i höger spelområde för att styra kameran. Ett kort tryck skickas som vanligt vänsterklick.
 - Tryck och drag i synliga spelpaneler går normalt direkt till panelen. **UI** kan användas om en panel saknar registrerad tryckyta. **Play** återställer tumstyrningen. I **Edit** kan du dra **Jump**, byta kamerakänslighet eller återställa de två inställningarna.
-- **⌨** öppnar iOS-tangentbordet, **Esc** stänger menyer och Spelfönster som får plats anpassas till liggande skärm utanför strid. **Menu** öppnar stora genvägar till väskor, karta, uppdrag, karaktär, spells, talanger, grupp, chatt, stridsinställningar och spelinställningar. SPTouchBars **Interact** används för NPC-dialog, queststeg och loot. Välj belöningar manuellt.
-- Öppna **Menu → Combat** för lägesval. Den egna cooldownen visas på spellknappen, global cooldown visas med ett diskret svep och antal laddningar visas separat. **Recommended** markerar Hekilis förslag när det finns på en synlig spellcirkel. En fristående ikon visas om ingen cirkel matchar. **Manual** tar bort vägledningen. **Custom** visar första tillgängliga spell i din ordnade lista med spell-ID:n. Tryck **Toggle phone wheel** för fyra fasta platser och en **Wheel**-knapp som visar resten. Samma val återställer din sparade layout. Ändra cirklar och tilldelningar via **Edit spell layout** eller `/sptouch`, utanför strid.
+- **⌨** öppnar iOS-tangentbordet, **Esc** stänger menyer. Vanliga spelfönster anpassas till liggande skärm utanför strid. **Menu** öppnar stora genvägar till väskor, karta, uppdrag, karaktär, spells, talanger, grupp, chatt, stridsinställningar och spelinställningar. SPTouchBars **Interact** används för NPC-dialog, queststeg och loot. Välj belöningar manuellt.
+- Öppna **Menu → Combat** för lägesval. Den egna cooldownen visas på spellknappen, global cooldown visas med ett diskret svep och antal laddningar visas separat. **Recommended** markerar Hekilis förslag när det finns på en synlig spellcirkel. En fristående ikon visas om ingen cirkel matchar. **Manual** tar bort vägledningen. **Custom** visar första tillgängliga spell i din ordnade lista med spell-ID:n. På iPhone används den nya placeringen som standard om du inte har valt att stänga av den. Fyra aktiva spellplatser ligger vid höger tumme och **Spells** fäller ut resten. **Toggle phone wheel** växlar mellan mobilplaceringen och din sparade layout. Ändra cirklar och tilldelningar via **Edit spell layout** eller `/sptouch`, utanför strid.
 - **One button** markerar spellcirkel 1 när du tilldelat den ett namngivet WoW-makro i den aktiva uppsättningen. Varje tryck går genom SPTouchBars befintliga skyddade makroknapp. Spelklienten avgör vilka makrokommandon som är tillåtna i strid.
 
 ## Återställning och verifiering
