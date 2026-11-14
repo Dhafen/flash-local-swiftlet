@@ -9,4 +9,5 @@
 
 Rotation.lua
 Menu.lua
+Windows.lua
 SPMobileCombat.lua

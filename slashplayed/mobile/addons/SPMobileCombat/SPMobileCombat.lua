@@ -179,6 +179,7 @@ events:SetScript("OnEvent", function()
     if not modes[db.mode] then db.mode = 1 end
     if type(db.priorities) ~= "table" then db.priorities = {} end
     createUI()
+    addon.fitWindows()
     events:UnregisterEvent("PLAYER_LOGIN")
 end)
 

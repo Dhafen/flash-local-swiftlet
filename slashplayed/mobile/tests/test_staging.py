@@ -37,6 +37,7 @@ if len(sys.argv) > 2:
                 "slashplayed", "PlugIns/SPJitHelper.appex/SPJitHelper",
                 "licenses/SlashplayedEnhanced-MIT.txt", "licenses/Touchbars-MIT.txt",
                 "addons/SPMobileCombat/SPMobileCombat.lua", "addons/SPMobileCombat/Menu.lua",
+                "addons/SPMobileCombat/Windows.lua",
                 "addons/SPTouchBars/SPTouchBars.tga",
                 "addons/Hekili/LICENSE", "addons/Hekili/LICENSE-wowsims.txt",
             )} <= names

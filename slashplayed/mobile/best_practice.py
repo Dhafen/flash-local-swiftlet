@@ -85,7 +85,7 @@ once(cdn,
                               : @[@"toc", @"lua"]) {
             NSString *file = [NSString stringWithFormat:@"%@/%@.%@", name, name, ext];''',
      '''        for (NSString *fileName in [name isEqualToString:@"SPMobileCombat"]
-                ? @[@"SPMobileCombat.toc", @"SPMobileCombat.lua", @"Rotation.lua", @"Menu.lua", @"SPMobileCombat.license"]
+                ? @[@"SPMobileCombat.toc", @"SPMobileCombat.lua", @"Rotation.lua", @"Menu.lua", @"Windows.lua", @"SPMobileCombat.license"]
                 : [name isEqualToString:@"SPTouchBars"] ? @[@"SPTouchBars.toc", @"SPTouchBars.lua", @"SPTouchBars.tga"]
                 : @[[name stringByAppendingPathExtension:@"toc"], [name stringByAppendingPathExtension:@"lua"]]) {
             NSString *file = [name stringByAppendingPathComponent:fileName];''')
@@ -183,7 +183,7 @@ once(bars, '        if visible then button:Show() else button:Hide() end',
 once(bars, '    header:SetAttribute("editpage", editPage)',
      '''    header:SetAttribute("editpage", editPage)
     header:SetAttribute("phone-arc", db.phoneArc == true)
-    if SPTouchBarsWheel then SPTouchBarsWheel:SetShown(db.phoneArc == true and not editing) end''')
+    if SPTouchBarsWheel then SPTouchBarsWheel:SetShown(db.phoneArc == true) end''')
 once(bars, 'i <= (button.kind == "spells" and db.count or db.utilityCount)',
      'i <= (button.kind == "spells" and (db.phoneArc and 12 or db.count) or db.utilityCount)')
 once(bars, '    createPanel()\n    createSettings()', '''    local wheel = CreateFrame("Button", "SPTouchBarsWheel", header, "SecureHandlerClickTemplate,UIPanelButtonTemplate")
@@ -194,6 +194,7 @@ once(bars, '    createPanel()\n    createSettings()', '''    local wheel = Creat
     SecureHandlerSetFrameRef(wheel, "header", header)
     wheel:SetAttribute("_onclick", [[
         local header = self:GetFrameRef("header")
+        if header:GetAttribute("editing") then return end
         header:SetAttribute("phone-wheel", not header:GetAttribute("phone-wheel"))
         header:RunAttribute("update-page")
     ]])
