@@ -1,8 +1,13 @@
 local model = {}
 
 function model.isOwnCooldown(info, gcd, readable)
-    if not info or not readable(info.startTime) or not readable(info.duration)
-        or not readable(info.isEnabled) or info.isEnabled == false or info.isEnabled == 0
+    if not info or not readable(info) then return false end
+    if readable(info.isEnabled) and (info.isEnabled == false or info.isEnabled == 0) then return false end
+    if readable(info.isActive) and readable(info.isOnGCD)
+        and type(info.isActive) == "boolean" and type(info.isOnGCD) == "boolean" then
+        return info.isActive and not info.isOnGCD
+    end
+    if not readable(info.startTime) or not readable(info.duration)
         or type(info.startTime) ~= "number" or type(info.duration) ~= "number"
         or info.startTime <= 0 or info.duration <= 0 then return false end
     return not (gcd and readable(gcd.startTime) and readable(gcd.duration)

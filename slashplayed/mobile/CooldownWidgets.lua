@@ -19,12 +19,17 @@ local function cooldown(button, spell, item, charges)
         end
         -- The secondary overlay never displays text. Prefer the client's
         -- explicit GCD flag and compare only public timestamps as a fallback.
-        local onGCD = info and info.isOnGCD
-        if (readable(onGCD) and onGCD == true) or (not own and info and gcd
+        local onGCD = info and readable(info) and info.isOnGCD
+        if (readable(onGCD) and onGCD == true) or (not own and info and readable(info) and gcd and readable(gcd)
             and readable(info.startTime) and readable(info.duration)
             and readable(gcd.startTime) and readable(gcd.duration)
             and info.startTime == gcd.startTime and info.duration == gcd.duration) then
-            readableCooldown(button.globalCooldown, gcd)
+            local global = C_Spell.GetSpellCooldownDuration and C_Spell.GetSpellCooldownDuration(61304)
+            if global and button.globalCooldown.SetCooldownFromDurationObject then
+                button.globalCooldown:SetCooldownFromDurationObject(global)
+            else
+                readableCooldown(button.globalCooldown, gcd)
+            end
         end
         return model.blocksSpell(own, charges, readable)
     elseif item then

@@ -23,12 +23,17 @@ local function isReady(spell)
     local range = C_Spell.IsSpellInRange and C_Spell.IsSpellInRange(spell, "target")
     if not readable(range) or range == false then return false end
     local info = C_Spell.GetSpellCooldown(spell)
-    if not info or not readable(info.startTime) or not readable(info.duration) then return false end
-    if info.startTime == 0 or info.duration == 0 then return true end
+    if not info or not readable(info) then return false end
     if C_Spell.GetSpellCharges then
         local charges = C_Spell.GetSpellCharges(spell)
         if charges and readable(charges.currentCharges) and charges.currentCharges > 0 then return true end
     end
+    if readable(info.isActive) and type(info.isActive) == "boolean" then
+        if not info.isActive then return true end
+        if readable(info.isOnGCD) and info.isOnGCD == true then return true end
+    end
+    if not readable(info.startTime) or not readable(info.duration) then return false end
+    if info.startTime == 0 or info.duration == 0 then return true end
     local gcd = C_Spell.GetSpellCooldown(61304)
     return gcd and readable(gcd.startTime) and readable(gcd.duration)
         and gcd.startTime == info.startTime and gcd.duration == info.duration
