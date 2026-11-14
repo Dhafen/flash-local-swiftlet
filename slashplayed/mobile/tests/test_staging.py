@@ -22,8 +22,25 @@ assert 'SPSoftKeyboardField' in event and 'sp_press_soft_escape:' in event
 assert 'isEqual:@"enGB"] ? @"enUS"' in cdn
 assert 'sp_install_hekili_if_absent' in cdn
 assert 'SPMobileCombat' in cdn and 'SPMobileCombat' in kit
+wolkara = root / "addon/WolkaraRoue"
+reference = root / ".wolkara/addons/WolkaraRoue"
+for source in reference.iterdir():
+    if source.name != "WolkaraRoue.toc" and source.is_file():
+        assert (wolkara / source.name).read_bytes() == source.read_bytes(), source.name
+assert "ui = { scale = 170 }" in (wolkara / "Core.lua").read_text()
+assert "hideBars = true" in (wolkara / "Core.lua").read_text()
+toc = (wolkara / "WolkaraRoue.toc").read_text()
+assert toc.index("Core.lua") < toc.index("WolkaraSetup.lua") < toc.index("Free.lua")
+assert "## OptionalDeps: SPTouchBars" in toc
+for old in ("SPTouchBars", "SPMobileCombat"):
+    metadata = (root / f"addon/SlashplayedLegacyHUD/{old}.toc").read_text().splitlines()
+    assert any(line.startswith("## SavedVariablesPerCharacter:") for line in metadata)
+    assert all(line.startswith("## ") for line in metadata)
+assert '[names addObject:@"WolkaraRoue"]' in cdn
+assert "addon/WolkaraRoue" in kit
+
 for toc in (root / "addon").glob("*/*.toc"):
-    if toc.parent.name not in {"SPMobileCombat", "SPTouchBars"} and not toc.parent.name.startswith("Hekili"):
+    if toc.parent.name not in {"SPMobileCombat", "SPTouchBars", "WolkaraRoue"} and not toc.parent.name.startswith("Hekili"):
         continue
     for raw in toc.read_text(encoding="utf-8-sig").splitlines():
         entry = raw.strip().replace("\\", "/")
@@ -46,6 +63,15 @@ if len(sys.argv) > 2:
                 "addons/SPTouchBars/SPTouchBars.tga",
                 "addons/Hekili/LICENSE", "addons/Hekili/LICENSE-wowsims.txt",
             )} <= names
+            if platform == "ios":
+                for addon in ("WolkaraRoue", "SlashplayedLegacyHUD"):
+                    for file in (root / "addon" / addon).iterdir():
+                        assert archive.read(base + f"addons/{addon}/{file.name}") == file.read_bytes()
+                for name in ("LICENSE", "NOTICE.md"):
+                    bundled = "WolkaraForever-MIT.txt" if name == "LICENSE" else "WolkaraForever-NOTICE.md"
+                    assert archive.read(base + "licenses/" + bundled) == (root / ".wolkara" / name).read_bytes()
+            else:
+                assert base + "addons/WolkaraRoue/WolkaraRoue.toc" not in names
             for toc in (root / "addon").glob("Hekili*/*.toc"):
                 assert base + "addons/" + toc.relative_to(root / "addon").as_posix() in names
         assert not any(re.search(r"(^|/)(WTF|Cache|Data)/", n, re.I) for n in names)
