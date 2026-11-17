@@ -1,0 +1,60 @@
+name: Slashplayed Windows Companion auth compatibility
+on:
+  push:
+    branches: [experiment/slashplayed-companion-auth]
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  build-windows:
+    runs-on: windows-latest
+    timeout-minutes: 60
+    defaults:
+      run:
+        shell: bash
+    env:
+      OPENSSL_SRC_PERL: C:\Strawberry\perl\bin\perl.exe
+      PYTHON: python
+    steps:
+      - name: Keep line endings
+        run: git config --global core.autocrlf false
+      - name: Checkout pinned Slashplayed 1.6.1
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          repository: paulstraw/slashplayed
+          ref: 1e940dd094d7bc79a0747045634c4a732993db34
+          persist-credentials: false
+      - name: Checkout authentication patch
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          path: .edits
+          persist-credentials: false
+      - name: Apply compatibility patch
+        run: python .edits/slashplayed/companion-auth/patch.py .
+      - name: Install pinned rustup
+        run: |
+          set -euo pipefail
+          init="$RUNNER_TEMP/rustup-init.exe"
+          curl -fsSL -o "$init" https://static.rust-lang.org/rustup/archive/1.29.2/x86_64-pc-windows-msvc/rustup-init.exe
+          echo "00f139da614dced87d3c3d4121c43eebdac3c1bf8a5ee86b9d80dfd71c8d70fd  $init" | sha256sum -c -
+          chmod +x "$init"
+          "$init" -y --profile minimal --default-toolchain none --no-modify-path
+          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+      - name: Fetch signing and font sources
+        run: |
+          scripts/build-zsign.sh source
+          scripts/fetch-font.sh
+      - name: Test
+        working-directory: apps/companion-rs
+        run: cargo test --locked
+      - name: Build Windows Companion
+        working-directory: apps/companion-rs
+        run: cargo build --release --locked --target x86_64-pc-windows-msvc
+      - name: Package Windows Companion
+        run: apps/companion-rs/package.sh x86_64-pc-windows-msvc "$RUNNER_TEMP/companion-auth"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: Slashplayed-Windows-Companion-Auth-Fix
+          path: ${{ runner.temp }}/companion-auth/*
+          if-no-files-found: error
+          retention-days: 30
