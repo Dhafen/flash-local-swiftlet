@@ -5,6 +5,7 @@ import shutil
 from pathlib import Path
 from wolkara_english import translate
 from wolkara_hud import protect_cooldowns, protect_hud
+from wolkara_rotation import actions, picker, turn
 
 root = Path.cwd()
 vendor = root / ".wolkara"
@@ -14,6 +15,9 @@ for path in addon.glob("*.lua"):
     original = path.read_text(encoding="utf-8")
     adapt = {"Hud.lua": protect_hud, "Actions.lua": protect_cooldowns}
     english = translate(adapt[path.name](original) if path.name in adapt else original)
+    rotation = {"Actions.lua": actions, "Picker.lua": picker, "Turn.lua": turn}
+    if path.name in rotation:
+        english = rotation[path.name](english)
     if english != original:
         path.write_text(english, encoding="utf-8", newline="\n")
 shutil.copyfile(Path(__file__).with_name("WolkaraSetup.lua"), addon / "WolkaraSetup.lua")
@@ -22,9 +26,15 @@ manifest = toc.read_text()
 anchor = "\nCore.lua\n"
 if manifest.count(anchor) != 1:
     raise SystemExit("Wolkara manifest no longer has its expected entry point")
-toc.write_text(manifest.replace(anchor, "\n## OptionalDeps: SPTouchBars\n\nCore.lua\nWolkaraSetup.lua\n", 1))
+toc.write_text(manifest.replace(anchor, "\n## OptionalDeps: SPTouchBars, Tactara\n\nCore.lua\nWolkaraSetup.lua\n", 1))
 files = sorted(path.name for path in addon.iterdir() if path.is_file() and path != toc)
 files.append(toc.name)
+
+# Ship the upstream addon unchanged and preserve independently installed copies.
+tactara = root / ".tactara" / "Tactara"
+assert (tactara / "Tactara.toc").is_file()
+shutil.copytree(tactara, root / "addon/Tactara")
+shutil.copyfile(root / ".tactara/LICENSE", root / "addon/Tactara/LICENSE")
 
 # Keep the old SavedVariables available to the import on upgrade. Both old
 # addons must be inert on the phone so they cannot draw a second HUD.
@@ -54,8 +64,29 @@ replace("addon/WolkaraRoue/Core.lua",
 
 cdn = "apps/client/spcdn.m"
 replace(cdn, "#include <stdatomic.h>", "#include <stdatomic.h>\n#include <stdlib.h>")
+replace(cdn, "BOOL sp_addons_place(", '''// Install the independent Tactara addon once, never overwrite user files.
+static void sp_install_tactara_if_absent(NSFileManager *fm, NSString *source, NSString *dest,
+                                         NSMutableArray *written, NSMutableArray *failed) {
+    NSString *target = [dest stringByAppendingPathComponent:@"Tactara"];
+    if ([fm fileExistsAtPath:target]) return;
+    NSString *stage = [dest stringByAppendingPathComponent:
+        [@".slashplayed-tactara-" stringByAppendingString:NSUUID.UUID.UUIDString]];
+    if ([fm createDirectoryAtPath:dest withIntermediateDirectories:YES attributes:nil error:nil] &&
+        [fm copyItemAtPath:[source stringByAppendingPathComponent:@"Tactara"] toPath:stage error:nil] &&
+        [fm moveItemAtPath:stage toPath:target error:nil]) {
+        [written addObject:@"Tactara"];
+    } else {
+        [failed addObject:@"Tactara (could not install)"];
+        [fm removeItemAtPath:stage error:nil];
+    }
+}
+
+BOOL sp_addons_place(''')
 replace(cdn, '        [names addObjectsFromArray:@[@"SPTouchBars", @"SPMobileCombat"]];',
-        '''        if (getenv("SP_PHONE_UI_RECTS")) [names addObject:@"WolkaraRoue"];
+        '''        if (getenv("SP_PHONE_UI_RECTS")) {
+            [names addObject:@"WolkaraRoue"];
+            sp_install_tactara_if_absent(fm, addons, [game stringByAppendingPathComponent:@"Interface/AddOns"], written, failed);
+        }
         [names addObjectsFromArray:@[@"SPTouchBars", @"SPMobileCombat"]];''')
 replace(cdn, '        for (NSString *fileName in [name isEqualToString:@"SPMobileCombat"]',
         '''        for (NSString *fileName in [name isEqualToString:@"WolkaraRoue"]
@@ -101,7 +132,7 @@ replace(hover, '            "SPMobileMenu", "SPMobileCombatPanel", "SPTouchBarsE
 kit = "scripts/release/device-kit.sh"
 replace(kit, '    if [ "$p" = xros ]; then',
         '''    if [ "$p" = ios ]; then
-      cp -R "$ROOT/addon/WolkaraRoue" "$ROOT/addon/SlashplayedLegacyHUD" "$APP/addons/"
+      cp -R "$ROOT/addon/WolkaraRoue" "$ROOT/addon/SlashplayedLegacyHUD" "$ROOT/addon/Tactara" "$APP/addons/"
       cp "$ROOT/.wolkara/LICENSE" "$APP/licenses/WolkaraForever-MIT.txt"
       cp "$ROOT/.wolkara/NOTICE.md" "$APP/licenses/WolkaraForever-NOTICE.md"
     fi

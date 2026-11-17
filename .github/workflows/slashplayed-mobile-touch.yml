@@ -97,6 +97,14 @@ jobs:
           path: .wolkara
           persist-credentials: false
 
+      - name: Checkout original GPL Tactara 0.19.0
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          repository: Zudryx/Tactara
+          ref: c6eb184cdfa29290c697d5c359d50726803838a6
+          path: .tactara
+          persist-credentials: false
+
       - name: Stage source and license notices
         shell: bash
         run: |
