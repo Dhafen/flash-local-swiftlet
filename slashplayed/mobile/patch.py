@@ -52,7 +52,7 @@ def patch_input():
                  "        _softEscape.frame = CGRectMake(MAX(8, right - 116), top, 50, 38);\n"
                  "        [self sp_mobile_layout:game top:top];")
     replace_once(path, "- (void)sp_toggle_soft_keyboard:(UIButton *)button {",
-                 "- (void)sp_toggle_soft_keyboard:(UIButton *)button {\n    [self sp_mobile_cancel];")
+                 "- (void)sp_toggle_soft_keyboard:(UIButton *)button {\n    [self sp_mobile_cancel];\n    [self setNeedsLayout];")
     replace_once(path, "    if (self.window) [self becomeFirstResponder];",
                  """    if (self.window) [self becomeFirstResponder];
 #if !TARGET_OS_VISION

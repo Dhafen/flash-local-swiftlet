@@ -18,7 +18,17 @@ assert '@interface SPMobileJumpButton' in event
 assert 'event->modifierFlags = 0;' in event
 assert 'sp_mobile_send_jump' in event
 assert 'sp_soft_emit([NSString stringWithFormat:@"%C", (unichar)0xF70B], 0x64, NO);' in event
-assert '_mobileRotation.hidden = !wolkaraHUD || _mobileEditing;' in event
+assert '_mobileRotation.hidden = !wolkaraHUD || compact || _mobileEditing;' in event
+assert 'BOOL compact = wolkaraHUD && ![prefs boolForKey:@"sp_wolkara_extra_controls"];' in event
+assert '_softEscape.hidden = compact;' in event
+assert '_mobileUI.hidden = _mobileEdit.hidden = compact;' in event
+assert '_mobileSpeed.hidden = _mobileReset.hidden = compact || !_mobileEditing;' in event
+assert '_mobileJump.hidden = compact && ![prefs boolForKey:@"sp_wolkara_show_jump"];' in event
+assert '_softToggle.menu = [self sp_mobile_compact_menu];' in event
+assert '_softToggle.showsMenuAsPrimaryAction = NO;' in event
+assert 'CGRectGetMidX(game) - 22' in event
+assert 'Show / hide Jump button' in event and 'Show / hide extra controls' in event
+assert '[input sp_mobile_jump:YES];' in event and '[input sp_mobile_jump:NO];' in event
 assert '_mobileRotation.frame = CGRectMake(MAX(left, right - 265), controlsY, 92, 52);' in event
 assert 'sp_soft_emit([NSString stringWithFormat:@"%C", (unichar)0xF70F], 0x6F, NO);' in event
 bars = (root / "addon/SPTouchBars/SPTouchBars.lua").read_text()

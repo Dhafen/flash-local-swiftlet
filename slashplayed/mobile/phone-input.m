@@ -258,6 +258,48 @@ static UIButton *sp_mobile_button(NSString *title, NSString *label, id owner, SE
     if (notification.object == self.window.windowScene) [self sp_mobile_cancel];
 }
 
+// Keep Wolkara's in-game HUD unobstructed. The native keyboard remains the
+// only permanent overlay; long-press it for controls which require native input.
+- (UIMenu *)sp_mobile_compact_menu {
+    __weak SPInputView *weakSelf = self;
+    UIAction *escape = [UIAction actionWithTitle:@"Escape" image:nil identifier:nil handler:^(__kindof UIAction *action) {
+        SPInputView *input = weakSelf;
+        if (input) [input sp_press_soft_escape:nil];
+    }];
+    UIAction *jump = [UIAction actionWithTitle:@"Jump" image:nil identifier:nil handler:^(__kindof UIAction *action) {
+        SPInputView *input = weakSelf;
+        if (!input || !sp_client_window || input->_softField.isFirstResponder) return;
+        [input sp_mobile_jump:YES];
+        [input sp_mobile_jump:NO];
+    }];
+    UIAction *showJump = [UIAction actionWithTitle:@"Show / hide Jump button" image:nil identifier:nil handler:^(__kindof UIAction *action) {
+        SPInputView *input = weakSelf;
+        if (!input) return;
+        [input sp_mobile_jump:NO];
+        NSUserDefaults *prefs = NSUserDefaults.standardUserDefaults;
+        [prefs setBool:![prefs boolForKey:@"sp_wolkara_show_jump"] forKey:@"sp_wolkara_show_jump"];
+        [input setNeedsLayout];
+    }];
+    UIAction *rotation = [UIAction actionWithTitle:@"Rotation (F8)" image:nil identifier:nil handler:^(__kindof UIAction *action) {
+        SPInputView *input = weakSelf;
+        if (input) [input sp_mobile_rotation:nil];
+    }];
+    UIAction *mode = [UIAction actionWithTitle:@"Toggle play / UI touch mode" image:nil identifier:nil handler:^(__kindof UIAction *action) {
+        SPInputView *input = weakSelf;
+        if (input) [input sp_mobile_toggle_ui:input->_mobileUI];
+    }];
+    UIAction *legacy = [UIAction actionWithTitle:@"Show / hide extra controls" image:nil identifier:nil handler:^(__kindof UIAction *action) {
+        SPInputView *input = weakSelf;
+        if (!input) return;
+        [input sp_mobile_cancel];
+        if (input->_mobileEditing) [input sp_mobile_toggle_edit:input->_mobileEdit];
+        NSUserDefaults *prefs = NSUserDefaults.standardUserDefaults;
+        [prefs setBool:![prefs boolForKey:@"sp_wolkara_extra_controls"] forKey:@"sp_wolkara_extra_controls"];
+        [input setNeedsLayout];
+    }];
+    return [UIMenu menuWithTitle:@"Game controls" children:@[escape, jump, showJump, rotation, mode, legacy]];
+}
+
 - (void)sp_mobile_layout:(CGRect)game top:(CGFloat)top {
     if (!CGRectEqualToRect(game, _mobileGameRect)) {
         [self sp_mobile_cancel];
@@ -265,12 +307,34 @@ static UIButton *sp_mobile_button(NSString *title, NSString *label, id owner, SE
     }
     CGFloat left = CGRectGetMinX(game) + MAX(8, self.safeAreaInsets.left - CGRectGetMinX(game));
     BOOL wolkaraHUD = getenv("SP_PHONE_UI_RECTS") != NULL;
+    NSUserDefaults *prefs = NSUserDefaults.standardUserDefaults;
+    BOOL compact = wolkaraHUD && ![prefs boolForKey:@"sp_wolkara_extra_controls"];
+    _softEscape.hidden = compact;
+    _mobileUI.hidden = _mobileEdit.hidden = compact;
+    _mobileSpeed.hidden = _mobileReset.hidden = compact || !_mobileEditing;
+    _mobileJump.hidden = compact && ![prefs boolForKey:@"sp_wolkara_show_jump"];
+    if (wolkaraHUD) {
+        if (!_softToggle.menu) {
+            _softToggle.menu = [self sp_mobile_compact_menu];
+            _softToggle.showsMenuAsPrimaryAction = NO;
+            _softToggle.accessibilityHint = @"Hold for game controls";
+        }
+        if (!_softField.isFirstResponder && !CGRectIsEmpty(game)) {
+            // Center below Wolkara's chat, rather than over the spell wheels.
+            CGFloat bottom = MAX(8, self.safeAreaInsets.bottom);
+            _softToggle.frame = CGRectMake(CGRectGetMidX(game) - 22,
+                CGRectGetMaxY(game) - bottom - 34, 44, 34);
+        }
+    } else {
+        _softToggle.menu = nil;
+        _softToggle.accessibilityHint = nil;
+    }
     CGFloat controlsY = wolkaraHUD ? CGRectGetMaxY(game) - MAX(8, self.safeAreaInsets.bottom) - 44 : top;
     _mobileUI.frame = CGRectMake(left, controlsY, 46, 44);
     _mobileEdit.frame = CGRectMake(left + 50, controlsY, 50, 44);
     _mobileSpeed.frame = CGRectMake(left + 104, controlsY, 49, 44);
     _mobileReset.frame = CGRectMake(left + 157, controlsY, 53, 44);
-    _mobileRotation.hidden = !wolkaraHUD || _mobileEditing;
+    _mobileRotation.hidden = !wolkaraHUD || compact || _mobileEditing;
     // Keep the rotation next to Jump, inside the right thumb's reach and
     // inboard of the Wolkara spell arc.
     CGFloat right = MIN(CGRectGetMaxX(game), CGRectGetMaxX(self.bounds) - self.safeAreaInsets.right);
