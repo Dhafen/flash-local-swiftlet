@@ -7,3 +7,14 @@ static enum SPMobileZone sp_mobile_zone(double x, double y, int interface) {
     if (x >= 0.50 && y >= 0.18 && y <= 0.88) return SPMobileLook;
     return SPMobileDefault;
 }
+
+// Distances are UIKit points; elapsed is UITouch's monotonic seconds.
+// A gesture that moved (even if it returned to the origin) is not a click.
+enum SPMobileClick { SPMobileNoClick = -1, SPMobileLeftClick = 0, SPMobileRightClick = 1 };
+#define SP_MOBILE_DRAG_DISTANCE 7.0
+#define SP_MOBILE_RIGHT_PRESS_SECONDS 0.45
+
+static inline enum SPMobileClick sp_mobile_click(double elapsed, double distance, int interrupted) {
+    if (interrupted || distance >= SP_MOBILE_DRAG_DISTANCE) return SPMobileNoClick;
+    return elapsed >= SP_MOBILE_RIGHT_PRESS_SECONDS ? SPMobileRightClick : SPMobileLeftClick;
+}

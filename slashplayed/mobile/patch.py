@@ -40,7 +40,9 @@ def patch_input():
     UIButton *_mobileRotation;
     UIPanGestureRecognizer *_mobileJumpPan, *_mobileRotationPan;
     UITouch *_mobileLeft, *_mobileRight, *_mobileInterface;
-    CGPoint _mobileLeftStart, _mobileRightStart, _mobilePrevious;
+    CGPoint _mobileLeftStart, _mobileRightStart, _mobilePrevious, _mobileInterfaceStart;
+    NSTimeInterval _mobileLeftAt, _mobileRightAt, _mobileInterfaceAt;
+    BOOL _mobileInterfacePending;
     CGRect _mobileGameRect;
     CGFloat _mobileLookSpeed;
     BOOL _mobileMoving, _mobileLookDrag, _mobileLooking, _mobileLookCancelled;

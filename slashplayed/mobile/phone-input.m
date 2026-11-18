@@ -111,7 +111,11 @@ static enum SPMobileZone sp_mobile_touch_zone(CGPoint point, CGRect game) {
             break;
         }
     }
-    return sp_mobile_zone(x, y, interface);
+    enum SPMobileZone zone = sp_mobile_zone(x, y, interface);
+    // Route the central/top world too; keep touches outside the game on the stock path.
+    if (getenv("SP_PHONE_UI_RECTS") && zone == SPMobileDefault &&
+        x >= 0 && x <= 1 && y >= 0 && y <= 1) return SPMobileInterface;
+    return zone;
 }
 
 // Like the reference phone layout, Jump owns one finger and emits an
@@ -477,9 +481,14 @@ static UIButton *sp_mobile_button(NSString *title, NSString *label, id owner, SE
 
 - (void)sp_mobile_move_look:(CGPoint)point {
     if (!_mobileLooking) {
-        if (_touches.count || sp_mouse_buttons) return;
+        // Don't turn a pending panel/world tap into a simultaneous camera drag.
+        if (_mobileInterface || _touches.count || sp_mouse_buttons) {
+            if (hypot(point.x - _mobileRightStart.x, point.y - _mobileRightStart.y) >= SP_MOBILE_DRAG_DISTANCE)
+                _mobileLookCancelled = YES;
+            return;
+        }
         CGPoint origin = _mobileLookDrag ? point : _mobileRightStart;
-        if (!_mobileLookDrag && hypot(point.x - origin.x, point.y - origin.y) < 7) return;
+        if (!_mobileLookDrag && hypot(point.x - origin.x, point.y - origin.y) < SP_MOBILE_DRAG_DISTANCE) return;
         _mobileLookDrag = _mobileLooking = YES;
         _mobilePrevious = origin;
         sp_mouse_button(1, YES, sp_from_uikit(origin));
@@ -507,17 +516,22 @@ static UIButton *sp_mobile_button(NSString *title, NSString *label, id owner, SE
 }
 
 - (void)sp_mobile_end_interface {
+    _mobileInterfacePending = NO;
     if (!_mobileInterfaceDown) return;
     _mobileInterfaceDown = NO;
     sp_mouse_button(0, NO, sp_pointer);
 }
 
-- (void)sp_mobile_tap:(CGPoint)start {
-    [self sp_mobile_release_look];
-    if (_touches.count || sp_mouse_buttons) return;
+- (void)sp_mobile_tap:(CGPoint)start finish:(CGPoint)end elapsed:(NSTimeInterval)elapsed {
+    // The ordinary left click and right click each send exactly one down/up
+    // pair. Do not release another finger's camera drag or click through it.
+    if (_touches.count || sp_mouse_buttons || !sp_client_window || _softField.isFirstResponder) return;
+    enum SPMobileClick click = sp_mobile_click(getenv("SP_PHONE_UI_RECTS") ? elapsed : 0,
+                                               hypot(end.x - start.x, end.y - start.y), NO);
+    if (click == SPMobileNoClick) return;
     CGPoint position = sp_from_uikit(start);
-    sp_mouse_button(0, YES, position);
-    sp_mouse_button(0, NO, position);
+    sp_mouse_button(click, YES, position);
+    sp_mouse_button(click, NO, position);
 }
 #endif
 
@@ -532,21 +546,28 @@ static UIButton *sp_mobile_button(NSString *title, NSString *label, id owner, SE
             if (zone == SPMobileInterface && !_mobileInterface) {
                 [self sp_mobile_release_look];
                 _mobileInterface = touch;
-                _mobileInterfaceDown = YES;
-                sp_mouse_button(0, YES, sp_from_uikit(point));
+                _mobileInterfaceStart = point;
+                _mobileInterfaceAt = touch.timestamp;
+                _mobileInterfacePending = getenv("SP_PHONE_UI_RECTS") != NULL;
+                // The phone delays stationary UI/world presses until the
+                // gesture is classified. A drag still sends left down at its origin.
+                _mobileInterfaceDown = !_mobileInterfacePending;
+                if (_mobileInterfaceDown) sp_mouse_button(0, YES, sp_from_uikit(point));
             } else if (zone == SPMobileMove && !_mobileLeft) {
                 _mobileLeft = touch;
                 _mobileLeftStart = point;
+                _mobileLeftAt = touch.timestamp;
                 _mobileMoving = NO;
             } else if (zone == SPMobileLook && !_mobileRight) {
                 _mobileRight = touch;
                 _mobileRightStart = point;
+                _mobileRightAt = touch.timestamp;
                 _mobileLookDrag = _mobileLookCancelled = NO;
             }
         }
     }
     touches = [self sp_mobile_base_touches:touches];
-    if (!touches.count || _mobileInterfaceDown) return;
+    if (!touches.count || _mobileInterface) return;
     [self sp_mobile_release_look];
 #endif
     [self sp_base_touchesBegan:touches withEvent:event];
@@ -557,16 +578,27 @@ static UIButton *sp_mobile_button(NSString *title, NSString *label, id owner, SE
     if (_mobileLeft && [touches containsObject:_mobileLeft]) {
         CGPoint point = [_mobileLeft locationInView:self];
         CGPoint delta = CGPointMake(point.x - _mobileLeftStart.x, point.y - _mobileLeftStart.y);
-        if (!_mobileMoving && hypot(delta.x, delta.y) >= 7) {
+        if (!_mobileMoving && hypot(delta.x, delta.y) >= SP_MOBILE_DRAG_DISTANCE) {
             _mobileMoving = YES;
             [_mobileStick setOrigin:_mobileLeftStart displacement:delta];
         } else if (_mobileMoving && !_mobileStick.hidden) {
             [_mobileStick setOrigin:_mobileLeftStart displacement:delta];
         }
     }
-    if (_mobileInterfaceDown && [touches containsObject:_mobileInterface]) {
-        CGPoint p = sp_from_uikit([_mobileInterface locationInView:self]);
-        if (!CGPointEqualToPoint(p, sp_pointer)) sp_mouse_moved_to(p, SPLeftMouseDragged, NO);
+    if (_mobileInterface && [touches containsObject:_mobileInterface]) {
+        CGPoint point = [_mobileInterface locationInView:self];
+        if (_mobileInterfacePending &&
+            hypot(point.x - _mobileInterfaceStart.x, point.y - _mobileInterfaceStart.y) >= SP_MOBILE_DRAG_DISTANCE) {
+            _mobileInterfacePending = NO;
+            if (!_touches.count && !sp_mouse_buttons && sp_client_window) {
+                _mobileInterfaceDown = YES;
+                sp_mouse_button(0, YES, sp_from_uikit(_mobileInterfaceStart));
+            }
+        }
+        if (_mobileInterfaceDown) {
+            CGPoint p = sp_from_uikit(point);
+            if (!CGPointEqualToPoint(p, sp_pointer)) sp_mouse_moved_to(p, SPLeftMouseDragged, NO);
+        }
     }
     if (_mobileRight && !_mobileLookCancelled && [touches containsObject:_mobileRight])
         [self sp_mobile_move_look:[_mobileRight locationInView:self]];
@@ -584,18 +616,25 @@ static UIButton *sp_mobile_button(NSString *title, NSString *label, id owner, SE
             CGPoint p = sp_from_uikit([_mobileInterface locationInView:self]);
             sp_mouse_button(0, NO, p);
             _mobileInterfaceDown = NO;
+        } else if (!cancelled && _mobileInterfacePending) {
+            [self sp_mobile_tap:_mobileInterfaceStart finish:[_mobileInterface locationInView:self]
+                       elapsed:_mobileInterface.timestamp - _mobileInterfaceAt];
         }
         [self sp_mobile_end_interface];
         _mobileInterface = nil;
     }
     if (_mobileLeft && [touches containsObject:_mobileLeft]) {
         [_mobileStick stop];
-        if (!cancelled && !_mobileMoving) [self sp_mobile_tap:_mobileLeftStart];
+        if (!cancelled && !_mobileMoving && !_mobileInterface)
+            [self sp_mobile_tap:_mobileLeftStart finish:[_mobileLeft locationInView:self]
+                       elapsed:_mobileLeft.timestamp - _mobileLeftAt];
         _mobileLeft = nil;
     }
     if (_mobileRight && [touches containsObject:_mobileRight]) {
         [self sp_mobile_release_look];
-        if (!cancelled && !_mobileLookDrag) [self sp_mobile_tap:_mobileRightStart];
+        if (!cancelled && !_mobileLookDrag && !_mobileLookCancelled && !_mobileInterface)
+            [self sp_mobile_tap:_mobileRightStart finish:[_mobileRight locationInView:self]
+                       elapsed:_mobileRight.timestamp - _mobileRightAt];
         _mobileRight = nil;
     }
     return base;

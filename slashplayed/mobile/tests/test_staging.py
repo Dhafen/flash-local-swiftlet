@@ -15,6 +15,14 @@ cdn = (root / "apps/client/spcdn.m").read_text()
 kit = (root / "scripts/release/device-kit.sh").read_text()
 assert 'SP_PHONE_UI_RECTS' in (root / 'apps/client/launcher.m').read_text()
 assert 'sp_mobile_end_interface' in event
+assert 'SP_MOBILE_RIGHT_PRESS_SECONDS 0.45' in event
+assert 'sp_mobile_click(getenv("SP_PHONE_UI_RECTS") ? elapsed : 0,' in event
+assert 'sp_mouse_button(click, YES, position);' in event and 'sp_mouse_button(click, NO, position);' in event
+assert '_mobileInterfacePending = NO;' in event
+assert 'elapsed:_mobileInterface.timestamp - _mobileInterfaceAt' in event
+assert 'elapsed:_mobileLeft.timestamp - _mobileLeftAt' in event
+assert 'elapsed:_mobileRight.timestamp - _mobileRightAt' in event
+assert 'sp_mouse_button(0, YES, sp_from_uikit(_mobileInterfaceStart));' in event
 assert '@interface SPMobileJumpButton' in event
 assert 'event->modifierFlags = 0;' in event
 assert 'sp_mobile_send_jump' in event
