@@ -78,6 +78,8 @@ toc = (wolkara / "WolkaraRoue.toc").read_text()
 assert toc.index("Core.lua") < toc.index("WolkaraSetup.lua") < toc.index("Free.lua")
 assert "## OptionalDeps: SPTouchBars, Tactara" in toc
 assert "sp_install_tactara_if_absent" in cdn
+assert "settings.count > 0 and settings.turn == true" in (wolkara / "Turn.lua").read_text()
+assert (wolkara / "WolkaraSetup.lua").read_bytes() == (Path(__file__).resolve().parents[1] / "WolkaraSetup.lua").read_bytes()
 tactara = root / "addon/Tactara"
 assert (tactara / "Tactara.toc").is_file() and (tactara / "LICENSE").is_file()
 for f in (root / ".tactara/Tactara").rglob("*"):

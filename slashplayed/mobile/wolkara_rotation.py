@@ -53,6 +53,8 @@ def picker(source):
 
 
 def turn(source):
+    source = once(source, 'return settings ~= nil and settings.turn == true',
+                  'return settings ~= nil and settings.count > 0 and settings.turn == true')
     return once(source, 'button:SetAttribute("useOnKeyDown", nil)', '''local entry = button:GetEntry()
             if entry and entry.kind == "tactara" then
                 button:SetAttribute("useOnKeyDown", false)

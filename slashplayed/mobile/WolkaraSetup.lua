@@ -1,62 +1,44 @@
--- Seed a new Wolkara layout from the character's existing actions.
--- The original SavedVariables and action bars are read only.
+-- One Wolkara HUD: use its tap-open rings, not the permanent side spell wheels.
+-- Existing ring assignments and hidden side-wheel entries are never destroyed.
 local _, ns = ...
+local Setup = ns.Register("Slashplayed tap-open wheels", {})
 
-local Setup = ns.Register("Slashplayed first-run setup", {})
-local MAX_SLOTS = 12
-
-local function action(kind, id, icon)
-    if kind == "spell" or kind == "item" then
-        if tonumber(id) and tonumber(id) > 0 then return { kind = kind, id = tonumber(id) } end
-    elseif kind == "macro" then
-        local name
-        if type(id) == "number" then name, icon = GetMacroInfo(id) else name = id end
-        if type(name) == "string" and name ~= "" then return { kind = kind, id = name, icon = icon } end
-    end
-end
-
-local function collect(first, count, bindings)
-    local entries = {}
-    for index = first, first + count - 1 do
-        local entry
-        if bindings then
-            local old = bindings[index]
-            if type(old) == "table" then entry = action(old.kind, old.value, old.icon) end
-        elseif GetActionInfo then
-            entry = action(GetActionInfo(index))
+local function copyMissing(group, wheel)
+    local entries = wheel.entries
+    local function already(entry)
+        for _, old in pairs(entries) do
+            if type(old) == "table" and old.kind == entry.kind and old.id == entry.id then return true end
         end
-        if entry then entries[#entries + 1] = entry end
-        if #entries == MAX_SLOTS then break end
+        return false
     end
-    return entries
-end
-
-local function seed(group, entries)
-    for _, button in pairs(group.buttons) do
-        if type(button) == "table" and button.entry then return end
-    end
-    if #entries == 0 then return end
-    group.count = math.max(group.count, #entries)
-    for index, entry in ipairs(entries) do
-        group.buttons[index] = { entry = entry }
+    for index = 1, ns.MAX_FREE do
+        local button = group.buttons[index]
+        local entry = type(button) == "table" and button.entry
+        if type(entry) == "table" and entry.kind and entry.id ~= nil and not already(entry) then
+            for slot = 1, ns.MAX_SLOTS do
+                if entries[slot] == nil then
+                    local copy = {}
+                    for k, v in pairs(entry) do copy[k] = v end
+                    entries[slot] = copy
+                    wheel.slots = math.max(wheel.slots, slot)
+                    break
+                end
+            end
+        end
     end
 end
 
 function Setup:Layout()
-    if ns.db.slashplayedSetup then return end
-    local old = SPTouchBarsDB
-    local bindings = type(old) == "table" and type(old.bindings) == "table" and old.bindings
-    local page = GetActionBarPage and GetActionBarPage() or 1
-    local right = bindings and collect(old.bank == 5 and 49 or 1, MAX_SLOTS, bindings) or {}
-    local left = bindings and collect(61, MAX_SLOTS, bindings) or {}
-    if #right == 0 then right = collect((page - 1) * MAX_SLOTS + 1, MAX_SLOTS) end
-    if #left == 0 then left = collect(page == 2 and 1 or 13, MAX_SLOTS) end
-    seed(ns.db.free, right)
-    seed(ns.db.freeLeft, left)
-    -- Retry on a later UI layout or action update for a brand-new character.
-    ns.db.slashplayedSetup = #right > 0 or #left > 0
+    local db = ns.db
+    if not db or db.slashplayedTapWheels then return end
+    -- The upstream legacy golden-wheel migration has already run. Preserve the
+    -- user-configured ring slots, fill only empty slots from their previous HUD.
+    copyMissing(db.free, db.wheels[1])
+    copyMissing(db.freeLeft, db.wheels[2])
+    db.wheels[1].enabled = true
+    db.wheels[2].enabled = true
+    db.free.count = 0
+    db.freeLeft.count = 0
+    db.slashplayedTapWheels = true
+    if ns.MarkChanged then ns.MarkChanged() end
 end
-
-ns.On("ACTIONBAR_SLOT_CHANGED", function()
-    if ns.db and not ns.db.slashplayedSetup then ns.Layout() end
-end)

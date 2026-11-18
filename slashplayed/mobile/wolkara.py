@@ -137,4 +137,4 @@ replace(kit, '    if [ "$p" = xros ]; then',
       cp "$ROOT/.wolkara/NOTICE.md" "$APP/licenses/WolkaraForever-NOTICE.md"
     fi
     if [ "$p" = xros ]; then''')
-print("Staged WolkaraForever's original UI and first-run action import for the iPhone")
+print("Staged WolkaraForever's original tap-open UI and saved-layout migration for the iPhone")
