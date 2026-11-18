@@ -18,8 +18,12 @@ assert 'sp_mobile_end_interface' in event
 assert '@interface SPMobileJumpButton' in event
 assert 'event->modifierFlags = 0;' in event
 assert 'sp_mobile_send_jump' in event
-assert 'sp_soft_emit([NSString stringWithFormat:@"%C", (unichar)0xF70B], 0x64, NO);' in event
-assert '_mobileRotation.hidden = !wolkaraHUD || compact || _mobileEditing;' in event
+assert 'sp_soft_emit([NSString stringWithFormat:@"%C", (unichar)0xF70F], 0x6F, NO);' in event
+assert '_mobileRotation.hidden = !wolkaraHUD || CGRectIsEmpty(game) || _softField.isFirstResponder' in event
+assert '_mobileRotationPan.cancelsTouchesInView = YES;' in event
+assert 'sp_mobile_drag_rotation:' in event and 'sp_wolkara_rotation_position' in event
+assert 'sp_mobile_clamp_rotation:' in event
+assert 'Show / hide F12 button' in event and 'Reset F12 position' in event
 assert 'BOOL compact = wolkaraHUD && ![prefs boolForKey:@"sp_wolkara_extra_controls"];' in event
 assert '_softEscape.hidden = compact;' in event
 assert '_mobileUI.hidden = _mobileEdit.hidden = compact;' in event
@@ -30,8 +34,10 @@ assert '_softToggle.showsMenuAsPrimaryAction = NO;' in event
 assert 'CGRectGetMidX(game) - 22' in event
 assert 'Show / hide Jump button' in event and 'Show / hide extra controls' in event
 assert '[input sp_mobile_jump:YES];' in event and '[input sp_mobile_jump:NO];' in event
-assert '_mobileRotation.frame = CGRectMake(MAX(left, right - 265), controlsY, 92, 52);' in event
-assert 'sp_soft_emit([NSString stringWithFormat:@"%C", (unichar)0xF70F], 0x6F, NO);' in event
+assert '_mobileRotation.bounds = CGRectMake(0, 0, 44, 44);' in event
+assert '_mobileRotation.layer.cornerRadius = 22;' in event
+assert 'sp_soft_emit([NSString stringWithFormat:@"%C", (unichar)0xF70E], 0x67, NO);' in event
+assert event.count('sp_soft_emit([NSString stringWithFormat:@"%C", (unichar)0xF70F], 0x6F, NO);') == 1
 bars = (root / "addon/SPTouchBars/SPTouchBars.lua").read_text()
 assert 'phoneLayout.enabled(db.phoneArc, SPPhoneTouchRects)' in bars
 assert 'sp_mobile_touch_zone' in event, "Missing floating touch routing"
@@ -60,6 +66,9 @@ for source in reference.iterdir():
     elif source.name in ("Picker.lua", "Turn.lua"):
         fn = picker if source.name == "Picker.lua" else turn
         assert (wolkara / source.name).read_text(encoding="utf-8") == fn(translate(source.read_text(encoding="utf-8")))
+    elif source.name == "Chat.lua":
+        assert (wolkara / source.name).read_text(encoding="utf-8") == translate(source.read_text(encoding="utf-8")).replace("F12", "F11")
+        assert 'local OPEN_KEY = "F11"' in (wolkara / source.name).read_text()
     elif source.suffix == ".lua":
         assert (wolkara / source.name).read_text(encoding="utf-8") == translate(source.read_text(encoding="utf-8"))
     else:

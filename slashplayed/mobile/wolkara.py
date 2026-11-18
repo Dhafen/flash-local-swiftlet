@@ -18,6 +18,11 @@ for path in addon.glob("*.lua"):
     rotation = {"Actions.lua": actions, "Picker.lua": picker, "Turn.lua": turn}
     if path.name in rotation:
         english = rotation[path.name](english)
+    if path.name == "Chat.lua":
+        if english.count('local OPEN_KEY = "F12"') != 1:
+            raise ValueError("Unexpected Wolkara chat binding")
+        # Reserve F12 for the user's rotation. The keyboard opens chat via F11.
+        english = english.replace("F12", "F11")
     if english != original:
         path.write_text(english, encoding="utf-8", newline="\n")
 shutil.copyfile(Path(__file__).with_name("WolkaraSetup.lua"), addon / "WolkaraSetup.lua")
@@ -119,7 +124,7 @@ replace(event,
         button.backgroundColor""",
         """    } else {
         if (sp_client_window && getenv("SP_PHONE_UI_RECTS"))
-            sp_soft_emit([NSString stringWithFormat:@"%C", (unichar)0xF70F], 0x6F, NO);
+            sp_soft_emit([NSString stringWithFormat:@"%C", (unichar)0xF70E], 0x67, NO);
         [_softField becomeFirstResponder];
         button.backgroundColor""")
 

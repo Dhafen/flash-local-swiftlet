@@ -38,7 +38,7 @@ def patch_input():
     SPMobileJumpButton *_mobileJump;
     UIButton *_mobileEdit, *_mobileUI, *_mobileReset, *_mobileSpeed;
     UIButton *_mobileRotation;
-    UIPanGestureRecognizer *_mobileJumpPan;
+    UIPanGestureRecognizer *_mobileJumpPan, *_mobileRotationPan;
     UITouch *_mobileLeft, *_mobileRight, *_mobileInterface;
     CGPoint _mobileLeftStart, _mobileRightStart, _mobilePrevious;
     CGRect _mobileGameRect;

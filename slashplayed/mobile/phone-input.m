@@ -243,7 +243,15 @@ static UIButton *sp_mobile_button(NSString *title, NSString *label, id owner, SE
     _mobileSpeed = sp_mobile_button([NSString stringWithFormat:@"%.2g×", _mobileLookSpeed],
                                     @"Camera sensitivity", self, @selector(sp_mobile_cycle_speed:));
     _mobileReset = sp_mobile_button(@"Reset", @"Reset camera speed and jump position", self, @selector(sp_mobile_reset:));
-    _mobileRotation = sp_mobile_button(@"Rotation", @"Tactara rotation (F8)", self, @selector(sp_mobile_rotation:));
+    _mobileRotation = sp_mobile_button(@"F12", @"Tactara one-button rotation (F12)", self, @selector(sp_mobile_rotation:));
+    _mobileRotation.layer.cornerRadius = 22;
+    _mobileRotation.layer.borderWidth = 1;
+    _mobileRotation.layer.borderColor = [UIColor colorWithWhite:1 alpha:0.35].CGColor;
+    _mobileRotation.accessibilityHint = @"Tap to send F12; drag to reposition";
+    _mobileRotationPan = [[UIPanGestureRecognizer alloc] initWithTarget:self action:@selector(sp_mobile_drag_rotation:)];
+    _mobileRotationPan.minimumNumberOfTouches = _mobileRotationPan.maximumNumberOfTouches = 1;
+    _mobileRotationPan.cancelsTouchesInView = YES;
+    [_mobileRotation addGestureRecognizer:_mobileRotationPan];
     _mobileRotation.hidden = YES;
     _mobileReset.hidden = _mobileSpeed.hidden = YES;
     for (UIButton *button in @[_mobileJump, _mobileUI, _mobileEdit, _mobileSpeed, _mobileReset, _mobileRotation]) {
@@ -259,7 +267,7 @@ static UIButton *sp_mobile_button(NSString *title, NSString *label, id owner, SE
 }
 
 // Keep Wolkara's in-game HUD unobstructed. The native keyboard remains the
-// only permanent overlay; long-press it for controls which require native input.
+// and the small F12 control are the only permanent overlays.
 - (UIMenu *)sp_mobile_compact_menu {
     __weak SPInputView *weakSelf = self;
     UIAction *escape = [UIAction actionWithTitle:@"Escape" image:nil identifier:nil handler:^(__kindof UIAction *action) {
@@ -280,9 +288,21 @@ static UIButton *sp_mobile_button(NSString *title, NSString *label, id owner, SE
         [prefs setBool:![prefs boolForKey:@"sp_wolkara_show_jump"] forKey:@"sp_wolkara_show_jump"];
         [input setNeedsLayout];
     }];
-    UIAction *rotation = [UIAction actionWithTitle:@"Rotation (F8)" image:nil identifier:nil handler:^(__kindof UIAction *action) {
+    UIAction *rotation = [UIAction actionWithTitle:@"Rotation (F12)" image:nil identifier:nil handler:^(__kindof UIAction *action) {
         SPInputView *input = weakSelf;
         if (input) [input sp_mobile_rotation:nil];
+    }];
+    UIAction *showRotation = [UIAction actionWithTitle:@"Show / hide F12 button" image:nil identifier:nil handler:^(__kindof UIAction *action) {
+        SPInputView *input = weakSelf;
+        if (!input) return;
+        NSUserDefaults *prefs = NSUserDefaults.standardUserDefaults;
+        [prefs setBool:![prefs boolForKey:@"sp_wolkara_hide_rotation"] forKey:@"sp_wolkara_hide_rotation"];
+        [input setNeedsLayout];
+    }];
+    UIAction *resetRotation = [UIAction actionWithTitle:@"Reset F12 position" image:nil identifier:nil handler:^(__kindof UIAction *action) {
+        [NSUserDefaults.standardUserDefaults removeObjectForKey:@"sp_wolkara_rotation_position"];
+        SPInputView *input = weakSelf;
+        [input setNeedsLayout];
     }];
     UIAction *mode = [UIAction actionWithTitle:@"Toggle play / UI touch mode" image:nil identifier:nil handler:^(__kindof UIAction *action) {
         SPInputView *input = weakSelf;
@@ -297,7 +317,7 @@ static UIButton *sp_mobile_button(NSString *title, NSString *label, id owner, SE
         [prefs setBool:![prefs boolForKey:@"sp_wolkara_extra_controls"] forKey:@"sp_wolkara_extra_controls"];
         [input setNeedsLayout];
     }];
-    return [UIMenu menuWithTitle:@"Game controls" children:@[escape, jump, showJump, rotation, mode, legacy]];
+    return [UIMenu menuWithTitle:@"Game controls" children:@[escape, jump, showJump, rotation, showRotation, resetRotation, mode, legacy]];
 }
 
 - (void)sp_mobile_layout:(CGRect)game top:(CGFloat)top {
@@ -334,11 +354,21 @@ static UIButton *sp_mobile_button(NSString *title, NSString *label, id owner, SE
     _mobileEdit.frame = CGRectMake(left + 50, controlsY, 50, 44);
     _mobileSpeed.frame = CGRectMake(left + 104, controlsY, 49, 44);
     _mobileReset.frame = CGRectMake(left + 157, controlsY, 53, 44);
-    _mobileRotation.hidden = !wolkaraHUD || compact || _mobileEditing;
-    // Keep the rotation next to Jump, inside the right thumb's reach and
-    // inboard of the Wolkara spell arc.
-    CGFloat right = MIN(CGRectGetMaxX(game), CGRectGetMaxX(self.bounds) - self.safeAreaInsets.right);
-    _mobileRotation.frame = CGRectMake(MAX(left, right - 265), controlsY, 92, 52);
+    _mobileRotation.hidden = !wolkaraHUD || CGRectIsEmpty(game) || _softField.isFirstResponder ||
+        [prefs boolForKey:@"sp_wolkara_hide_rotation"];
+    _mobileRotation.bounds = CGRectMake(0, 0, 44, 44);
+    if (_mobileRotationPan.state != UIGestureRecognizerStateBegan &&
+        _mobileRotationPan.state != UIGestureRecognizerStateChanged) {
+        CGPoint fraction = CGPointMake(0.88, 0.72);
+        id savedRotation = [prefs objectForKey:@"sp_wolkara_rotation_position"];
+        if ([savedRotation isKindOfClass:NSArray.class] && [savedRotation count] == 2 &&
+            [savedRotation[0] isKindOfClass:NSNumber.class] && [savedRotation[1] isKindOfClass:NSNumber.class]) {
+            CGFloat x = [savedRotation[0] doubleValue], y = [savedRotation[1] doubleValue];
+            if (isfinite(x) && isfinite(y)) fraction = CGPointMake(x, y);
+        }
+        _mobileRotation.center = [self sp_mobile_clamp_rotation:CGPointMake(
+            game.origin.x + fraction.x * game.size.width, game.origin.y + fraction.y * game.size.height)];
+    }
     _mobileJump.bounds = CGRectMake(0, 0, 66, 50);
     id saved = [NSUserDefaults.standardUserDefaults objectForKey:sp_mobile_jump_position_key()];
     CGPoint fraction = wolkaraHUD ? CGPointMake(0.74, 0.46) : CGPointMake(0.92, 0.53);
@@ -388,10 +418,39 @@ static UIButton *sp_mobile_button(NSString *title, NSString *label, id owner, SE
     [button setTitle:_mobileEditing ? @"Done" : @"Edit" forState:UIControlStateNormal];
 }
 
+- (CGPoint)sp_mobile_clamp_rotation:(CGPoint)point {
+    CGRect safe = CGRectIntersection(_mobileGameRect, UIEdgeInsetsInsetRect(self.bounds, self.safeAreaInsets));
+    CGRect inner = CGRectInset(safe, 24, 24);
+    if (CGRectIsEmpty(inner)) return CGPointMake(CGRectGetMidX(_mobileGameRect), CGRectGetMidY(_mobileGameRect));
+    return CGPointMake(MAX(CGRectGetMinX(inner), MIN(CGRectGetMaxX(inner), point.x)),
+                       MAX(CGRectGetMinY(inner), MIN(CGRectGetMaxY(inner), point.y)));
+}
+
+- (void)sp_mobile_drag_rotation:(UIPanGestureRecognizer *)pan {
+    if (CGRectIsEmpty(_mobileGameRect)) return;
+    if (pan.state == UIGestureRecognizerStateBegan || pan.state == UIGestureRecognizerStateChanged ||
+        pan.state == UIGestureRecognizerStateEnded) {
+        CGPoint delta = [pan translationInView:self], center = _mobileRotation.center;
+        _mobileRotation.center = [self sp_mobile_clamp_rotation:CGPointMake(center.x + delta.x, center.y + delta.y)];
+        [pan setTranslation:CGPointZero inView:self];
+    }
+    if (pan.state == UIGestureRecognizerStateEnded) {
+        CGPoint p = _mobileRotation.center;
+        CGRect rect = _mobileGameRect;
+        [NSUserDefaults.standardUserDefaults setObject:@[@((p.x - rect.origin.x) / rect.size.width),
+                                                         @((p.y - rect.origin.y) / rect.size.height)]
+                                              forKey:@"sp_wolkara_rotation_position"];
+    } else if (pan.state == UIGestureRecognizerStateCancelled) {
+        [self setNeedsLayout];
+    }
+}
+
 - (void)sp_mobile_rotation:(UIButton *)button {
-    if (!sp_client_window || _softField.isFirstResponder || _mobileEditing) return;
-    // One physical tap sends one ordinary F8 press. WoW owns the binding.
-    sp_soft_emit([NSString stringWithFormat:@"%C", (unichar)0xF70B], 0x64, NO);
+    if (!sp_client_window || _softField.isFirstResponder || _mobileEditing ||
+        _mobileRotationPan.state == UIGestureRecognizerStateBegan ||
+        _mobileRotationPan.state == UIGestureRecognizerStateChanged) return;
+    // One physical tap sends one ordinary F12 down/up. Drag cancels the tap.
+    sp_soft_emit([NSString stringWithFormat:@"%C", (unichar)0xF70F], 0x6F, NO);
 }
 
 - (void)sp_mobile_toggle_ui:(UIButton *)button {
