@@ -163,8 +163,8 @@ launcher_build = ROOT / "apps/client/build-launcher.sh"
 replace_once(launcher_build, "sppatchscreen.swift -o", "sppatchscreen.swift spgameai.swift -o")
 launcher_main = ROOT / "apps/client/launcher.m"
 replace_once(launcher_main, "int main(int argc, char **argv) {",
-             "extern void sp_game_ai_register(void);\\nint main(int argc, char **argv) {\\n    sp_game_ai_register();")
+             "extern void sp_game_ai_register(void);\nint main(int argc, char **argv) {\n    sp_game_ai_register();")
 shim_build = ROOT / "shims/generated/build.sh"
 replace_once(shim_build, '$CC -fobjc-arc -dynamiclib -O1 -Wno-objc-root-class libspAppKit.m',
-             'AI_FRAMEWORKS=""\\nif [ "$PLATFORM" = ios ]; then AI_FRAMEWORKS="-framework Vision -framework ReplayKit -framework CoreMedia"; fi\\n'
+             'AI_FRAMEWORKS=""\nif [ "$PLATFORM" = ios ]; then AI_FRAMEWORKS="-framework Vision -framework ReplayKit -framework CoreMedia"; fi\n'
              '$CC $AI_FRAMEWORKS -fobjc-arc -dynamiclib -O1 -Wno-objc-root-class libspAppKit.m')
