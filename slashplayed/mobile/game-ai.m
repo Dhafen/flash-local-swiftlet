@@ -7,7 +7,8 @@
 
 @interface SPGameAIController : NSObject
 @property(nonatomic, readonly) BOOL active;
-@property(nonatomic, copy) void (^action)(NSString *);
+@property(nonatomic, copy) void (^action)(NSString *, CGPoint);
+@property(nonatomic, copy) void (^releaseInput)(void);
 @property(nonatomic, copy) void (^status)(NSString *);
 - (void)start;
 - (void)stop;
@@ -38,21 +39,44 @@
     _active = NO;
     ++_run;
     @synchronized(self) { _captureRun = 0; _busy = NO; }
+    if (self.releaseInput) self.releaseInput();
     [self haltCapture];
-    if (self.status) self.status(@"AI");
+    if (self.status) self.status(@"AI OFF");
 }
 - (void)fail:(NSString *)reason {
     [self stop];
     if (self.status) self.status(reason);
 }
-- (void)finish:(NSString *)answer run:(NSUInteger)run {
+- (void)finish:(NSString *)answer points:(NSArray<NSValue *> *)points labels:(NSArray<NSString *> *)labels captured:(NSTimeInterval)captured run:(NSUInteger)run {
     if (!_active || _run != run) return;
     if ([answer isEqualToString:@"ERROR"] || [answer isEqualToString:@"UNAVAILABLE"]) {
         [self fail:@"AI!"];
         return;
     }
-    if (([answer isEqualToString:@"ATTACK"] || [answer isEqualToString:@"TARGET"]) && self.action)
-        self.action(answer);
+    // Don't execute a decision made on an old frame.
+    if (self.action && NSProcessInfo.processInfo.systemUptime - captured <= 8.0) {
+        NSSet *keys = [NSSet setWithArray:@[@"ATTACK", @"TARGET", @"FORWARD", @"BACK", @"LEFT", @"RIGHT"]];
+        if ([keys containsObject:answer]) self.action(answer, CGPointZero);
+        else {
+            NSArray<NSString *> *parts = [answer componentsSeparatedByString:@" "];
+            if (parts.count == 2 && ([parts[0] isEqualToString:@"CLICK"] || [parts[0] isEqualToString:@"INTERACT"])) {
+                NSInteger index = parts[1].integerValue;
+                if (index >= 1 && index <= (NSInteger)points.count && index <= (NSInteger)labels.count) {
+                    NSString *label = labels[index - 1].lowercaseString;
+                    // Restrict left clicks to descriptive quest/loot controls; never arbitrary UI.
+                    NSSet *allowed = [NSSet setWithArray:@[@"accept", @"accept quest", @"complete quest", @"continue", @"loot", @"loot all", @"take all"]];
+                    BOOL allowedClick = [parts[0] isEqualToString:@"CLICK"] && [allowed containsObject:label];
+                    BOOL blocked = [label containsString:@"trade"] || [label containsString:@"buy"] ||
+                        [label containsString:@"sell"] || [label containsString:@"delete"] ||
+                        [label containsString:@"settings"] || [label containsString:@"password"] ||
+                        [label containsString:@"auction"] || [label containsString:@"mail"] ||
+                        [label containsString:@"logout"] || [label containsString:@"exit"];
+                    if (!blocked && (allowedClick || [parts[0] isEqualToString:@"INTERACT"]))
+                        self.action(parts[0], points[index - 1].CGPointValue);
+                }
+            }
+        }
+    }
     @synchronized(self) {
         if (_captureRun == run) {
             _busy = NO;
@@ -67,6 +91,7 @@
         if (_captureRun != run || _busy || NSProcessInfo.processInfo.systemUptime < _nextFrame) return;
         _busy = YES;
     }
+    NSTimeInterval captured = NSProcessInfo.processInfo.systemUptime;
     NSNumber *orientation = (__bridge NSNumber *)CMGetAttachment(sample, (__bridge CFStringRef)RPVideoSampleOrientationKey, NULL);
     NSInteger value = orientation ? orientation.integerValue : kCGImagePropertyOrientationUp;
     CGImagePropertyOrientation exif = (value >= 1 && value <= 8) ? (CGImagePropertyOrientation)value : kCGImagePropertyOrientationUp;
@@ -79,22 +104,27 @@
     NSError *error = nil;
     BOOL ok = [handler performRequests:@[request] error:&error];
     NSMutableArray<NSString *> *lines = [NSMutableArray array];
+    NSMutableArray<NSValue *> *points = [NSMutableArray array];
+    NSMutableArray<NSString *> *labels = [NSMutableArray array];
     if (ok) for (VNRecognizedTextObservation *observation in request.results) {
         VNRecognizedText *text = [[observation topCandidates:1] firstObject];
         if (text.confidence < 0.45 || text.string.length < 2) continue;
         CGRect rect = observation.boundingBox;
-        [lines addObject:[NSString stringWithFormat:@"(%.2f,%.2f) %@", CGRectGetMidX(rect), CGRectGetMidY(rect), text.string]];
+        CGPoint point = CGPointMake(CGRectGetMidX(rect), 1 - CGRectGetMidY(rect));
+        [points addObject:[NSValue valueWithCGPoint:point]];
+        [labels addObject:[text.string stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceAndNewlineCharacterSet]];
+        [lines addObject:[NSString stringWithFormat:@"%lu (%.2f,%.2f) %@", (unsigned long)points.count, point.x, point.y, text.string]];
         if (lines.count >= 25) break;
     }
     NSString *observation = [lines componentsJoinedByString:@"\n"];
     dispatch_async(dispatch_get_main_queue(), ^{
         if (!self->_active || self->_run != run) return;
-        if (!ok || observation.length < 12) { [self finish:@"WAIT" run:run]; return; }
+        if (!ok || observation.length < 12) { [self finish:@"WAIT" points:points labels:labels captured:captured run:run]; return; }
         Class bridge = NSClassFromString(@"SPGameAIModel");
         SEL selector = NSSelectorFromString(@"decide:completion:");
         if (![bridge respondsToSelector:selector]) { [self fail:@"AI!"]; return; }
         void (^completion)(NSString *) = ^(NSString *answer) {
-            dispatch_async(dispatch_get_main_queue(), ^{ [self finish:answer run:run]; });
+            dispatch_async(dispatch_get_main_queue(), ^{ [self finish:answer points:points labels:labels captured:captured run:run]; });
         };
         ((void (*)(id, SEL, NSString *, void (^)(NSString *)))objc_msgSend)(bridge, selector, observation, completion);
     });
@@ -114,7 +144,7 @@
     _starting = YES;
     NSUInteger run = ++_run;
     @synchronized(self) { _captureRun = 0; _busy = NO; }
-    if (self.status) self.status(@"STOP");
+    if (self.status) self.status(@"AI ON");
     recorder.microphoneEnabled = NO;
     __weak SPGameAIController *weak = self;
     [recorder startCaptureWithHandler:^(CMSampleBufferRef sample, RPSampleBufferType type, NSError *error) {
@@ -141,10 +171,6 @@
             @synchronized(strong) { strong->_captureRun = run; strong->_nextFrame = 0; }
         });
     }];
-    // Time-box the first real-device experiment. No unattended endless loop.
-    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 120 * NSEC_PER_SEC), dispatch_get_main_queue(), ^{
-        SPGameAIController *strong = weak;
-        if (strong && strong->_active && strong->_run == run) [strong stop];
-    });
+    // No session timeout: the same button toggles off. Lifecycle/errors still fail closed.
 }
 @end

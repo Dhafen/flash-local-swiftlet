@@ -20,7 +20,12 @@ assert '[_mobileAI stop];' in event
 assert 'sp_mobile_emit_rotation()' in event
 assert 'RPSampleBufferTypeVideo' in event
 assert 'VNRecognizeTextRequest' in event
-assert '120 * NSEC_PER_SEC' in event
+assert '120 * NSEC_PER_SEC' not in event
+assert 'AI OFF' in event and 'AI ON' in event
+assert 'sp_mobile_ai_release_key' in event and 'sp_mobile_ai_hold_key:' in event
+assert 'NSProcessInfo.processInfo.systemUptime - captured <= 8.0' in event
+assert 'input->_mobileAIManualUntil' in event
+assert '[parts[0] isEqualToString:@"INTERACT"]' in event
 assert 'SystemLanguageModel.default.isAvailable' in (root / "apps/client/spgameai.swift").read_text()
 assert 'spgameai.swift -o' in (root / "apps/client/build-launcher.sh").read_text()
 assert 'sp_game_ai_register();' in (root / "apps/client/launcher.m").read_text()
