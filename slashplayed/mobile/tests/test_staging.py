@@ -15,6 +15,16 @@ cdn = (root / "apps/client/spcdn.m").read_text()
 kit = (root / "scripts/release/device-kit.sh").read_text()
 assert 'SP_PHONE_UI_RECTS' in (root / 'apps/client/launcher.m').read_text()
 assert 'sp_mobile_end_interface' in event
+assert '@interface SPGameAIController' in event
+assert '[_mobileAI stop];' in event
+assert 'sp_mobile_emit_rotation()' in event
+assert 'RPSampleBufferTypeVideo' in event
+assert 'VNRecognizeTextRequest' in event
+assert '120 * NSEC_PER_SEC' in event
+assert 'SystemLanguageModel.default.isAvailable' in (root / "apps/client/spgameai.swift").read_text()
+assert 'spgameai.swift -o' in (root / "apps/client/build-launcher.sh").read_text()
+assert 'sp_game_ai_register();' in (root / "apps/client/launcher.m").read_text()
+assert '-framework Vision -framework ReplayKit -framework CoreMedia' in (root / "shims/generated/build.sh").read_text()
 assert 'SP_MOBILE_RIGHT_PRESS_SECONDS 0.45' in event
 assert 'sp_mobile_click(getenv("SP_PHONE_UI_RECTS") ? elapsed : 0,' in event
 assert 'sp_mouse_button(click, YES, position);' in event and 'sp_mouse_button(click, NO, position);' in event

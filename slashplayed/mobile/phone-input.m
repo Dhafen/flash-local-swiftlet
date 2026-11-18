@@ -171,6 +171,10 @@ static void sp_mobile_send_jump(BOOL down) {
     if (messages++ < 12) sp_stub_log(down ? "input: touch jump Space down" : "input: touch jump Space up");
 }
 
+static void sp_mobile_emit_rotation(void) {
+    sp_soft_emit([NSString stringWithFormat:@"%C", (unichar)0xF70F], 0x6F, NO);
+}
+
 static UIButton *sp_mobile_button(NSString *title, NSString *label, id owner, SEL action) {
     UIButton *button = [UIButton buttonWithType:UIButtonTypeSystem];
     [button setTitle:title forState:UIControlStateNormal];
@@ -185,9 +189,14 @@ static UIButton *sp_mobile_button(NSString *title, NSString *label, id owner, SE
 }
 #endif
 
+#if !TARGET_OS_VISION
+#include "game-ai.m"
+#endif
+
 // SPInputView methods follow.
 #if !TARGET_OS_VISION
 - (void)sp_mobile_jump:(BOOL)down {
+    if (down) [_mobileAI stop];
     if (_mobileJumpHeld == down) return;
     _mobileJumpHeld = down;
     sp_mobile_send_jump(down);
@@ -204,6 +213,7 @@ static UIButton *sp_mobile_button(NSString *title, NSString *label, id owner, SE
 
 - (void)sp_mobile_cancel {
     if (!_mobileStick) return;
+    [_mobileAI stop];
     [_mobileStick stop];
     [self sp_mobile_release_look];
     [self sp_mobile_jump:NO];
@@ -257,8 +267,33 @@ static UIButton *sp_mobile_button(NSString *title, NSString *label, id owner, SE
     _mobileRotationPan.cancelsTouchesInView = YES;
     [_mobileRotation addGestureRecognizer:_mobileRotationPan];
     _mobileRotation.hidden = YES;
+    _mobileAI = [SPGameAIController new];
+    _mobileAIButton = sp_mobile_button(@"AI", @"Experimental local AI combat test", self, @selector(sp_mobile_ai_toggle:));
+    _mobileAIButton.layer.cornerRadius = 22;
+    _mobileAIButton.hidden = YES;
+    _mobileAI.action = ^(NSString *action) {
+        SPInputView *input = weakSelf;
+        if (!input || !input->_mobileAI.active || !sp_client_window || input->_softField.isFirstResponder ||
+            !input.window || input.window.windowScene.activationState != UISceneActivationStateForegroundActive ||
+            input->_mobileEditing || input->_mobileLeft || input->_mobileRight || input->_mobileInterface ||
+            input->_touches.count || sp_mouse_buttons) {
+            if (input) [input->_mobileAI stop];
+            return;
+        }
+        if ([action isEqualToString:@"ATTACK"]) sp_mobile_emit_rotation();
+        else if ([action isEqualToString:@"TARGET"]) sp_soft_emit(@"\t", 0x30, NO);
+    };
+    _mobileAI.status = ^(NSString *status) {
+        SPInputView *input = weakSelf;
+        if (!input) return;
+        [input->_mobileAIButton setTitle:status forState:UIControlStateNormal];
+        input->_mobileAIButton.backgroundColor = [status isEqualToString:@"STOP"]
+            ? [UIColor colorWithRed:0.65 green:0.15 blue:0.15 alpha:0.85] : [UIColor colorWithWhite:0 alpha:0.55];
+        if ([status isEqualToString:@"AI!"]) input->_mobileAIButton.accessibilityHint =
+            @"Model or screen capture unavailable. Check Apple Intelligence and try again.";
+    };
     _mobileReset.hidden = _mobileSpeed.hidden = YES;
-    for (UIButton *button in @[_mobileJump, _mobileUI, _mobileEdit, _mobileSpeed, _mobileReset, _mobileRotation]) {
+    for (UIButton *button in @[_mobileJump, _mobileUI, _mobileEdit, _mobileSpeed, _mobileReset, _mobileRotation, _mobileAIButton]) {
         button.exclusiveTouch = NO;
         [self addSubview:button];
     }
@@ -360,6 +395,10 @@ static UIButton *sp_mobile_button(NSString *title, NSString *label, id owner, SE
     _mobileReset.frame = CGRectMake(left + 157, controlsY, 53, 44);
     _mobileRotation.hidden = !wolkaraHUD || CGRectIsEmpty(game) || _softField.isFirstResponder ||
         [prefs boolForKey:@"sp_wolkara_hide_rotation"];
+    _mobileAIButton.hidden = !wolkaraHUD || CGRectIsEmpty(game) || _softField.isFirstResponder;
+    _mobileAIButton.bounds = CGRectMake(0, 0, 44, 44);
+    _mobileAIButton.center = [self sp_mobile_clamp_rotation:CGPointMake(
+        game.origin.x + 0.88 * game.size.width, game.origin.y + 0.28 * game.size.height)];
     _mobileRotation.bounds = CGRectMake(0, 0, 44, 44);
     if (_mobileRotationPan.state != UIGestureRecognizerStateBegan &&
         _mobileRotationPan.state != UIGestureRecognizerStateChanged) {
@@ -449,12 +488,20 @@ static UIButton *sp_mobile_button(NSString *title, NSString *label, id owner, SE
     }
 }
 
+- (void)sp_mobile_ai_toggle:(UIButton *)button {
+    if (_mobileAI.active) { [_mobileAI stop]; return; }
+    if (!sp_client_window || _softField.isFirstResponder || _mobileEditing ||
+        _mobileLeft || _mobileRight || _mobileInterface || _touches.count || sp_mouse_buttons) return;
+    [_mobileAI start];
+}
+
 - (void)sp_mobile_rotation:(UIButton *)button {
+    [_mobileAI stop];
     if (!sp_client_window || _softField.isFirstResponder || _mobileEditing ||
         _mobileRotationPan.state == UIGestureRecognizerStateBegan ||
         _mobileRotationPan.state == UIGestureRecognizerStateChanged) return;
     // One physical tap sends one ordinary F12 down/up. Drag cancels the tap.
-    sp_soft_emit([NSString stringWithFormat:@"%C", (unichar)0xF70F], 0x6F, NO);
+    sp_mobile_emit_rotation();
 }
 
 - (void)sp_mobile_toggle_ui:(UIButton *)button {
@@ -537,6 +584,7 @@ static UIButton *sp_mobile_button(NSString *title, NSString *label, id owner, SE
 
 - (void)touchesBegan:(NSSet<UITouch *> *)touches withEvent:(UIEvent *)event {
 #if !TARGET_OS_VISION
+    [_mobileAI stop];
     if (_mobileDirect && !_mobileEditing && !_softField.isFirstResponder && sp_client_window &&
         !_touches.count && (sp_mouse_buttons == 0 || (_mobileLooking && sp_mouse_buttons == 2))) {
         for (UITouch *touch in touches) {

@@ -25,6 +25,7 @@ def patch_input():
     path = ROOT / "shims/appkit/spevent.m"
     source = Path(__file__).with_name("phone-input.m").read_text()
     source = source.replace('#include "touch-zone.h"', Path(__file__).with_name("touch-zone.h").read_text())
+    source = source.replace('#include "game-ai.m"', Path(__file__).with_name("game-ai.m").read_text())
     declarations, methods = source.split("// SPInputView methods follow.\n")
     require(path, ["SPSoftKeyboardField", "sp_press_soft_escape:"])
     for phase in ("Began", "Moved", "Ended", "Cancelled"):
@@ -37,7 +38,8 @@ def patch_input():
     SPMobileStick *_mobileStick;
     SPMobileJumpButton *_mobileJump;
     UIButton *_mobileEdit, *_mobileUI, *_mobileReset, *_mobileSpeed;
-    UIButton *_mobileRotation;
+    UIButton *_mobileRotation, *_mobileAIButton;
+    SPGameAIController *_mobileAI;
     UIPanGestureRecognizer *_mobileJumpPan, *_mobileRotationPan;
     UITouch *_mobileLeft, *_mobileRight, *_mobileInterface;
     CGPoint _mobileLeftStart, _mobileRightStart, _mobilePrevious, _mobileInterfaceStart;
@@ -153,3 +155,16 @@ replace_once(kit,
 # Do not claim this source changes the install's version; the parent
 # checkout is always 1.5.1 and no old launcher from Enhanced is included.
 print("Patched 1.5.1: floating iPhone controls, Forever Touchbars, MIT notices")
+
+# Build the local-model bridge into the existing Swift host, not a second app.
+ai_swift = ROOT / "apps/client/spgameai.swift"
+ai_swift.write_bytes(Path(__file__).with_name("spgameai.swift").read_bytes())
+launcher_build = ROOT / "apps/client/build-launcher.sh"
+replace_once(launcher_build, "sppatchscreen.swift -o", "sppatchscreen.swift spgameai.swift -o")
+launcher_main = ROOT / "apps/client/launcher.m"
+replace_once(launcher_main, "int main(int argc, char **argv) {",
+             "extern void sp_game_ai_register(void);\\nint main(int argc, char **argv) {\\n    sp_game_ai_register();")
+shim_build = ROOT / "shims/generated/build.sh"
+replace_once(shim_build, '$CC -fobjc-arc -dynamiclib -O1 -Wno-objc-root-class libspAppKit.m',
+             'AI_FRAMEWORKS=""\\nif [ "$PLATFORM" = ios ]; then AI_FRAMEWORKS="-framework Vision -framework ReplayKit -framework CoreMedia"; fi\\n'
+             '$CC $AI_FRAMEWORKS -fobjc-arc -dynamiclib -O1 -Wno-objc-root-class libspAppKit.m')
