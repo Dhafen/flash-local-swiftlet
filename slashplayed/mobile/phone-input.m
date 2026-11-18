@@ -196,7 +196,11 @@ static UIButton *sp_mobile_button(NSString *title, NSString *label, id owner, SE
 // SPInputView methods follow.
 #if !TARGET_OS_VISION
 - (void)sp_mobile_jump:(BOOL)down {
-    if (down) [self sp_mobile_ai_release_key];
+    if (down) {
+        [self sp_mobile_ai_release_key];
+        [_mobileAI invalidateDecision];
+        _mobileAIManualUntil = NSProcessInfo.processInfo.systemUptime + 1.0;
+    }
     if (_mobileJumpHeld == down) return;
     _mobileJumpHeld = down;
     sp_mobile_send_jump(down);
@@ -214,6 +218,8 @@ static UIButton *sp_mobile_button(NSString *title, NSString *label, id owner, SE
 - (void)sp_mobile_cancel {
     if (!_mobileStick) return;
     [self sp_mobile_ai_release_key];
+    [_mobileAI invalidateDecision];
+    _mobileAIManualUntil = NSProcessInfo.processInfo.systemUptime + 1.0;
     [_mobileStick stop];
     [self sp_mobile_release_look];
     [self sp_mobile_jump:NO];
@@ -276,13 +282,13 @@ static UIButton *sp_mobile_button(NSString *title, NSString *label, id owner, SE
         SPInputView *input = weakSelf;
         if (input) [input sp_mobile_ai_release_key];
     };
-    _mobileAI.action = ^(NSString *action, CGPoint point) {
+    _mobileAI.action = ^BOOL(NSString *action, CGPoint point, NSTimeInterval captured) {
         SPInputView *input = weakSelf;
         if (!input || !input->_mobileAI.active || !sp_client_window || input->_softField.isFirstResponder ||
             !input.window || input.window.windowScene.activationState != UISceneActivationStateForegroundActive ||
             input->_mobileEditing || input->_mobileLeft || input->_mobileRight || input->_mobileInterface ||
             input->_touches.count || sp_mouse_buttons || !input->_mobileDirect ||
-            NSProcessInfo.processInfo.systemUptime < input->_mobileAIManualUntil) return;
+            captured < input->_mobileAIManualUntil || NSProcessInfo.processInfo.systemUptime < input->_mobileAIManualUntil) return NO;
         if ([action isEqualToString:@"ATTACK"]) sp_mobile_emit_rotation();
         else if ([action isEqualToString:@"TARGET"]) sp_soft_emit(@"\t", 0x30, NO);
         else if ([action isEqualToString:@"FORWARD"]) [input sp_mobile_ai_hold_key:0x0D text:@"w"];
@@ -297,12 +303,13 @@ static UIButton *sp_mobile_button(NSString *title, NSString *label, id owner, SE
             if (!CGRectContainsPoint(input->_mobileGameRect, local) ||
                 CGRectContainsPoint(input->_mobileAIButton.frame, local) ||
                 CGRectContainsPoint(input->_mobileRotation.frame, local) ||
-                CGRectContainsPoint(input->_softToggle.frame, local)) return;
+                CGRectContainsPoint(input->_softToggle.frame, local)) return NO;
             CGPoint position = sp_from_uikit(local);
             NSInteger button = [action isEqualToString:@"INTERACT"] ? 1 : 0;
             sp_mouse_button(button, YES, position);
             sp_mouse_button(button, NO, position);
-        }
+        } else return NO;
+        return YES;
     };
     _mobileAI.status = ^(NSString *status) {
         SPInputView *input = weakSelf;
@@ -555,6 +562,7 @@ static UIButton *sp_mobile_button(NSString *title, NSString *label, id owner, SE
 
 - (void)sp_mobile_rotation:(UIButton *)button {
     [self sp_mobile_ai_release_key];
+    [_mobileAI invalidateDecision];
     _mobileAIManualUntil = NSProcessInfo.processInfo.systemUptime + 1.0;
     if (!sp_client_window || _softField.isFirstResponder || _mobileEditing ||
         _mobileRotationPan.state == UIGestureRecognizerStateBegan ||
@@ -644,6 +652,7 @@ static UIButton *sp_mobile_button(NSString *title, NSString *label, id owner, SE
 - (void)touchesBegan:(NSSet<UITouch *> *)touches withEvent:(UIEvent *)event {
 #if !TARGET_OS_VISION
     [self sp_mobile_ai_release_key];
+    [_mobileAI invalidateDecision];
     _mobileAIManualUntil = NSProcessInfo.processInfo.systemUptime + 1.0;
     if (_mobileDirect && !_mobileEditing && !_softField.isFirstResponder && sp_client_window &&
         !_touches.count && (sp_mouse_buttons == 0 || (_mobileLooking && sp_mouse_buttons == 2))) {

@@ -164,12 +164,13 @@ print("Patched 1.5.1: floating iPhone controls, Forever Touchbars, MIT notices")
 # Build the local-model bridge into the existing Swift host, not a second app.
 ai_swift = ROOT / "apps/client/spgameai.swift"
 ai_swift.write_bytes(Path(__file__).with_name("spgameai.swift").read_bytes())
+(ROOT / "apps/client/SPAIGraph.swift").write_bytes(Path(__file__).with_name("SPAIGraph.swift").read_bytes())
 launcher_build = ROOT / "apps/client/build-launcher.sh"
-replace_once(launcher_build, "sppatchscreen.swift -o", "sppatchscreen.swift spgameai.swift -o")
+replace_once(launcher_build, "sppatchscreen.swift -o", "sppatchscreen.swift SPAIGraph.swift spgameai.swift -o")
 launcher_main = ROOT / "apps/client/launcher.m"
 replace_once(launcher_main, "int main(int argc, char **argv) {",
              "extern void sp_game_ai_register(void);\nint main(int argc, char **argv) {\n    sp_game_ai_register();")
 shim_build = ROOT / "shims/generated/build.sh"
 replace_once(shim_build, '$CC -fobjc-arc -dynamiclib -O1 -Wno-objc-root-class libspAppKit.m',
-             'AI_FRAMEWORKS=""\nif [ "$PLATFORM" = ios ]; then AI_FRAMEWORKS="-framework Vision -framework ReplayKit -framework CoreMedia"; fi\n'
+             'AI_FRAMEWORKS=""\nif [ "$PLATFORM" = ios ]; then AI_FRAMEWORKS="-framework Vision -framework ReplayKit -framework CoreMedia -framework CoreVideo"; fi\n'
              '$CC $AI_FRAMEWORKS -fobjc-arc -dynamiclib -O1 -Wno-objc-root-class libspAppKit.m')

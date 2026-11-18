@@ -20,6 +20,20 @@ assert '[_mobileAI stop];' in event
 assert 'sp_mobile_emit_rotation()' in event
 assert 'RPSampleBufferTypeVideo' in event
 assert 'VNRecognizeTextRequest' in event
+assert 'VNClassifyImageRequest' in event and 'sp_ai_luminance' in event
+assert 'recordAction:observation:' in event and 'resetDecision' in event
+assert 'captured < input->_mobileAIManualUntil' in event
+assert 'executed = self.action' in event
+assert 'SPAIHarness' in (root / "apps/client/SPAIGraph.swift").read_text()
+assert 'harness.validate' in (root / "apps/client/spgameai.swift").read_text()
+if sys.platform == "darwin" and len(sys.argv) == 2:
+    import subprocess
+    import tempfile
+    with tempfile.TemporaryDirectory() as tmp:
+        binary = str(Path(tmp) / "game-ai-tests")
+        subprocess.run(["xcrun", "swiftc", str(root / "apps/client/SPAIGraph.swift"),
+                        str(Path(__file__).with_name("test_ai_graph.swift")), "-o", binary], check=True)
+        subprocess.run([binary], check=True)
 assert '120 * NSEC_PER_SEC' not in event
 assert 'AI OFF' in event and 'AI ON' in event
 assert 'sp_mobile_ai_release_key' in event and 'sp_mobile_ai_hold_key:' in event
