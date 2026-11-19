@@ -10,8 +10,11 @@ permissions:
   contents: read
 jobs:
   export-150m:
-    runs-on: macos-15
+    runs-on: xcode-27
     timeout-minutes: 90
+    env:
+      PYTHONUNBUFFERED: '1'
+      HF_HUB_DOWNLOAD_TIMEOUT: '120'
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
@@ -19,7 +22,21 @@ jobs:
       - name: Install CPU export toolchain
         run: |
           set -euo pipefail
-          python3 -m venv "$RUNNER_TEMP/p2p"
+          # Use an available Python supported by both Torch and Core ML Tools.
+          PY=""
+          for candidate in python3.12 python3.11 python3.10 python3; do
+            if command -v "$candidate" >/dev/null && "$candidate" -c 'import sys; assert (3, 10) <= sys.version_info[:2] <= (3, 12)' 2>/dev/null; then
+              PY="$(command -v "$candidate")"
+              break
+            fi
+          done
+          if [ -z "$PY" ]; then
+            echo "::error::No Python 3.10–3.12 available on the export runner"
+            exit 1
+          fi
+          "$PY" --version
+          "$PY" -m venv "$RUNNER_TEMP/p2p"
+          "$RUNNER_TEMP/p2p/bin/python" -m pip install --upgrade pip
           "$RUNNER_TEMP/p2p/bin/python" -m pip install 'torch==2.7.0' 'torchvision==0.22.0' 'coremltools==9.0' 'huggingface_hub==0.36.0' 'numpy<2'
       - name: Convert original 150M weights and compare real predictions
         run: |

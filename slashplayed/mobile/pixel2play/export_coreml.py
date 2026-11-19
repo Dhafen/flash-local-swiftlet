@@ -6,6 +6,7 @@ No upstream training runtime or gated text encoder required for the no-instructi
 Export is deliberately NOT an iOS integration: require checkpoint and numerical validation.
 """
 import argparse
+import hashlib
 import json
 from pathlib import Path
 import numpy as np
@@ -15,7 +16,8 @@ import torch.nn.functional as F
 from torchvision.models import efficientnet_b0
 
 REPO = "elefantai/open-p2p"
-REV = "bbe1a35"
+REV = "5c52dce4aefbd4f50d24caccc2dcfda7bbd59719"
+CHECKPOINT_SHA256 = "2a3b43121144ca2d9c2b8aa605e313184c98ac5ef6d2c3b530c2d353d886c5bc"
 CHECKPOINT = "150M/checkpoint-step=00500000.ckpt"
 D = 1024
 N_KEYS, N_BUTTONS, N_ACTIONS = 4, 2, 8
@@ -214,9 +216,15 @@ def main():
     parser.add_argument("--frames",type=int,default=4,choices=(1,4,8))
     args=parser.parse_args()
     args.out.mkdir(parents=True,exist_ok=True)
+    print("Downloading pinned original checkpoint", flush=True)
     path=hf_hub_download(REPO,CHECKPOINT,revision=REV)
+    with open(path,"rb") as file:
+        digest=hashlib.file_digest(file,"sha256").hexdigest()
+    if digest!=CHECKPOINT_SHA256: raise RuntimeError("Checkpoint SHA256 mismatch")
+    print("Checkpoint SHA256 verified; loading tensors",flush=True)
     # Do not execute arbitrary pickle classes; the published checkpoint must load under weights_only.
     raw=torch.load(path,map_location="cpu",weights_only=True,mmap=True)
+    print("Checkpoint loaded; reconstructing policy and decoder",flush=True)
     w=Weights(raw["state_dict"])
     policy=Policy(w,args.frames).eval()
     decoder=Decoder(w).eval()
