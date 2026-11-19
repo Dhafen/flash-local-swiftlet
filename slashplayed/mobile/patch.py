@@ -303,3 +303,73 @@ replace_once(hover_native, "    static sph_rect rects[SPH_MAX_RECTS];",
     static sph_rect rects[SPH_MAX_RECTS];""")
 replace_once(hover_native, '    if (getenv("SP_PHONE_UI_RECTS"))\n        sp_ai_game_update(sp_hover_asm.data + offset',
     '    if (getenv("SP_PHONE_UI_RECTS") && !sp_ai_heartbeat_seen)\n        sp_ai_game_update(sp_hover_asm.data + offset')
+
+
+# Report the exact failing public API read through the heartbeat, not only chat.
+# Keep invalid/restricted values invalid; never guess a player's health or state.
+hover_text = hover_lua.read_text()
+state_start = hover_text.index("local function spAIState()")
+state_end = hover_text.index("\nlocal function scan()", state_start)
+hover_text = hover_text[:state_start] + """local function spAIState()
+    if not SPPhoneTouchRects then return "" end
+    local stage = 1
+    local function unavailable(code)
+        return string.char(65, 73, 0, code, 0, 0)
+    end
+    local function numberValue(value)
+        if type(issecretvalue) == "function" and issecretvalue(value) then error("restricted value") end
+        if type(value) ~= "number" then error("not numeric") end
+        return value
+    end
+    local function boolValue(value)
+        if type(issecretvalue) == "function" and issecretvalue(value) then error("restricted value") end
+        return not not value
+    end
+    local function dead(unit)
+        if type(UnitIsDeadOrGhost) == "function" then return boolValue(UnitIsDeadOrGhost(unit)) end
+        if type(UnitIsDead) == "function" and type(UnitIsGhost) == "function" then
+            return boolValue(UnitIsDead(unit)) or boolValue(UnitIsGhost(unit))
+        end
+        error("death API unavailable")
+    end
+    local ok, state = pcall(function()
+        if not boolValue(UnitExists("player")) then return unavailable(1) end
+        stage = 2
+        local capacity = numberValue(UnitHealthMax("player"))
+        if capacity <= 0 then return unavailable(2) end
+        stage = 3
+        local hp = floor(max(0, min(100, 100 * numberValue(UnitHealth("player")) / capacity)) + 0.5)
+        local flags = 1
+        stage = 4
+        if dead("player") then flags = flags + 2 end
+        stage = 5
+        local hasTarget = boolValue(UnitExists("target"))
+        local targetHP = 0
+        if hasTarget then
+            flags = flags + 4
+            stage = 6
+            if boolValue(UnitCanAttack("player", "target")) and not boolValue(UnitIsPlayer("target")) then flags = flags + 8 end
+            stage = 7
+            if dead("target") then flags = flags + 16 end
+            stage = 8
+            local targetMax = numberValue(UnitHealthMax("target"))
+            if targetMax > 0 then
+                targetHP = floor(max(0, min(100, 100 * numberValue(UnitHealth("target")) / targetMax)) + 0.5)
+            end
+        end
+        stage = 9
+        if boolValue(UnitAffectingCombat("player")) then flags = flags + 32 end
+        stage = 10
+        if type(IsMounted) == "function" then
+            if boolValue(IsMounted()) then flags = flags + 64 end
+        else
+            return unavailable(10)
+        end
+        stage = 11
+        return string.char(65, 73, flags, hp, targetHP, floor(GetTime() / 2) % 256)
+    end)
+    if not ok then return unavailable(stage) end
+    return state
+end
+""" + hover_text[state_end:]
+hover_lua.write_text(hover_text)

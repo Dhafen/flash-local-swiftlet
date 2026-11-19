@@ -23,12 +23,18 @@ static uint8_t sp_ai_game_flags, sp_ai_game_hp, sp_ai_game_target_hp;
 static NSTimeInterval sp_ai_game_at, sp_ai_strip_at, sp_ai_packet_at;
 static BOOL sp_ai_heartbeat_seen;
 static uint8_t sp_ai_heartbeat_seq;
-static int sp_ai_payload_status = -1;
+static int sp_ai_payload_status = -1, sp_ai_state_reason = -1;
 static void sp_ai_game_update(const uint8_t *data, size_t length) {
     sp_ai_packet_at = NSProcessInfo.processInfo.systemUptime;
     if (length < 6 || data[0] != 'A' || data[1] != 'I' ||
         !(data[2] & 1) || data[3] > 100 || data[4] > 100) {
-        if (sp_ai_payload_status != 0) sp_stub_log("AI telemetry: invalid or missing player state");
+        int reason = length >= 6 && data[0] == 'A' && data[1] == 'I' && !(data[2] & 1) ? data[3] : 0;
+        if (sp_ai_payload_status != 0 || reason != sp_ai_state_reason) {
+            static const char *const reasons[] = {"missing payload", "UnitExists(player)", "UnitHealthMax(player)", "UnitHealth(player)", "player death API", "UnitExists(target)", "target attack/player API", "target death API", "target health API", "UnitAffectingCombat", "IsMounted", "GetTime/encoding"};
+            const char *why = reason >= 0 && reason < sizeof reasons / sizeof reasons[0] ? reasons[reason] : "unknown reason";
+            sp_stub_log([[NSString stringWithFormat:@"AI telemetry: state unavailable reason %d (%s)", reason, why] UTF8String]);
+        }
+        sp_ai_state_reason = reason;
         sp_ai_payload_status = 0;
         sp_ai_game_at = 0;
         return;
@@ -36,6 +42,7 @@ static void sp_ai_game_update(const uint8_t *data, size_t length) {
     if (sp_ai_game_at <= 0 || sp_ai_packet_at - sp_ai_game_at >= 6.0)
         sp_stub_log("AI telemetry: valid game-state payload");
     sp_ai_payload_status = 1;
+    sp_ai_state_reason = -1;
     sp_ai_game_flags = data[2];
     sp_ai_game_hp = data[3];
     sp_ai_game_target_hp = data[4];
@@ -316,6 +323,7 @@ static NSArray<NSNumber *> *sp_ai_luminance(CVPixelBufferRef buffer) {
     NSString *display = @"AI DATA";
     if (sp_ai_strip_at <= 0 || now - sp_ai_strip_at >= 6.0) display = @"AI STRIP";
     else if (sp_ai_packet_at <= 0 || now - sp_ai_packet_at >= 6.0) display = @"AI SYNC";
+    else if (sp_ai_state_reason > 0) display = [NSString stringWithFormat:@"AI DATA %d", sp_ai_state_reason];
     if (sp_ai_game_at > 0 && now - sp_ai_game_at < 6.0) {
         unsigned f = sp_ai_game_flags;
         if ((f & 2) || (f & 64) || sp_ai_game_hp < 35) display = @"AI REST";

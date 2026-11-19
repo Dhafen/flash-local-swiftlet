@@ -205,3 +205,6 @@ assert 'SPP2PRuntime.swift' in (root / 'apps/client/build-launcher.sh').read_tex
 assert 'sp_p2p_capture(cb, tex)' in (root / 'shims/appkit/sphover.m').read_text()
 assert 'sp_p2p_enable(NO)' in event and 'tryP2P:' in event
 assert 'recordMove:' in (root / 'apps/client/SPP2PRuntime.swift').read_text()
+
+assert 'local function unavailable(code)' in (root / "addon/SPHover/SPHover.lua").read_text()
+assert 'AI telemetry: state unavailable reason' in event
