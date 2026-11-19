@@ -45,6 +45,23 @@ static unsigned short sp_soft_mac_code(unichar c) {
     case '/': return 0x2c;
     case ';': return 0x29;
     case ':': return 0x29;
+    case '(': return 0x19;
+    case ')': return 0x1d;
+    case '*': return 0x1c;
+    case '&': return 0x1a;
+    case '%': return 0x17;
+    case '^': return 0x16;
+    case '$': return 0x15;
+    case '#': return 0x14;
+    case '_': return 0x1b;
+    case '+': return 0x18;
+    case '[': case '{': return 0x21;
+    case ']': case '}': return 0x1e;
+    case 0x5c: case '|': return 0x2a;
+    case '<': return 0x2b;
+    case '>': return 0x2f;
+    case 0x22: return 0x27;
+    case '`': case '~': return 0x32;
     case 0x27: return 0x27;
     case '!': return 0x12;
     case '?': return 0x2c;
@@ -85,30 +102,44 @@ static void sp_soft_emit(NSString *characters, unsigned short code, BOOL shift) 
     self.keyboardType = UIKeyboardTypeDefault;
     self.returnKeyType = UIReturnKeyDone;
     self.textContentType = nil;
+    self.placeholder = @"Skriv eller klistra in text här";
+    self.backgroundColor = [UIColor colorWithWhite:0.13 alpha:0.98];
+    self.textColor = UIColor.whiteColor;
+    self.tintColor = UIColor.whiteColor;
+    self.font = [UIFont systemFontOfSize:17];
+    self.borderStyle = UITextBorderStyleRoundedRect;
+    self.clearButtonMode = UITextFieldViewModeWhileEditing;
+    self.accessibilityLabel = @"Game chat input";
     return self;
 }
-- (BOOL)textField:(UITextField *)field
- shouldChangeCharactersInRange:(NSRange)range replacementString:(NSString *)replacement {
-    // Keep the UIKit field empty, so it never stores WoW chat text.
-    // Newlines come through textFieldShouldReturn:. Backspace: deleteBackward.
-    if (replacement.length) {
-        [replacement enumerateSubstringsInRange:NSMakeRange(0, replacement.length)
-                                        options:NSStringEnumerationByComposedCharacterSequences
-                                     usingBlock:^(NSString *part, NSRange subrange, NSRange enclosing, BOOL *stop) {
-            unichar c = [part characterAtIndex:0];
-            BOOL shift = (c >= 'A' && c <= 'Z');
-            sp_soft_emit(part, sp_soft_mac_code(c), shift);
-        }];
-    }
-    return NO;
+- (BOOL)becomeFirstResponder {
+    self.hidden = NO;
+    BOOL result = [super becomeFirstResponder];
+    if (!result) self.hidden = YES;
+    [self.superview setNeedsLayout];
+    return result;
 }
-- (void)deleteBackward {
-    sp_soft_emit([NSString stringWithFormat:@"%C", (unichar)0x7f], 0x33, NO);
-    [super deleteBackward];
+- (void)textFieldDidEndEditing:(UITextField *)field {
+    field.hidden = YES;
+    [field.superview setNeedsLayout];
 }
 - (BOOL)textFieldShouldReturn:(UITextField *)field {
+    // Keep UIKit editing local until an explicit Return. Selection, deletion,
+    // autocorrect and Paste therefore edit the exact visible draft.
+    // Never execute multiple pasted lines as separate commands.
+    NSString *draft = [[field.text ?: @"" componentsSeparatedByCharactersInSet:
+                        NSCharacterSet.newlineCharacterSet] componentsJoinedByString:@" "];
+    [draft enumerateSubstringsInRange:NSMakeRange(0, draft.length)
+                              options:NSStringEnumerationByComposedCharacterSequences
+                           usingBlock:^(NSString *part, NSRange subrange, NSRange enclosing, BOOL *stop) {
+        unichar c = [part characterAtIndex:0];
+        BOOL shift = (c >= 'A' && c <= 'Z') || [@"!@#$%^&*()_+{}|:\"<>?~" rangeOfString:part].location != NSNotFound;
+        sp_soft_emit(part, sp_soft_mac_code(c), shift);
+    }];
     sp_soft_emit(@"\r", 0x24, NO);
+    field.text = @"";
     [field resignFirstResponder];
+    [field.superview becomeFirstResponder];
     return NO;
 }
 @end
@@ -127,8 +158,16 @@ init_anchor = "    sp_cursor_view.layer.zPosition = 2000;\n    [self addSubview:
 init_extra = r'''#if !TARGET_OS_VISION
     if (UIDevice.currentDevice.userInterfaceIdiom == UIUserInterfaceIdiomPhone) {
         _softField = [[SPSoftKeyboardField alloc] initWithFrame:CGRectMake(0, 0, 1, 1)];
-        _softField.alpha = 0.02; // still in hierarchy and eligible for first responder
+        _softField.hidden = YES;
+        _softField.translatesAutoresizingMaskIntoConstraints = NO;
+        _softField.layer.zPosition = 4000;
         [self addSubview:_softField];
+        [NSLayoutConstraint activateConstraints:@[
+            [_softField.leadingAnchor constraintEqualToAnchor:self.safeAreaLayoutGuide.leadingAnchor constant:12],
+            [_softField.trailingAnchor constraintEqualToAnchor:self.safeAreaLayoutGuide.trailingAnchor constant:-12],
+            [_softField.bottomAnchor constraintEqualToAnchor:self.keyboardLayoutGuide.topAnchor constant:-5],
+            [_softField.heightAnchor constraintEqualToConstant:38]
+        ]];
         _softToggle = [UIButton buttonWithType:UIButtonTypeSystem];
         [_softToggle setTitle:@"⌨" forState:UIControlStateNormal];
         _softToggle.titleLabel.font = [UIFont systemFontOfSize:23 weight:UIFontWeightSemibold];

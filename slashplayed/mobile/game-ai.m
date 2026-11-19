@@ -20,13 +20,17 @@ static void sp_p2p_enable(BOOL enabled) {
 
 // State emitted by the game's own read-only addon API. Written and read on main.
 static uint8_t sp_ai_game_flags, sp_ai_game_hp, sp_ai_game_target_hp;
-static NSTimeInterval sp_ai_game_at;
+static NSTimeInterval sp_ai_game_at, sp_ai_strip_at, sp_ai_packet_at;
 static void sp_ai_game_update(const uint8_t *data, size_t length) {
+    sp_ai_packet_at = NSProcessInfo.processInfo.systemUptime;
     if (length < 6 || data[0] != 'A' || data[1] != 'I' ||
         !(data[2] & 1) || data[3] > 100 || data[4] > 100) {
+        if (sp_ai_game_at > 0) sp_stub_log("AI telemetry: invalid or missing payload");
         sp_ai_game_at = 0;
         return;
     }
+    if (sp_ai_game_at <= 0 || sp_ai_packet_at - sp_ai_game_at >= 6.0)
+        sp_stub_log("AI telemetry: valid game-state payload");
     sp_ai_game_flags = data[2];
     sp_ai_game_hp = data[3];
     sp_ai_game_target_hp = data[4];
@@ -297,6 +301,8 @@ static NSArray<NSNumber *> *sp_ai_luminance(CVPixelBufferRef buffer) {
     NSTimeInterval now = NSProcessInfo.processInfo.systemUptime;
     NSString *candidate = nil;
     NSString *display = @"AI DATA";
+    if (sp_ai_strip_at <= 0 || now - sp_ai_strip_at >= 6.0) display = @"AI STRIP";
+    else if (sp_ai_packet_at <= 0 || now - sp_ai_packet_at >= 6.0) display = @"AI SYNC";
     if (sp_ai_game_at > 0 && now - sp_ai_game_at < 6.0) {
         unsigned f = sp_ai_game_flags;
         if ((f & 2) || (f & 64) || sp_ai_game_hp < 35) display = @"AI REST";

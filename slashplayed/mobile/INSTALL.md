@@ -40,3 +40,10 @@ Installera device-kit på samma sätt som tidigare; ladda även ner den separata
 
 ### Pixel2Play (experiment, frivilligt tillägg)
 Om den separata Pixel2Play-exporten är godkänd kan dess `manifest.json`, `policy.mlpackage` och `decoder.mlpackage` kopieras till `SPModels/Pixel2Play` i Slashplayeds dokumentmapp. Behåll Laya även installerad. Samma AI-knapp startar Laya, och om Pixel2Play-filerna finns laddas modellerna vid målsökning. Pixel2Play läser Metal-bildrutor lokalt, använder fyra rutor och föreslår korta WASD-rörelser. P2P MOVE betyder att en rörelse har skickats, inte att modellen har hittat rätt väg. Utan modellpaket fungerar Laya-läget som tidigare. P2P har inte fullständig kamerakontroll, loot eller uppdragshantering och kan inte påstås vara verifierat på telefonen. Testa bara i en tillåten miljö.
+
+
+### Felsökning och synligt textfält
+
+På iPhone visas ett redigerbart textfält direkt ovanför tangentbordet. Skriv eller klistra in där, rätta text med iOS vanliga markering och tryck Return för att skicka en rad till spelets chatt. Inklistrade radbrytningar blir mellanslag; text skickas inte automatiskt bara för att den klistras in. AI-inmatning blockeras medan tangentbordet är aktivt.
+
+AI STRIP = ingen färsk avkodad SPHover-bildremsa, AI SYNC = remsan hittas men ett komplett meddelande saknas, AI DATA = komplett meddelande men ingen användbar aktuell spelstatus. SPHover slutför nu överföring av meddelanden innan det byter till nästa; fel i UI-skanningen ska inte hindra en giltig spelstatus från att skickas. Kontrollera spconsole.log samt Lua-fel i spelet vid problem. Fysisk iPhone-verifiering återstår. Endast för tillåten testmiljö.

@@ -201,3 +201,59 @@ replace_once(hover_native, "    MTLPixelFormat format = tex.pixelFormat;", """#i
     sp_p2p_capture(cb, tex);
 #endif
     MTLPixelFormat format = tex.pixelFormat;""")
+
+
+# The rectangle list can change faster than all its chunks can be presented.
+# On the phone, complete two full cycles before replacing a message. If a UI
+# frame scan throws, send the read-only heartbeat with the last usable rects.
+replace_once(hover_lua, "local message, seq, chunks, chunkIndex = nil, 0, {}, 0",
+    """local message, seq, chunks, chunkIndex = nil, 0, {}, 0
+local spSentFrames, spLastRects, spLastScanError = 0, string.char(0, 0), nil""")
+replace_once(hover_lua, "    chunkIndex = 0\nend\n\nlocal function showChunk",
+    "    chunkIndex = 0\n    spSentFrames = 0\nend\n\nlocal function showChunk")
+replace_once(hover_lua, "    if sinceScan >= SCAN_INTERVAL then",
+    "    if sinceScan >= SCAN_INTERVAL and (not SPPhoneTouchRects or #chunks <= 1 or spSentFrames >= #chunks * 2) then")
+replace_once(hover_lua, "        local ok, msg = pcall(scan)\n        if ok and msg ~= message then",
+    """        local ok, msg = pcall(scan)
+        if SPPhoneTouchRects then
+            if ok and type(msg) == "string" and #msg >= 2 then
+                local a, b = msg:byte(1, 2)
+                spLastRects = msg:sub(1, 2 + (a * 256 + b) * 6)
+                spLastScanError = nil
+            elseif not ok then
+                if spLastScanError ~= tostring(msg) then
+                    spLastScanError = tostring(msg)
+                    print("SPHover scan error: " .. spLastScanError)
+                end
+                msg = spLastRects .. spAIState()
+                ok = true
+            end
+        end
+        if ok and msg ~= message then""")
+replace_once(hover_lua, "        showChunk(chunks[chunkIndex])",
+    "        if #chunks > 0 then\n            showChunk(chunks[chunkIndex])\n            spSentFrames = spSentFrames + 1\n        end")
+# Protect the initial frame when no scan has succeeded; never modulo zero.
+replace_once(hover_lua, "    if #chunks > 1 or chunkIndex == 0 then",
+    "    if #chunks > 0 and (#chunks > 1 or chunkIndex == 0) then")
+# Log telemetry failures without printing player/chat information. Leave
+# invalid state invalid rather than inventing health or attackability.
+replace_once(hover_lua, "    return ok and state or \"\"\nend\n\nlocal function scan()",
+    """    if not ok then
+        if SPHover and SPHover.lastStateError ~= tostring(state) then
+            SPHover.lastStateError = tostring(state)
+            print("SPHover telemetry error: " .. tostring(state))
+        end
+        return ""
+    end
+    if SPHover then SPHover.lastStateError = nil end
+    return state
+end
+
+local function scan()""")
+replace_once(hover_native, "    sp_hover_misses = 0;\n    sp_hover_crop(YES, height);",
+    """    sp_hover_misses = 0;
+#if !TARGET_OS_VISION
+    if (getenv("SP_PHONE_UI_RECTS"))
+        sp_ai_strip_at = NSProcessInfo.processInfo.systemUptime;
+#endif
+    sp_hover_crop(YES, height);""")
