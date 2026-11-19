@@ -21,20 +21,33 @@ static void sp_p2p_enable(BOOL enabled) {
 // State emitted by the game's own read-only addon API. Written and read on main.
 static uint8_t sp_ai_game_flags, sp_ai_game_hp, sp_ai_game_target_hp;
 static NSTimeInterval sp_ai_game_at, sp_ai_strip_at, sp_ai_packet_at;
+static BOOL sp_ai_heartbeat_seen;
+static uint8_t sp_ai_heartbeat_seq;
+static int sp_ai_payload_status = -1;
 static void sp_ai_game_update(const uint8_t *data, size_t length) {
     sp_ai_packet_at = NSProcessInfo.processInfo.systemUptime;
     if (length < 6 || data[0] != 'A' || data[1] != 'I' ||
         !(data[2] & 1) || data[3] > 100 || data[4] > 100) {
-        if (sp_ai_game_at > 0) sp_stub_log("AI telemetry: invalid or missing payload");
+        if (sp_ai_payload_status != 0) sp_stub_log("AI telemetry: invalid or missing player state");
+        sp_ai_payload_status = 0;
         sp_ai_game_at = 0;
         return;
     }
     if (sp_ai_game_at <= 0 || sp_ai_packet_at - sp_ai_game_at >= 6.0)
         sp_stub_log("AI telemetry: valid game-state payload");
+    sp_ai_payload_status = 1;
     sp_ai_game_flags = data[2];
     sp_ai_game_hp = data[3];
     sp_ai_game_target_hp = data[4];
     sp_ai_game_at = NSProcessInfo.processInfo.systemUptime;
+}
+
+static void sp_ai_heartbeat(uint8_t seq, const uint8_t *data, size_t length) {
+    if (sp_ai_heartbeat_seen && seq == sp_ai_heartbeat_seq) return;
+    if (!sp_ai_heartbeat_seen) sp_stub_log("AI telemetry: independent heartbeat detected");
+    sp_ai_heartbeat_seen = YES;
+    sp_ai_heartbeat_seq = seq;
+    sp_ai_game_update(data, length);
 }
 
 @interface SPGameAIController : NSObject

@@ -21,6 +21,10 @@ assert 'decideGameState:candidate:completion:' in event
 assert 'sp_ai_game_update(sp_hover_asm.data + offset' in (root / "shims/appkit/sphover.m").read_text()
 assert 'SPH_MAX_RECTS * 6 + 6' in (root / "shims/appkit/sphoverstrip.h").read_text()
 assert '.. spAIState()' in (root / "addon/SPHover/SPHover.lua").read_text()
+assert 'local function aiHeartbeat()' in (root / "addon/SPHover/SPHover.lua").read_text()
+assert 'showChunk(aiFrame)' in (root / "addon/SPHover/SPHover.lua").read_text()
+assert 'sp_ai_heartbeat(frame[2], frame + 5, SPH_PAYLOAD_BYTES)' in (root / "shims/appkit/sphover.m").read_text()
+assert 'seq == sp_ai_heartbeat_seq' in event
 assert '[_mobileAI stop];' in event
 assert 'sp_mobile_emit_rotation()' in event
 assert 'RPSampleBufferTypeVideo' in event

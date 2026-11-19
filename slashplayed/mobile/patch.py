@@ -257,3 +257,49 @@ replace_once(hover_native, "    sp_hover_misses = 0;\n    sp_hover_crop(YES, hei
         sp_ai_strip_at = NSProcessInfo.processInfo.systemUptime;
 #endif
     sp_hover_crop(YES, height);""")
+
+
+# Independent, checksummed single-frame diagnostic heartbeat on iPhone.
+# The regular UI rectangle transport remains unchanged for other platforms.
+replace_once(hover_lua, "local sinceScan = SCAN_INTERVAL",
+    """local sinceScan = SCAN_INTERVAL
+local aiElapsed, aiBeat, aiFrame, aiTick = 1, 0, nil, 0
+local function aiHeartbeat()
+    local state = spAIState()
+    if #state ~= 6 then state = string.char(65, 73, 0, 0, 0, 0) end
+    aiBeat = (aiBeat + 1) % 256
+    local b = {65, 73, aiBeat, 0, 1}
+    for i = 1, PAYLOAD_BYTES do b[5+i] = state:byte(i) or 0 end
+    b[FRAME_BYTES-1], b[FRAME_BYTES] = fletcher16(b, FRAME_BYTES-2)
+    return b
+end""")
+replace_once(hover_lua, "    if #chunks > 0 and (#chunks > 1 or chunkIndex == 0) then",
+    """    if SPPhoneTouchRects then
+        aiElapsed = aiElapsed + elapsed
+        aiTick = aiTick + 1
+        if not aiFrame or aiElapsed >= 0.5 then
+            aiElapsed = 0
+            aiFrame = aiHeartbeat()
+        end
+        if aiTick % 4 == 0 then
+            showChunk(aiFrame)
+            return
+        end
+    end
+    if #chunks > 0 and (#chunks > 1 or chunkIndex == 0) then""")
+# With single-chunk UI messages, redraw the rect strip after a heartbeat too.
+replace_once(hover_lua, "if #chunks > 0 and (#chunks > 1 or chunkIndex == 0) then",
+    "if #chunks > 0 and (SPPhoneTouchRects or #chunks > 1 or chunkIndex == 0) then")
+replace_once(strip_header, "if (frame[0] != 'V' || frame[1] != 'W') return 0;",
+    "if (!((frame[0] == 'V' && frame[1] == 'W') || (frame[0] == 'A' && frame[1] == 'I'))) return 0;")
+replace_once(hover_native, "    static sph_rect rects[SPH_MAX_RECTS];",
+    """    if (frame[0] == 'A' && frame[1] == 'I') {
+#if !TARGET_OS_VISION
+        if (getenv("SP_PHONE_UI_RECTS") && frame[3] == 0 && frame[4] == 1)
+            sp_ai_heartbeat(frame[2], frame + 5, SPH_PAYLOAD_BYTES);
+#endif
+        return;
+    }
+    static sph_rect rects[SPH_MAX_RECTS];""")
+replace_once(hover_native, '    if (getenv("SP_PHONE_UI_RECTS"))\n        sp_ai_game_update(sp_hover_asm.data + offset',
+    '    if (getenv("SP_PHONE_UI_RECTS") && !sp_ai_heartbeat_seen)\n        sp_ai_game_update(sp_hover_asm.data + offset')

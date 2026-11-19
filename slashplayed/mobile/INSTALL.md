@@ -47,3 +47,5 @@ Om den separata Pixel2Play-exporten är godkänd kan dess `manifest.json`, `poli
 På iPhone visas ett redigerbart textfält direkt ovanför tangentbordet. Skriv eller klistra in där, rätta text med iOS vanliga markering och tryck Return för att skicka en rad till spelets chatt. Inklistrade radbrytningar blir mellanslag; text skickas inte automatiskt bara för att den klistras in. AI-inmatning blockeras medan tangentbordet är aktivt.
 
 AI STRIP = ingen färsk avkodad SPHover-bildremsa, AI SYNC = remsan hittas men ett komplett meddelande saknas, AI DATA = komplett meddelande men ingen användbar aktuell spelstatus. SPHover slutför nu överföring av meddelanden innan det byter till nästa; fel i UI-skanningen ska inte hindra en giltig spelstatus från att skickas. Kontrollera spconsole.log samt Lua-fel i spelet vid problem. Fysisk iPhone-verifiering återstår. Endast för tillåten testmiljö.
+
+SPHover på iPhone skickar även en separat, checksummad heartbeat var 0,5 sekund. Den påverkar inte UI-rektanglarna. Om spelstatus saknas eller upphör att förnyas förblir AI-inmatning spärrad. Loggen skiljer mellan mottagen heartbeat och giltig spelstatus.
