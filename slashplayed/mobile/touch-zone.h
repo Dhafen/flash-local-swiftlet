@@ -8,6 +8,12 @@ static enum SPMobileZone sp_mobile_zone(double x, double y, int interface) {
     return SPMobileDefault;
 }
 
+// Prioritize the floating joystick when dragging in the lower-left phone zone.
+static inline enum SPMobileZone sp_mobile_phone_zone(double x, double y, int interface) {
+    if (sp_mobile_zone(x, y, 0) == SPMobileMove) return SPMobileMove;
+    return sp_mobile_zone(x, y, interface);
+}
+
 // Distances are UIKit points; elapsed is UITouch's monotonic seconds.
 // A gesture that moved (even if it returned to the origin) is not a click.
 enum SPMobileClick { SPMobileNoClick = -1, SPMobileLeftClick = 0, SPMobileRightClick = 1 };

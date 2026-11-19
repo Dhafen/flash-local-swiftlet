@@ -7,6 +7,7 @@
 
 @interface SPGameAIController : NSObject
 @property(nonatomic, readonly) BOOL active;
+@property(nonatomic, readonly) BOOL starting;
 @property(nonatomic, copy) BOOL (^action)(NSString *, CGPoint, NSTimeInterval);
 @property(nonatomic, copy) void (^releaseInput)(void);
 @property(nonatomic, copy) void (^status)(NSString *);
@@ -19,9 +20,10 @@
     BOOL _active, _starting, _stopping, _ownsCapture;
     NSUInteger _run, _captureRun;
     BOOL _busy;
-    NSTimeInterval _nextFrame;
+    NSTimeInterval _nextFrame, _lastFrame;
 }
 - (BOOL)active { return _active; }
+- (BOOL)starting { return _starting && _active; }
 
 - (void)invalidateDecision {
     Class bridge = NSClassFromString(@"SPGameAIModel");
@@ -82,9 +84,10 @@ static NSArray<NSNumber *> *sp_ai_luminance(CVPixelBufferRef buffer) {
 - (void)finish:(NSString *)answer points:(NSArray<NSValue *> *)points labels:(NSArray<NSString *> *)labels observation:(NSString *)observation captured:(NSTimeInterval)captured run:(NSUInteger)run {
     if (!_active || _run != run) return;
     if ([answer isEqualToString:@"ERROR"] || [answer isEqualToString:@"UNAVAILABLE"]) {
-        [self fail:@"AI!"];
+        [self fail:@"AI MODEL!"];
         return;
     }
+    NSString *display = @"AI WAIT";
     // Don't execute a decision made on an old frame.
     if (self.action && NSProcessInfo.processInfo.systemUptime - captured <= 8.0) {
         NSSet *keys = [NSSet setWithArray:@[@"ATTACK", @"TARGET", @"FORWARD", @"BACK", @"LEFT", @"RIGHT"]];
@@ -110,12 +113,15 @@ static NSArray<NSNumber *> *sp_ai_luminance(CVPixelBufferRef buffer) {
             }
         }
         if (executed) {
+            display = [@"AI " stringByAppendingString:[[answer componentsSeparatedByString:@" "] firstObject]];
             Class bridge = NSClassFromString(@"SPGameAIModel");
             SEL record = NSSelectorFromString(@"recordAction:observation:");
             if ([bridge respondsToSelector:record])
                 ((void (*)(id, SEL, NSString *, NSString *))objc_msgSend)(bridge, record, answer, observation);
         }
     }
+    if (NSProcessInfo.processInfo.systemUptime - captured > 8.0) display = @"AI SLOW";
+    if (self.status) self.status(display);
     @synchronized(self) {
         if (_captureRun == run) {
             _busy = NO;
@@ -127,7 +133,9 @@ static NSArray<NSNumber *> *sp_ai_luminance(CVPixelBufferRef buffer) {
     CVPixelBufferRef buffer = CMSampleBufferGetImageBuffer(sample);
     if (!buffer) return;
     @synchronized(self) {
-        if (_captureRun != run || _busy || NSProcessInfo.processInfo.systemUptime < _nextFrame) return;
+        if (_captureRun != run) return;
+        _lastFrame = NSProcessInfo.processInfo.systemUptime;
+        if (_busy || _lastFrame < _nextFrame) return;
         _busy = YES;
     }
     NSTimeInterval captured = NSProcessInfo.processInfo.systemUptime;
@@ -171,14 +179,30 @@ static NSArray<NSNumber *> *sp_ai_luminance(CVPixelBufferRef buffer) {
     NSString *observation = json ? [[NSString alloc] initWithData:json encoding:NSUTF8StringEncoding] : @"";
     dispatch_async(dispatch_get_main_queue(), ^{
         if (!self->_active || self->_run != run) return;
-        if (!ok || !observation.length) { [self finish:@"WAIT" points:points labels:labels observation:observation captured:captured run:run]; return; }
+        if (!ok || !observation.length || !points.count) {
+            [self finish:@"WAIT" points:points labels:labels observation:observation captured:captured run:run];
+            if (self.status) self.status(@"AI NO TEXT");
+            return;
+        }
+        if (self.status) self.status(@"AI THINK");
         Class bridge = NSClassFromString(@"SPGameAIModel");
         SEL selector = NSSelectorFromString(@"decide:completion:");
-        if (![bridge respondsToSelector:selector]) { [self fail:@"AI!"]; return; }
+        if (![bridge respondsToSelector:selector]) { [self fail:@"AI MODEL!"]; return; }
         void (^completion)(NSString *) = ^(NSString *answer) {
             dispatch_async(dispatch_get_main_queue(), ^{ [self finish:answer points:points labels:labels observation:observation captured:captured run:run]; });
         };
         ((void (*)(id, SEL, NSString *, void (^)(NSString *)))objc_msgSend)(bridge, selector, observation, completion);
+    });
+}
+- (void)watchCapture:(NSUInteger)run {
+    __weak SPGameAIController *weak = self;
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 5 * NSEC_PER_SEC), dispatch_get_main_queue(), ^{
+        SPGameAIController *strong = weak;
+        if (!strong || !strong->_active || strong->_run != run) return;
+        NSTimeInterval elapsed;
+        @synchronized(strong) { elapsed = NSProcessInfo.processInfo.systemUptime - strong->_lastFrame; }
+        if (elapsed > 15.0) { [strong fail:@"AI NO VID"]; return; }
+        [strong watchCapture:run];
     });
 }
 - (void)start {
@@ -186,10 +210,12 @@ static NSArray<NSNumber *> *sp_ai_luminance(CVPixelBufferRef buffer) {
     Class bridge = NSClassFromString(@"SPGameAIModel");
     SEL ready = NSSelectorFromString(@"ready");
     RPScreenRecorder *recorder = RPScreenRecorder.sharedRecorder;
-    if (![bridge respondsToSelector:ready] ||
-        !((BOOL (*)(id, SEL))objc_msgSend)(bridge, ready) ||
-        !recorder.isAvailable || recorder.isRecording) {
-        if (self.status) self.status(@"AI!");
+    if (![bridge respondsToSelector:ready] || !((BOOL (*)(id, SEL))objc_msgSend)(bridge, ready)) {
+        if (self.status) self.status(@"AI MODEL!");
+        return;
+    }
+    if (!recorder.isAvailable || recorder.isRecording) {
+        if (self.status) self.status(@"AI CAP!");
         return;
     }
     [self invalidateDecision];
@@ -197,7 +223,7 @@ static NSArray<NSNumber *> *sp_ai_luminance(CVPixelBufferRef buffer) {
     _starting = YES;
     NSUInteger run = ++_run;
     @synchronized(self) { _captureRun = 0; _busy = NO; }
-    if (self.status) self.status(@"AI ON");
+    if (self.status) self.status(@"AI ON…");
     recorder.microphoneEnabled = NO;
     __weak SPGameAIController *weak = self;
     [recorder startCaptureWithHandler:^(CMSampleBufferRef sample, RPSampleBufferType type, NSError *error) {
@@ -205,7 +231,7 @@ static NSArray<NSNumber *> *sp_ai_luminance(CVPixelBufferRef buffer) {
         if (!strong) return;
         if (error) {
             dispatch_async(dispatch_get_main_queue(), ^{
-                if (strong->_active && strong->_run == run) [strong fail:@"AI!"];
+                if (strong->_active && strong->_run == run) [strong fail:@"AI CAP!"];
             });
             return;
         }
@@ -216,12 +242,18 @@ static NSArray<NSNumber *> *sp_ai_luminance(CVPixelBufferRef buffer) {
             if (!strong) return;
             strong->_starting = NO;
             if (error) {
-                if (strong->_active && strong->_run == run) [strong fail:@"AI!"];
+                if (strong->_active && strong->_run == run) [strong fail:@"AI CAP!"];
                 return;
             }
             strong->_ownsCapture = YES;
             if (!strong->_active || strong->_run != run) { [strong haltCapture]; return; }
-            @synchronized(strong) { strong->_captureRun = run; strong->_nextFrame = 0; }
+            @synchronized(strong) {
+                strong->_captureRun = run;
+                strong->_nextFrame = 0;
+                strong->_lastFrame = NSProcessInfo.processInfo.systemUptime;
+            }
+            if (strong.status) strong.status(@"AI VIDEO");
+            [strong watchCapture:run];
         });
     }];
     // No session timeout: the same button toggles off. Lifecycle/errors still fail closed.

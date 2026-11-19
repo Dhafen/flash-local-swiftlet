@@ -106,12 +106,15 @@ static enum SPMobileZone sp_mobile_touch_zone(CGPoint point, CGRect game) {
     BOOL interface = NO;
     if (getenv("SP_PHONE_UI_RECTS")) {
         for (size_t i = 0; i < sp_hover_count; i++) {
-            if (!CGRectContainsPoint(sp_hover_rects[i], CGPointMake(x, 1 - y))) continue;
+            CGRect rect = sp_hover_rects[i];
+            if (rect.size.width * rect.size.height > 0.25) continue;
+            if (!CGRectContainsPoint(rect, CGPointMake(x, 1 - y))) continue;
             interface = YES;
             break;
         }
     }
-    enum SPMobileZone zone = sp_mobile_zone(x, y, interface);
+    enum SPMobileZone zone = getenv("SP_PHONE_UI_RECTS")
+        ? sp_mobile_phone_zone(x, y, interface) : sp_mobile_zone(x, y, interface);
     // Route the central/top world too; keep touches outside the game on the stock path.
     if (getenv("SP_PHONE_UI_RECTS") && zone == SPMobileDefault &&
         x >= 0 && x <= 1 && y >= 0 && y <= 1) return SPMobileInterface;
@@ -198,7 +201,7 @@ static UIButton *sp_mobile_button(NSString *title, NSString *label, id owner, SE
 - (void)sp_mobile_jump:(BOOL)down {
     if (down) {
         [self sp_mobile_ai_release_key];
-        [_mobileAI invalidateDecision];
+        if (_mobileAI.active) [_mobileAI invalidateDecision];
         _mobileAIManualUntil = NSProcessInfo.processInfo.systemUptime + 1.0;
     }
     if (_mobileJumpHeld == down) return;
@@ -218,7 +221,7 @@ static UIButton *sp_mobile_button(NSString *title, NSString *label, id owner, SE
 - (void)sp_mobile_cancel {
     if (!_mobileStick) return;
     [self sp_mobile_ai_release_key];
-    [_mobileAI invalidateDecision];
+    if (_mobileAI.active) [_mobileAI invalidateDecision];
     _mobileAIManualUntil = NSProcessInfo.processInfo.systemUptime + 1.0;
     [_mobileStick stop];
     [self sp_mobile_release_look];
@@ -232,7 +235,9 @@ static UIButton *sp_mobile_button(NSString *title, NSString *label, id owner, SE
 }
 
 - (void)sp_mobile_setup {
-    _mobileDirect = ![NSUserDefaults.standardUserDefaults boolForKey:@"sp_mobile_ui_mode"];
+    // Always start the session in Play mode; UI mode remains available temporarily.
+    _mobileDirect = YES;
+    [NSUserDefaults.standardUserDefaults setBool:NO forKey:@"sp_mobile_ui_mode"];
     _mobileLookSpeed = sp_mobile_speed();
     _mobileStick = [[SPMobileStick alloc] initWithFrame:CGRectMake(0, 0, 76, 76)];
     [self addSubview:_mobileStick];
@@ -315,10 +320,10 @@ static UIButton *sp_mobile_button(NSString *title, NSString *label, id owner, SE
         SPInputView *input = weakSelf;
         if (!input) return;
         [input->_mobileAIButton setTitle:status forState:UIControlStateNormal];
-        input->_mobileAIButton.backgroundColor = [status isEqualToString:@"AI ON"]
+        input->_mobileAIButton.backgroundColor = input->_mobileAI.active
             ? [UIColor colorWithRed:0.65 green:0.15 blue:0.15 alpha:0.85] : [UIColor colorWithWhite:0 alpha:0.55];
-        if ([status isEqualToString:@"AI!"]) input->_mobileAIButton.accessibilityHint =
-            @"Model or screen capture unavailable. Check Apple Intelligence and try again.";
+        input->_mobileAIButton.accessibilityHint = input->_mobileAI.active
+            ? @"Tap to stop AI" : @"Tap to start AI; the title shows the last status";
     };
     _mobileReset.hidden = _mobileSpeed.hidden = YES;
     for (UIButton *button in @[_mobileJump, _mobileUI, _mobileEdit, _mobileSpeed, _mobileReset, _mobileRotation, _mobileAIButton]) {
@@ -327,13 +332,31 @@ static UIButton *sp_mobile_button(NSString *title, NSString *label, id owner, SE
     }
     [NSNotificationCenter.defaultCenter addObserver:self selector:@selector(sp_mobile_deactivate:)
                                                 name:UISceneWillDeactivateNotification object:nil];
+    [NSNotificationCenter.defaultCenter addObserver:self selector:@selector(sp_mobile_background:)
+                                                name:UISceneDidEnterBackgroundNotification object:nil];
+    [NSNotificationCenter.defaultCenter addObserver:self selector:@selector(sp_mobile_activate:)
+                                                name:UISceneDidActivateNotification object:nil];
 }
 
 - (void)sp_mobile_deactivate:(NSNotification *)notification {
     if (notification.object == self.window.windowScene) {
+        // A ReplayKit consent sheet may temporarily deactivate the scene.
+        [self sp_mobile_cancel];
+        if (!_mobileAI.starting) [_mobileAI stop];
+    }
+}
+- (void)sp_mobile_background:(NSNotification *)notification {
+    if (notification.object == self.window.windowScene) {
         [_mobileAI stop];
         [self sp_mobile_cancel];
     }
+}
+- (void)sp_mobile_activate:(NSNotification *)notification {
+    if (notification.object != self.window.windowScene) return;
+    [self sp_mobile_cancel];
+    _mobileLeft = _mobileRight = _mobileInterface = nil;
+    _mobileMoving = _mobileLookDrag = _mobileLookCancelled = NO;
+    [self setNeedsLayout];
 }
 
 // Keep Wolkara's in-game HUD unobstructed. The native keyboard remains the
@@ -378,6 +401,14 @@ static UIButton *sp_mobile_button(NSString *title, NSString *label, id owner, SE
         SPInputView *input = weakSelf;
         if (input) [input sp_mobile_toggle_ui:input->_mobileUI];
     }];
+    UIAction *play = [UIAction actionWithTitle:@"Restore floating joystick (Play)" image:nil identifier:nil handler:^(__kindof UIAction *action) {
+        SPInputView *input = weakSelf;
+        if (!input) return;
+        [input sp_mobile_cancel];
+        if (input->_mobileEditing) [input sp_mobile_toggle_edit:input->_mobileEdit];
+        if (!input->_mobileDirect) [input sp_mobile_toggle_ui:input->_mobileUI];
+        [input setNeedsLayout];
+    }];
     UIAction *legacy = [UIAction actionWithTitle:@"Show / hide extra controls" image:nil identifier:nil handler:^(__kindof UIAction *action) {
         SPInputView *input = weakSelf;
         if (!input) return;
@@ -387,7 +418,7 @@ static UIButton *sp_mobile_button(NSString *title, NSString *label, id owner, SE
         [prefs setBool:![prefs boolForKey:@"sp_wolkara_extra_controls"] forKey:@"sp_wolkara_extra_controls"];
         [input setNeedsLayout];
     }];
-    return [UIMenu menuWithTitle:@"Game controls" children:@[escape, jump, showJump, rotation, showRotation, resetRotation, mode, legacy]];
+    return [UIMenu menuWithTitle:@"Game controls" children:@[escape, jump, showJump, rotation, showRotation, resetRotation, play, mode, legacy]];
 }
 
 - (void)sp_mobile_layout:(CGRect)game top:(CGFloat)top {
@@ -427,7 +458,7 @@ static UIButton *sp_mobile_button(NSString *title, NSString *label, id owner, SE
     _mobileRotation.hidden = !wolkaraHUD || CGRectIsEmpty(game) || _softField.isFirstResponder ||
         [prefs boolForKey:@"sp_wolkara_hide_rotation"];
     _mobileAIButton.hidden = !wolkaraHUD || CGRectIsEmpty(game) || _softField.isFirstResponder;
-    _mobileAIButton.bounds = CGRectMake(0, 0, 44, 44);
+    _mobileAIButton.bounds = CGRectMake(0, 0, 64, 44);
     _mobileAIButton.center = [self sp_mobile_clamp_rotation:CGPointMake(
         game.origin.x + 0.88 * game.size.width, game.origin.y + 0.28 * game.size.height)];
     _mobileRotation.bounds = CGRectMake(0, 0, 44, 44);
@@ -562,7 +593,7 @@ static UIButton *sp_mobile_button(NSString *title, NSString *label, id owner, SE
 
 - (void)sp_mobile_rotation:(UIButton *)button {
     [self sp_mobile_ai_release_key];
-    [_mobileAI invalidateDecision];
+    if (_mobileAI.active) [_mobileAI invalidateDecision];
     _mobileAIManualUntil = NSProcessInfo.processInfo.systemUptime + 1.0;
     if (!sp_client_window || _softField.isFirstResponder || _mobileEditing ||
         _mobileRotationPan.state == UIGestureRecognizerStateBegan ||
@@ -652,7 +683,7 @@ static UIButton *sp_mobile_button(NSString *title, NSString *label, id owner, SE
 - (void)touchesBegan:(NSSet<UITouch *> *)touches withEvent:(UIEvent *)event {
 #if !TARGET_OS_VISION
     [self sp_mobile_ai_release_key];
-    [_mobileAI invalidateDecision];
+    if (_mobileAI.active) [_mobileAI invalidateDecision];
     _mobileAIManualUntil = NSProcessInfo.processInfo.systemUptime + 1.0;
     if (_mobileDirect && !_mobileEditing && !_softField.isFirstResponder && sp_client_window &&
         !_touches.count && (sp_mouse_buttons == 0 || (_mobileLooking && sp_mouse_buttons == 2))) {

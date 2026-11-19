@@ -36,6 +36,12 @@ if sys.platform == "darwin" and len(sys.argv) == 2:
         subprocess.run([binary], check=True)
 assert '120 * NSEC_PER_SEC' not in event
 assert 'AI OFF' in event and 'AI ON' in event
+assert 'sp_mobile_phone_zone(x, y, interface)' in event
+assert 'Restore floating joystick (Play)' in event
+assert 'if (!_mobileAI.starting) [_mobileAI stop];' in event
+assert 'UISceneDidEnterBackgroundNotification' in event
+assert 'AI NO VID' in event and 'AI NO TEXT' in event and 'AI THINK' in event
+assert 'AI MODEL!' in event and 'AI CAP!' in event
 assert 'sp_mobile_ai_release_key' in event and 'sp_mobile_ai_hold_key:' in event
 assert 'NSProcessInfo.processInfo.systemUptime - captured <= 8.0' in event
 assert 'input->_mobileAIManualUntil' in event
