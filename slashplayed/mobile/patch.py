@@ -308,58 +308,5 @@ replace_once(hover_native, '    if (getenv("SP_PHONE_UI_RECTS"))\n        sp_ai_
 hover_text = hover_lua.read_text()
 state_start = hover_text.index("local function spAIState()")
 state_end = hover_text.index("\nlocal function scan()", state_start)
-hover_text = hover_text[:state_start] + Path(__file__).with_name("HealthTelemetry.lua").read_text() + "\n" + """local function spAIState()
-    if not SPPhoneTouchRects then return "" end
-    local stage = 1
-    local function unavailable(code)
-        return string.char(65, 73, 0, code, 0, 0)
-    end
-    local function boolValue(value)
-        if type(issecretvalue) == "function" and issecretvalue(value) then error("restricted value") end
-        return not not value
-    end
-    local function dead(unit)
-        if type(UnitIsDeadOrGhost) == "function" then return boolValue(UnitIsDeadOrGhost(unit)) end
-        if type(UnitIsDead) == "function" and type(UnitIsGhost) == "function" then
-            return boolValue(UnitIsDead(unit)) or boolValue(UnitIsGhost(unit))
-        end
-        error("death API unavailable")
-    end
-    local ok, state = pcall(function()
-        if not boolValue(UnitExists("player")) then return unavailable(1) end
-        stage = 3
-        local hp, healthError = spReadHealthPercent("player")
-        if hp == nil then return unavailable(healthError == "restricted" and 12 or 3) end
-        local flags = 1
-        stage = 4
-        if dead("player") then flags = flags + 2 end
-        stage = 5
-        local hasTarget = boolValue(UnitExists("target"))
-        local targetHP = 0
-        if hasTarget then
-            flags = flags + 4
-            stage = 6
-            if boolValue(UnitCanAttack("player", "target")) and not boolValue(UnitIsPlayer("target")) then flags = flags + 8 end
-            stage = 7
-            if dead("target") then flags = flags + 16 end
-            stage = 8
-            local targetError
-            targetHP, targetError = spReadHealthPercent("target")
-            if targetHP == nil then return unavailable(targetError == "restricted" and 13 or 8) end
-        end
-        stage = 9
-        if boolValue(UnitAffectingCombat("player")) then flags = flags + 32 end
-        stage = 10
-        if type(IsMounted) == "function" then
-            if boolValue(IsMounted()) then flags = flags + 64 end
-        else
-            return unavailable(10)
-        end
-        stage = 11
-        return string.char(65, 73, flags, hp, targetHP, floor(GetTime() / 2) % 256)
-    end)
-    if not ok then return unavailable(stage) end
-    return state
-end
-""" + hover_text[state_end:]
+hover_text = hover_text[:state_start] + Path(__file__).with_name("HealthTelemetry.lua").read_text() + "\n" + hover_text[state_end:]
 hover_lua.write_text(hover_text)

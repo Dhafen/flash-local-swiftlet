@@ -29,3 +29,30 @@ reset(val(0/0), val(-1), val(100)); check(nil, "unavailable")
 issecretvalue = nil
 reset(val(secret), val(secret), val(100)); check(nil, "restricted")
 print("health telemetry tests passed")
+
+-- Flags must survive protected health but protected attackability must fail closed.
+local state = assert(loadstring(source .. "\nreturn spAIState"))()
+SPPhoneTouchRects = true
+issecretvalue = function(value) return value == secret end
+canaccessvalue = function(value) return value ~= secret end
+UnitExists = function() return true end
+UnitIsDeadOrGhost = function() return false end
+UnitCanAttack = function() return true end
+UnitIsPlayer = function() return false end
+UnitAffectingCombat = function() return true end
+IsMounted = function() return false end
+GetTime = function() return 2 end
+reset(val(secret), val(secret), val(secret))
+local packet = state()
+assert(#packet == 6 and packet:byte(3) == 45 and packet:byte(4) == 255 and packet:byte(5) == 255)
+UnitCanAttack = val(secret)
+packet = state()
+assert(packet:byte(3) == 0 and packet:byte(4) == 6)
+UnitCanAttack = val(true)
+UnitExists = function(unit) return unit == "player" end
+packet = state()
+assert(packet:byte(3) == 33 and packet:byte(4) == 255 and packet:byte(5) == 0)
+reset(val(.2), nil, nil)
+packet = state()
+assert(packet:byte(4) == 20)
+print("partial public game-state tests passed")

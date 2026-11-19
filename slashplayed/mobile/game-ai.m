@@ -22,12 +22,19 @@ static void sp_p2p_enable(BOOL enabled) {
 static uint8_t sp_ai_game_flags, sp_ai_game_hp, sp_ai_game_target_hp;
 static NSTimeInterval sp_ai_game_at, sp_ai_strip_at, sp_ai_packet_at;
 static BOOL sp_ai_heartbeat_seen;
+static BOOL sp_ai_health_known(uint8_t value) { return value <= 100; }
+static BOOL sp_ai_low_health(void) { return sp_ai_health_known(sp_ai_game_hp) && sp_ai_game_hp < 35; }
+static BOOL sp_ai_alive_hostile(unsigned f) {
+    return (f & 4) && (f & 8) && !(f & 16) &&
+        (!sp_ai_health_known(sp_ai_game_target_hp) || sp_ai_game_target_hp > 0);
+}
 static uint8_t sp_ai_heartbeat_seq;
 static int sp_ai_payload_status = -1, sp_ai_state_reason = -1;
 static void sp_ai_game_update(const uint8_t *data, size_t length) {
     sp_ai_packet_at = NSProcessInfo.processInfo.systemUptime;
     if (length < 6 || data[0] != 'A' || data[1] != 'I' ||
-        !(data[2] & 1) || data[3] > 100 || data[4] > 100) {
+        !(data[2] & 1) || (data[2] & 128) ||
+        (data[3] > 100 && data[3] != 255) || (data[4] > 100 && data[4] != 255)) {
         int reason = length >= 6 && data[0] == 'A' && data[1] == 'I' && !(data[2] & 1) ? data[3] : 0;
         if (sp_ai_payload_status != 0 || reason != sp_ai_state_reason) {
             static const char *const reasons[] = {"missing payload", "UnitExists(player)", "UnitHealthMax(player)", "UnitHealth(player)", "player death API", "UnitExists(target)", "target attack/player API", "target death API", "target health API", "UnitAffectingCombat", "IsMounted", "GetTime/encoding", "player health restricted", "target health restricted"};
@@ -39,8 +46,11 @@ static void sp_ai_game_update(const uint8_t *data, size_t length) {
         sp_ai_game_at = 0;
         return;
     }
-    if (sp_ai_game_at <= 0 || sp_ai_packet_at - sp_ai_game_at >= 6.0)
-        sp_stub_log("AI telemetry: valid game-state payload");
+    if (sp_ai_game_at <= 0 || sp_ai_packet_at - sp_ai_game_at >= 6.0 ||
+        sp_ai_health_known(sp_ai_game_hp) != sp_ai_health_known(data[3]) ||
+        sp_ai_health_known(sp_ai_game_target_hp) != sp_ai_health_known(data[4]))
+        sp_stub_log((data[3] == 255 || data[4] == 255) ?
+            "AI telemetry: public decision flags valid; health unknown" : "AI telemetry: valid game-state payload");
     sp_ai_payload_status = 1;
     sp_ai_state_reason = -1;
     sp_ai_game_flags = data[2];
@@ -306,9 +316,9 @@ static NSArray<NSNumber *> *sp_ai_luminance(CVPixelBufferRef buffer) {
             NSTimeInterval now = NSProcessInfo.processInfo.systemUptime;
             unsigned f = sp_ai_game_flags;
             // Only seek in a known, living unmounted state with no selected living hostile.
-            BOOL seeking = !(f & (2|32|64)) && sp_ai_game_hp >= 35 &&
-                (!(f & 4) || (f & 16) || !(f & 8));
-            BOOL allowed = strong->_directRulesOnly || [strong->_directPlan isEqualToString:@"TARGET"];
+            BOOL seeking = !(f & (2|32|64)) && !sp_ai_low_health() && !sp_ai_alive_hostile(f);
+            BOOL allowed = strong->_directRulesOnly || [strong->_directPlan isEqualToString:@"TARGET"] ||
+                !sp_ai_health_known(sp_ai_game_hp) || !sp_ai_health_known(sp_ai_game_target_hp);
             if (!seeking || !allowed || sp_ai_game_at <= 0 || now-sp_ai_game_at >= 6.0 ||
                 now-captured > 3.0 || now-strong->_p2pLastMove < 0.8) return;
             if (![@[@"FORWARD",@"BACK",@"LEFT",@"RIGHT",@"STRAFE_LEFT",@"STRAFE_RIGHT"] containsObject:answer]) return;
@@ -391,10 +401,9 @@ static NSArray<NSNumber *> *sp_ai_luminance(CVPixelBufferRef buffer) {
     else if (sp_ai_state_reason > 0) display = [NSString stringWithFormat:@"AI DATA %d", sp_ai_state_reason];
     if (sp_ai_game_at > 0 && now - sp_ai_game_at < 6.0) {
         unsigned f = sp_ai_game_flags;
-        if ((f & 2) || (f & 64) || sp_ai_game_hp < 35) display = @"AI REST";
-        else if (!(f & 4) || (f & 16)) candidate = @"TARGET";
-        else if ((f & 8) && sp_ai_game_target_hp > 0) candidate = @"ATTACK";
-        else candidate = @"TARGET"; // a friendly NPC is not attackable; seek a hostile target
+        if ((f & 2) || (f & 64) || sp_ai_low_health()) display = @"AI REST";
+        else if (sp_ai_alive_hostile(f)) candidate = @"ATTACK";
+        else candidate = @"TARGET";
     }
     BOOL preview = (sp_ai_packet_at > 0 && now - sp_ai_packet_at < 6.0 &&
         (sp_ai_state_reason == 12 || sp_ai_state_reason == 13));
@@ -427,7 +436,14 @@ static NSArray<NSNumber *> *sp_ai_luminance(CVPixelBufferRef buffer) {
             _directPlan = nil;
             _directPending = NO;
         }
-        if (!_directRulesOnly && !_directPending &&
+        // Laya's installed choices require known health, never fabricate a label.
+        BOOL partial = !sp_ai_health_known(sp_ai_game_hp) || !sp_ai_health_known(sp_ai_game_target_hp);
+        if (partial && _directPending) {
+            ++_directDecisionGeneration;
+            _directPending = NO;
+            _directPlan = nil;
+        }
+        if (!partial && !_directRulesOnly && !_directPending &&
             (!_directPlan || now - _directPlanAt > 12.0)) {
             Class bridge = NSClassFromString(@"SPGameAIModel");
             SEL selector = NSSelectorFromString(@"decideGameState:candidate:completion:");
@@ -464,15 +480,15 @@ static NSArray<NSNumber *> *sp_ai_luminance(CVPixelBufferRef buffer) {
                 });
             }
         }
-        BOOL authorized = _directRulesOnly || [_directPlan isEqualToString:candidate];
-        display = _directPending ? (_directLayaWarmed ? @"LAYA THINK" : @"LAYA LOAD") : (_directRulesOnly ? @"RULE WAIT" : @"LAYA WAIT");
+        BOOL authorized = partial || _directRulesOnly || [_directPlan isEqualToString:candidate];
+        display = partial ? @"HP UNKNOWN" : (_directPending ? (_directLayaWarmed ? @"LAYA THINK" : @"LAYA LOAD") : (_directRulesOnly ? @"RULE WAIT" : @"LAYA WAIT"));
         if (authorized && [candidate isEqualToString:@"TARGET"] && !(sp_ai_game_flags & 32))
             [self tryP2P:run];
         if (authorized && now >= _directNextAction && self.action) {
             BOOL sent = self.action(candidate, CGPointZero, sp_ai_game_at);
             if (sent) {
                 _directNextAction = now + ([candidate isEqualToString:@"TARGET"] ? 3.0 : 0.85);
-                display = [NSString stringWithFormat:@"%@ %@", _directRulesOnly ? @"RULE" : @"LAYA",
+                display = [NSString stringWithFormat:@"%@ %@", partial ? @"HP?" : (_directRulesOnly ? @"RULE" : @"LAYA"),
                     [candidate isEqualToString:@"ATTACK"] ? @"F12" : @"TAB"];
             } else display = @"AI INPUT";
         }

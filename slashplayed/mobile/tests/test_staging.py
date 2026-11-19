@@ -232,3 +232,8 @@ if sys.platform == "darwin" and len(sys.argv) == 2:
         subprocess.run(["xcrun", "swiftc", str(root / "apps/client/SPP2PRuntime.swift"),
                         str(Path(__file__).with_name("test_p2p_actions.swift")), "-o", binary], check=True)
         subprocess.run([binary], check=True)
+
+assert 'local hp = spReadHealthPercent("player") or 255' in (root / "addon/SPHover/SPHover.lua").read_text()
+assert 'sp_ai_health_known' in event and 'sp_ai_alive_hostile' in event
+assert 'BOOL authorized = partial || _directRulesOnly' in event
+assert 'partial ? @"HP?"' in event
