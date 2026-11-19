@@ -80,6 +80,10 @@ static void sp_ai_heartbeat(uint8_t seq, const uint8_t *data, size_t length) {
     BOOL _p2pAvailable, _p2pPending;
     NSTimeInterval _p2pLastUsed, _p2pLastMove;
     NSUInteger _p2pGeneration;
+    BOOL _visualPreviewMode;
+    BOOL _visualPreviewError;
+    NSString *_visualPreviewStatus;
+    NSTimeInterval _visualPreviewAt;
 }
 - (BOOL)active { return _active; }
 - (BOOL)starting { return _starting && _active; }
@@ -134,6 +138,9 @@ static NSArray<NSNumber *> *sp_ai_luminance(CVPixelBufferRef buffer) {
 - (void)stop {
     if (!_active) return;
     _active = NO;
+    _visualPreviewMode = NO;
+    _visualPreviewStatus = nil;
+    _visualPreviewAt = 0;
     sp_p2p_enable(NO);
     ++_run;
     @synchronized(self) { _captureRun = 0; _busy = NO; }
@@ -316,6 +323,41 @@ static NSArray<NSNumber *> *sp_ai_luminance(CVPixelBufferRef buffer) {
     };
     ((void (*)(id,SEL,NSData *,void (^)(NSString *)))objc_msgSend)(p2p,pred,sp_p2p_latest_frame,completion);
 }
+// Preview the screen policy when the public state is unavailable. No key or click
+// is emitted and no action is recorded as executed in this diagnostic mode.
+- (void)previewP2P:(NSUInteger)run {
+    if (!_visualPreviewMode || !_p2pAvailable || _visualPreviewError || _p2pPending ||
+        !sp_p2p_latest_frame || sp_p2p_latest_at <= _p2pLastUsed ||
+        NSProcessInfo.processInfo.systemUptime - sp_p2p_latest_at > 3.0) return;
+    Class p2p = NSClassFromString(@"SPP2PBridge");
+    SEL pred = NSSelectorFromString(@"predictFrame:completion:");
+    if (![p2p respondsToSelector:pred]) { _visualPreviewError = YES; return; }
+    NSUInteger gen = _p2pGeneration;
+    NSTimeInterval captured = sp_p2p_latest_at;
+    _p2pLastUsed = captured;
+    _p2pPending = YES;
+    __weak SPGameAIController *weak = self;
+    void (^completion)(NSString *) = ^(NSString *answer) {
+        dispatch_async(dispatch_get_main_queue(), ^{
+            SPGameAIController *strong = weak;
+            if (!strong) return;
+            strong->_p2pPending = NO;
+            if (!strong->_active || strong->_run != run || strong->_p2pGeneration != gen ||
+                !strong->_visualPreviewMode) return;
+            if ([answer hasPrefix:@"ERR:"]) {
+                strong->_visualPreviewError = YES;
+                sp_stub_log("AI visual preview: model error");
+                return;
+            }
+            if (![@[@"FORWARD", @"BACK", @"LEFT", @"RIGHT", @"WAIT", @"WARMUP"] containsObject:answer]) return;
+            if (NSProcessInfo.processInfo.systemUptime - captured > 5.0) return;
+            strong->_visualPreviewStatus = [@"VIS " stringByAppendingString:answer];
+            strong->_visualPreviewAt = NSProcessInfo.processInfo.systemUptime;
+            sp_stub_log([[NSString stringWithFormat:@"AI visual preview: %@ (no input)", answer] UTF8String]);
+        });
+    };
+    ((void (*)(id,SEL,NSData *,void (^)(NSString *)))objc_msgSend)(p2p,pred,sp_p2p_latest_frame,completion);
+}
 - (void)pollDirect:(NSUInteger)run {
     if (!_active || _run != run) return;
     NSTimeInterval now = NSProcessInfo.processInfo.systemUptime;
@@ -332,6 +374,27 @@ static NSArray<NSNumber *> *sp_ai_luminance(CVPixelBufferRef buffer) {
         else if (!(f & 4) || (f & 16)) candidate = @"TARGET";
         else if ((f & 8) && sp_ai_game_target_hp > 0) candidate = @"ATTACK";
         else candidate = @"TARGET"; // a friendly NPC is not attackable; seek a hostile target
+    }
+    BOOL preview = (sp_ai_packet_at > 0 && now - sp_ai_packet_at < 6.0 &&
+        (sp_ai_state_reason == 12 || sp_ai_state_reason == 13));
+    if (preview != _visualPreviewMode) {
+        _visualPreviewMode = preview;
+        _visualPreviewStatus = nil;
+        _visualPreviewAt = 0;
+        _visualPreviewError = NO;
+        _p2pLastUsed = 0;
+        [self invalidateDecision];
+        if (self.releaseInput) self.releaseInput();
+        sp_stub_log(preview ? "AI visual preview: protected state; input disabled" : "AI visual preview: exited");
+    }
+    if (preview) {
+        if (!_p2pAvailable) display = @"VIS FILE";
+        else if (_visualPreviewError) display = @"VIS ERR";
+        else {
+            [self previewP2P:run];
+            display = _visualPreviewStatus && now - _visualPreviewAt < 5.0 ?
+                _visualPreviewStatus : @"VIS LOAD";
+        }
     }
     if (!candidate) {
         if (_directCandidate) { ++_directDecisionGeneration; _directPending = NO; }
@@ -393,7 +456,7 @@ static NSArray<NSNumber *> *sp_ai_luminance(CVPixelBufferRef buffer) {
             } else display = @"AI INPUT";
         }
     }
-    if (_p2pAvailable && now-_p2pLastMove < 1.2) display = @"P2P MOVE";
+    if (!preview && _p2pAvailable && now-_p2pLastMove < 1.2) display = @"P2P MOVE";
     if (self.status) self.status(display);
     __weak SPGameAIController *weak = self;
     dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.4 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
@@ -408,6 +471,10 @@ static NSArray<NSNumber *> *sp_ai_luminance(CVPixelBufferRef buffer) {
         if (self.status) self.status(@"LAYA FILE");
         return;
     }
+    _visualPreviewMode = NO;
+    _visualPreviewError = NO;
+    _visualPreviewStatus = nil;
+    _visualPreviewAt = 0;
     _directLayaWarmed = NO;
     _directRulesOnly = NO;
     _directCandidate = _directPlan = nil;

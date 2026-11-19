@@ -211,3 +211,10 @@ assert 'AI telemetry: state unavailable reason' in event
 
 assert 'local function spReadHealthPercent(unit)' in (root / "addon/SPHover/SPHover.lua").read_text()
 assert 'AI HP LOCK' in event and 'AI TGT LOCK' in event
+
+assert 'local function spDisplayHealth(bar, current, capacity)' in (wolkara / "Hud.lua").read_text()
+assert 'spDisplayHealth(frame.health, rawHealth, rawMaxHealth)' in (wolkara / "Hud.lua").read_text()
+preview_source = event.split('- (void)previewP2P:',1)[1].split('- (void)pollDirect:',1)[0]
+assert 'predictFrame:completion:' in preview_source
+assert 'self.action' not in preview_source and 'strong.action' not in preview_source and 'recordMove:' not in preview_source
+assert 'AI visual preview: protected state; input disabled' in event and 'VIS FILE' in event

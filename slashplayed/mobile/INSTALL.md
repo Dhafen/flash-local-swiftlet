@@ -49,3 +49,6 @@ På iPhone visas ett redigerbart textfält direkt ovanför tangentbordet. Skriv 
 AI STRIP = ingen färsk avkodad SPHover-bildremsa, AI SYNC = remsan hittas men ett komplett meddelande saknas, AI DATA = komplett meddelande men ingen användbar aktuell spelstatus. SPHover slutför nu överföring av meddelanden innan det byter till nästa; fel i UI-skanningen ska inte hindra en giltig spelstatus från att skickas. Kontrollera spconsole.log samt Lua-fel i spelet vid problem. Fysisk iPhone-verifiering återstår. Endast för tillåten testmiljö.
 
 SPHover på iPhone skickar även en separat, checksummad heartbeat var 0,5 sekund. Den påverkar inte UI-rektanglarna. Om spelstatus saknas eller upphör att förnyas förblir AI-inmatning spärrad. Loggen skiljer mellan mottagen heartbeat och giltig spelstatus.
+
+### Visual preview for protected health
+When the public API returns protected health, Wolkara attempts to render the normal native health bar without reading or exporting the value. The AI button switches to VIS LOAD, VIS WARMUP, VIS WAIT, VIS FORWARD/BACK/LEFT/RIGHT, VIS FILE or VIS ERR. This is a local Pixel2Play inference preview, not autonomous movement; protected state never authorizes input. Use the installed SPModels/Pixel2Play package. No screenshots are saved. The model's suggestions remain experimental; actual on-device visual accuracy must be validated separately.

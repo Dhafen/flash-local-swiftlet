@@ -1,4 +1,7 @@
-"""Make Forever's restricted unit data optional in the mobile HUD."""
+"""Keep Forever unit health visible with native display-only setters."""
+from pathlib import Path
+
+HEALTH_DISPLAY = Path(__file__).with_name("HealthDisplay.lua").read_text(encoding="utf-8").strip()
 
 
 def protect_hud(source):
@@ -8,6 +11,8 @@ local function Public(value)
     if issecretvalue and issecretvalue(value) then return nil end
     return value
 end
+
+''' + HEALTH_DISPLAY + '''
 
 local function Short(value)'''),
         ('            if not icon then break end',
@@ -23,19 +28,19 @@ local function Short(value)'''),
         frame.health.text:SetText(Short(health) .. " / " .. Short(maxHealth))
     else
         frame.health.text:SetText(percent .. " %")''',
-         '''    local health, maxHealth = Public(UnitHealth(unit)), Public(UnitHealthMax(unit))
+         '''    local rawHealth, rawMaxHealth = UnitHealth(unit), UnitHealthMax(unit)
+    local health, maxHealth = Public(rawHealth), Public(rawMaxHealth)
     if health and maxHealth and maxHealth > 0 then
-        frame.health:SetMinMaxValues(0, maxHealth)
-        frame.health:SetValue(health)
+        spDisplayHealth(frame.health, health, maxHealth)
         if unit == "player" then
             frame.health.text:SetText(Short(health) .. " / " .. Short(maxHealth))
         else
             frame.health.text:SetText(math.floor(health * 100 / maxHealth + 0.5) .. " %")
         end
     else
-        frame.health:SetMinMaxValues(0, 1)
-        frame.health:SetValue(0)
-        frame.health.text:SetText("—")
+        -- Native widgets may display protected values without inspecting them.
+        local shown = spDisplayHealth(frame.health, rawHealth, rawMaxHealth)
+        frame.health.text:SetText(shown and "" or "—")
     end
     if unit ~= "player" then'''),
         ('GetComboPoints("player", "target") or 0', 'Public(GetComboPoints("player", "target")) or 0'),
