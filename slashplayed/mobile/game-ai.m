@@ -352,8 +352,14 @@ static NSArray<NSNumber *> *sp_ai_luminance(CVPixelBufferRef buffer) {
             BOOL move = [@[@"FORWARD", @"BACK", @"LEFT", @"RIGHT", @"STRAFE_LEFT", @"STRAFE_RIGHT"] containsObject:answer];
             if (!move && ![@[@"WAIT", @"WARMUP"] containsObject:answer]) return;
             NSTimeInterval now = NSProcessInfo.processInfo.systemUptime;
-            if (now - captured > 3.0 || sp_ai_packet_at <= 0 || now - sp_ai_packet_at >= 6.0 ||
+            if (sp_ai_packet_at <= 0 || now - sp_ai_packet_at >= 6.0 ||
                 (sp_ai_state_reason != 12 && sp_ai_state_reason != 13)) return;
+            if (now - captured > 3.0) {
+                strong->_visualPreviewStatus = @"VIS SLOW";
+                strong->_visualPreviewAt = now;
+                sp_stub_log([[NSString stringWithFormat:@"AI visual: stale result after %.2fs", now-captured] UTF8String]);
+                return;
+            }
             NSString *display = [@"VIS " stringByAppendingString:answer];
             if (move) {
                 BOOL sent = now - strong->_p2pLastMove >= 0.8 && strong.action &&

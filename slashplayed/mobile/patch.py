@@ -41,9 +41,7 @@ def patch_input():
     UIButton *_mobileRotation, *_mobileAIButton;
     SPGameAIController *_mobileAI;
     BOOL _mobileAIKeyHeld;
-    unsigned short _mobileAIKeyCode;
     NSUInteger _mobileAIKeyGeneration;
-    NSString *_mobileAIKeyText;
     NSTimeInterval _mobileAIManualUntil;
     UIPanGestureRecognizer *_mobileJumpPan, *_mobileRotationPan;
     UITouch *_mobileLeft, *_mobileRight, *_mobileInterface;

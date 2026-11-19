@@ -51,7 +51,10 @@ assert 'if (!_mobileAI.starting) [_mobileAI stop];' in event
 assert 'UISceneDidEnterBackgroundNotification' in event
 assert 'AI NO VID' in event and 'AI NO TEXT' in event and 'AI THINK' in event
 assert 'AI MODEL!' in event and 'AI CAP!' in event
-assert 'sp_mobile_ai_release_key' in event and 'sp_mobile_ai_hold_key:' in event
+assert 'sp_mobile_ai_release_key' in event and 'sp_mobile_ai_hold_axis:' in event
+assert '[_mobileStick driveAI:axis]' in event and 'Test AI movement (forward)' in event
+assert 'AI input: Tactara F12 rotation' in event and 'sp_mobile_emit_rotation();' in event
+assert 'VIS SLOW' in event
 assert 'NSProcessInfo.processInfo.systemUptime - captured <= 8.0' in event
 assert 'input->_mobileAIManualUntil' in event
 assert '[parts[0] isEqualToString:@"INTERACT"]' in event

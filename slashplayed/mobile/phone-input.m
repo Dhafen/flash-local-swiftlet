@@ -5,6 +5,8 @@
 @interface SPMobileStick : UIView
 - (void)setOrigin:(CGPoint)origin displacement:(CGPoint)delta;
 - (void)stop;
+- (void)prepareAI;
+- (BOOL)driveAI:(CGPoint)axis;
 @end
 
 @implementation SPMobileStick {
@@ -71,6 +73,19 @@
     self.hidden = NO;
     [self connectIfNeeded];
     if (_connected && changed) [_virtualController setPosition:value forDirectionPadElement:GCInputLeftThumbstick];
+}
+
+- (void)prepareAI { [self connectIfNeeded]; }
+
+// Reuse the actual virtual controller used by the manual touch path.
+- (BOOL)driveAI:(CGPoint)axis {
+    [self connectIfNeeded];
+    if (!_connected || !_virtualController.controller || !self.window ||
+        self.window.windowScene.activationState != UISceneActivationStateForegroundActive) return NO;
+    _value = axis;
+    self.hidden = YES;
+    [_virtualController setPosition:axis forDirectionPadElement:GCInputLeftThumbstick];
+    return YES;
 }
 
 - (void)stop {
@@ -220,6 +235,7 @@ static UIButton *sp_mobile_button(NSString *title, NSString *label, id owner, SE
 
 - (void)sp_mobile_cancel {
     if (!_mobileStick) return;
+    ++_mobileAIKeyGeneration;
     [self sp_mobile_ai_release_key];
     if (_mobileAI.active) [_mobileAI invalidateDecision];
     _mobileAIManualUntil = NSProcessInfo.processInfo.systemUptime + 1.0;
@@ -294,14 +310,18 @@ static UIButton *sp_mobile_button(NSString *title, NSString *label, id owner, SE
             input->_mobileEditing || input->_mobileLeft || input->_mobileRight || input->_mobileInterface ||
             input->_touches.count || sp_mouse_buttons || !input->_mobileDirect ||
             captured < input->_mobileAIManualUntil || NSProcessInfo.processInfo.systemUptime < input->_mobileAIManualUntil) return NO;
-        if ([action isEqualToString:@"ATTACK"]) sp_mobile_emit_rotation();
+        if ([action isEqualToString:@"ATTACK"]) {
+            [input sp_mobile_ai_release_key];
+            sp_mobile_emit_rotation();
+            sp_stub_log("AI input: Tactara F12 rotation");
+        }
         else if ([action isEqualToString:@"TARGET"]) sp_soft_emit(@"\t", 0x30, NO);
-        else if ([action isEqualToString:@"FORWARD"]) [input sp_mobile_ai_hold_key:0x0D text:@"w"];
-        else if ([action isEqualToString:@"BACK"]) [input sp_mobile_ai_hold_key:0x01 text:@"s"];
-        else if ([action isEqualToString:@"LEFT"]) [input sp_mobile_ai_hold_key:0x00 text:@"a"];
-        else if ([action isEqualToString:@"RIGHT"]) [input sp_mobile_ai_hold_key:0x02 text:@"d"];
-        else if ([action isEqualToString:@"STRAFE_LEFT"]) [input sp_mobile_ai_hold_key:0x0C text:@"q"];
-        else if ([action isEqualToString:@"STRAFE_RIGHT"]) [input sp_mobile_ai_hold_key:0x0E text:@"e"];
+        else if ([action isEqualToString:@"FORWARD"]) return [input sp_mobile_ai_hold_axis:CGPointMake(0,1)];
+        else if ([action isEqualToString:@"BACK"]) return [input sp_mobile_ai_hold_axis:CGPointMake(0,-1)];
+        else if ([action isEqualToString:@"LEFT"] || [action isEqualToString:@"STRAFE_LEFT"])
+            return [input sp_mobile_ai_hold_axis:CGPointMake(-1,0)];
+        else if ([action isEqualToString:@"RIGHT"] || [action isEqualToString:@"STRAFE_RIGHT"])
+            return [input sp_mobile_ai_hold_axis:CGPointMake(1,0)];
         else if ([action isEqualToString:@"INTERACT"] || [action isEqualToString:@"CLICK"]) {
             CGRect bounds = input.window.bounds;
             CGPoint screen = CGPointMake(CGRectGetMinX(bounds) + point.x * bounds.size.width,
@@ -420,7 +440,11 @@ static UIButton *sp_mobile_button(NSString *title, NSString *label, id owner, SE
         [prefs setBool:![prefs boolForKey:@"sp_wolkara_extra_controls"] forKey:@"sp_wolkara_extra_controls"];
         [input setNeedsLayout];
     }];
-    return [UIMenu menuWithTitle:@"Game controls" children:@[escape, jump, showJump, rotation, showRotation, resetRotation, play, mode, legacy]];
+    UIAction *aiTest = [UIAction actionWithTitle:@"Test AI movement (forward)" image:nil identifier:nil handler:^(__kindof UIAction *action) {
+        SPInputView *input = weakSelf;
+        if (input) [input sp_mobile_ai_test];
+    }];
+    return [UIMenu menuWithTitle:@"Game controls" children:@[escape, jump, showJump, rotation, showRotation, resetRotation, play, mode, aiTest, legacy]];
 }
 
 - (void)sp_mobile_layout:(CGRect)game top:(CGFloat)top {
@@ -556,40 +580,48 @@ static UIButton *sp_mobile_button(NSString *title, NSString *label, id owner, SE
     if (!_mobileAIKeyHeld) return;
     _mobileAIKeyHeld = NO;
     ++_mobileAIKeyGeneration;
-    SPEvent *event = sp_event(SPKeyUp);
-    event->keyCode = _mobileAIKeyCode;
-    event->modifierFlags = 0;
-    event->characters = event->charactersIgnoringModifiers = _mobileAIKeyText;
-    BOOL wasTyping = sp_soft_typing;
-    sp_soft_typing = YES;
-    sp_post(event);
-    sp_soft_typing = wasTyping;
+    [_mobileStick stop];
 }
-- (void)sp_mobile_ai_hold_key:(unsigned short)code text:(NSString *)text {
+- (BOOL)sp_mobile_ai_hold_axis:(CGPoint)axis {
     [self sp_mobile_ai_release_key];
-    if (!_mobileAI.active) return;
+    if (![_mobileStick driveAI:axis]) {
+        sp_stub_log("AI input: virtual controller not ready");
+        return NO;
+    }
     _mobileAIKeyHeld = YES;
-    _mobileAIKeyCode = code;
-    _mobileAIKeyText = text;
     NSUInteger generation = ++_mobileAIKeyGeneration;
-    SPEvent *event = sp_event(SPKeyDown);
-    event->keyCode = code;
-    event->modifierFlags = 0;
-    event->characters = event->charactersIgnoringModifiers = text;
-    BOOL wasTyping = sp_soft_typing;
-    sp_soft_typing = YES;
-    sp_post(event);
-    sp_soft_typing = wasTyping;
+    sp_stub_log([[NSString stringWithFormat:@"AI input: virtual stick %.1f %.1f", axis.x, axis.y] UTF8String]);
     __weak SPInputView *weakSelf = self;
-    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.35 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.55 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
         SPInputView *input = weakSelf;
         if (input && input->_mobileAIKeyGeneration == generation) [input sp_mobile_ai_release_key];
+    });
+    return YES;
+}
+// A user-triggered one-shot movement test independent of the AI model.
+- (void)sp_mobile_ai_test {
+    if (_mobileAI.active) [_mobileAI stop];
+    [self sp_mobile_ai_release_key];
+    NSUInteger generation = ++_mobileAIKeyGeneration;
+    [_mobileStick prepareAI];
+    __weak SPInputView *weakSelf = self;
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1.0 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+        SPInputView *input = weakSelf;
+        if (!input || input->_mobileAIKeyGeneration != generation || input->_mobileAI.active ||
+            !sp_client_window || input->_softField.isFirstResponder || !input->_mobileDirect ||
+            !input.window || input.window.windowScene.activationState != UISceneActivationStateForegroundActive ||
+            input->_mobileEditing || input->_mobileLeft || input->_mobileRight || input->_mobileInterface ||
+            input->_touches.count || sp_mouse_buttons) return;
+        BOOL sent = [input sp_mobile_ai_hold_axis:CGPointMake(0,1)];
+        [input->_mobileAIButton setTitle:sent ? @"TEST MOVE" : @"TEST INPUT" forState:UIControlStateNormal];
     });
 }
 - (void)sp_mobile_ai_toggle:(UIButton *)button {
     if (_mobileAI.active) { [_mobileAI stop]; return; }
     if (!sp_client_window || _softField.isFirstResponder || _mobileEditing ||
         _mobileLeft || _mobileRight || _mobileInterface || _touches.count || sp_mouse_buttons) return;
+    ++_mobileAIKeyGeneration;
+    [_mobileStick prepareAI];
     [_mobileAI start];
 }
 
@@ -684,6 +716,7 @@ static UIButton *sp_mobile_button(NSString *title, NSString *label, id owner, SE
 
 - (void)touchesBegan:(NSSet<UITouch *> *)touches withEvent:(UIEvent *)event {
 #if !TARGET_OS_VISION
+    ++_mobileAIKeyGeneration;
     [self sp_mobile_ai_release_key];
     if (_mobileAI.active) [_mobileAI invalidateDecision];
     _mobileAIManualUntil = NSProcessInfo.processInfo.systemUptime + 1.0;

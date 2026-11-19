@@ -129,7 +129,9 @@ final class SPP2PBridge: NSObject, @unchecked Sendable {
         for i in 0..<8 { prefix[i] = NSNumber(value: noop[i]) }
         // Decode in the checkpoint's autoregressive order; padded logits are never choices.
         var generated: [Int] = []
-        for slot in 0..<8 {
+        // Only the four keyboard slots can affect the movement adapter.
+        // Mouse slots are causally later and cannot change these logits.
+        for slot in 0..<4 {
             let d = try MLDictionaryFeatureProvider(dictionary: ["context":ctx,"prefix":prefix])
             guard let logits = try decoder.prediction(from:d).featureValue(for:"logits")?.multiArrayValue,
                   logits.count == 8*23 else { throw PortError.output }
@@ -145,7 +147,7 @@ final class SPP2PBridge: NSObject, @unchecked Sendable {
         // Report raw categorical IDs so genuine no-op can be distinguished from
         // a prediction outside the movement adapter's supported action set.
         let result = SPP2PAction.movement(generated)
-        NSLog("Pixel2Play: action IDs %@ -> %@", generated.map(String.init).joined(separator: ","), result)
+        NSLog("Pixel2Play: keyboard IDs %@ -> %@", generated.map(String.init).joined(separator: ","), result)
         pending = result
         return result
     }
