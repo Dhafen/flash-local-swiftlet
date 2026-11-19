@@ -87,5 +87,6 @@ final class SPGameAIModel: NSObject {
 public func sp_game_ai_register() {
 #if os(iOS)
     _ = NSStringFromClass(SPGameAIModel.self)
+    _ = NSStringFromClass(SPP2PBridge.self)
 #endif
 }

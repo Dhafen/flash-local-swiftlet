@@ -10,3 +10,6 @@ The initial export reduces 200-frame history to 4, omits text conditioning (uses
 - Benchmark both packages on iPhone, with the game active.
 - Add direct Metal readback in the existing renderer path, a rolling frame/action buffer and sequential decoding of the 8 action slots. Laya remains the supervisor; allowlisted movement, camera and safe action mapping only, plus manual override and cancellation.
 - Verify against an authorized game test environment. Do not claim autonomous questing or WoW coverage from generic gameplay pretraining.
+
+
+The next commit adds an optional native Swift runtime and a throttled readback hook. The runtime accepts the exporter manifest only when both macOS validation reports pass and proposes whitelisted movement commands when the Laya target-search supervisor permits it. Remaining gates still apply: actual model export/parity, native build, device latency and gameplay. The first on-device loop uses one frame per second with letterboxing, no camera/mouse execution, and discards stale proposals. No claim that the full original action mapping or full 200-frame context is implemented.

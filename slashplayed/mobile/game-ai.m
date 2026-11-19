@@ -4,6 +4,19 @@
 #import <Vision/Vision.h>
 #import <CoreMedia/CoreMedia.h>
 #import <ImageIO/ImageIO.h>
+#include <stdatomic.h>
+#include <stdbool.h>
+
+static atomic_bool sp_p2p_capture_enabled;
+static atomic_uint sp_p2p_capture_epoch;
+static NSData *sp_p2p_latest_frame;
+static NSTimeInterval sp_p2p_latest_at;
+static void sp_p2p_enable(BOOL enabled) {
+    atomic_fetch_add(&sp_p2p_capture_epoch, 1);
+    atomic_store(&sp_p2p_capture_enabled, enabled);
+    sp_p2p_latest_frame = nil;
+    sp_p2p_latest_at = 0;
+}
 
 // State emitted by the game's own read-only addon API. Written and read on main.
 static uint8_t sp_ai_game_flags, sp_ai_game_hp, sp_ai_game_target_hp;
@@ -40,6 +53,9 @@ static void sp_ai_game_update(const uint8_t *data, size_t length) {
     NSUInteger _directDecisionGeneration;
     NSString *_directCandidate, *_directPlan;
     NSTimeInterval _directNextAction, _directPlanAt;
+    BOOL _p2pAvailable, _p2pPending;
+    NSTimeInterval _p2pLastUsed, _p2pLastMove;
+    NSUInteger _p2pGeneration;
 }
 - (BOOL)active { return _active; }
 - (BOOL)starting { return _starting && _active; }
@@ -48,6 +64,11 @@ static void sp_ai_game_update(const uint8_t *data, size_t length) {
     Class bridge = NSClassFromString(@"SPGameAIModel");
     SEL selector = NSSelectorFromString(@"resetDecision");
     if ([bridge respondsToSelector:selector]) ((void (*)(id, SEL))objc_msgSend)(bridge, selector);
+    ++_p2pGeneration;
+    // Keep single-flight ownership until the previous callback finishes.
+    Class p2p = NSClassFromString(@"SPP2PBridge");
+    SEL reset = NSSelectorFromString(@"resetHistory");
+    if ([p2p respondsToSelector:reset]) ((void (*)(id, SEL))objc_msgSend)(p2p, reset);
 }
 
 // Summarize the full video frame (BGRA or NV12) without storing any frame.
@@ -89,6 +110,7 @@ static NSArray<NSNumber *> *sp_ai_luminance(CVPixelBufferRef buffer) {
 - (void)stop {
     if (!_active) return;
     _active = NO;
+    sp_p2p_enable(NO);
     ++_run;
     @synchronized(self) { _captureRun = 0; _busy = NO; }
     ++_directDecisionGeneration;
@@ -226,6 +248,50 @@ static NSArray<NSNumber *> *sp_ai_luminance(CVPixelBufferRef buffer) {
         [strong watchCapture:run];
     });
 }
+- (void)tryP2P:(NSUInteger)run {
+    if (!_p2pAvailable || _p2pPending || !sp_p2p_latest_frame ||
+        sp_p2p_latest_at <= _p2pLastUsed ||
+        NSProcessInfo.processInfo.systemUptime - sp_p2p_latest_at > 3.0) return;
+    Class p2p = NSClassFromString(@"SPP2PBridge");
+    SEL pred = NSSelectorFromString(@"predictFrame:completion:");
+    if (![p2p respondsToSelector:pred]) return;
+    NSUInteger gen = _p2pGeneration;
+    NSTimeInterval captured = sp_p2p_latest_at;
+    _p2pLastUsed = captured;
+    _p2pPending = YES;
+    __weak SPGameAIController *weak = self;
+    void (^completion)(NSString *) = ^(NSString *answer) {
+        dispatch_async(dispatch_get_main_queue(), ^{
+            SPGameAIController *strong = weak;
+            if (!strong) return;
+            strong->_p2pPending = NO;
+            if (!strong->_active || strong->_run != run || strong->_p2pGeneration != gen) return;
+            if ([answer hasPrefix:@"ERR:"]) {
+                strong->_p2pAvailable = NO;
+                sp_p2p_enable(NO);
+                if (strong.status) strong.status(@"P2P ERR");
+                return;
+            }
+            NSTimeInterval now = NSProcessInfo.processInfo.systemUptime;
+            unsigned f = sp_ai_game_flags;
+            // Only seek in a known, living unmounted state with no selected living hostile.
+            BOOL seeking = !(f & (2|32|64)) && sp_ai_game_hp >= 35 &&
+                (!(f & 4) || (f & 16) || !(f & 8));
+            BOOL allowed = strong->_directRulesOnly || [strong->_directPlan isEqualToString:@"TARGET"];
+            if (!seeking || !allowed || sp_ai_game_at <= 0 || now-sp_ai_game_at >= 6.0 ||
+                now-captured > 3.0 || now-strong->_p2pLastMove < 0.8) return;
+            if (![@[@"FORWARD",@"BACK",@"LEFT",@"RIGHT"] containsObject:answer]) return;
+            if (strong.action && strong.action(answer, CGPointZero, captured)) {
+                strong->_p2pLastMove = now;
+                SEL record = NSSelectorFromString(@"recordMove:");
+                if ([p2p respondsToSelector:record])
+                    ((void (*)(id,SEL,NSString *))objc_msgSend)(p2p,record,answer);
+                if (strong.status) strong.status(@"P2P MOVE");
+            }
+        });
+    };
+    ((void (*)(id,SEL,NSData *,void (^)(NSString *)))objc_msgSend)(p2p,pred,sp_p2p_latest_frame,completion);
+}
 - (void)pollDirect:(NSUInteger)run {
     if (!_active || _run != run) return;
     NSTimeInterval now = NSProcessInfo.processInfo.systemUptime;
@@ -287,6 +353,8 @@ static NSArray<NSNumber *> *sp_ai_luminance(CVPixelBufferRef buffer) {
         }
         BOOL authorized = _directRulesOnly || [_directPlan isEqualToString:candidate];
         display = _directPending ? (_directLayaWarmed ? @"LAYA THINK" : @"LAYA LOAD") : (_directRulesOnly ? @"RULE WAIT" : @"LAYA WAIT");
+        if (authorized && [candidate isEqualToString:@"TARGET"] && !(sp_ai_game_flags & 32))
+            [self tryP2P:run];
         if (authorized && now >= _directNextAction && self.action) {
             BOOL sent = self.action(candidate, CGPointZero, sp_ai_game_at);
             if (sent) {
@@ -296,6 +364,7 @@ static NSArray<NSNumber *> *sp_ai_luminance(CVPixelBufferRef buffer) {
             } else display = @"AI INPUT";
         }
     }
+    if (_p2pAvailable && now-_p2pLastMove < 1.2) display = @"P2P MOVE";
     if (self.status) self.status(display);
     __weak SPGameAIController *weak = self;
     dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.4 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
@@ -315,6 +384,12 @@ static NSArray<NSNumber *> *sp_ai_luminance(CVPixelBufferRef buffer) {
     _directCandidate = _directPlan = nil;
     _directPending = NO;
     _directNextAction = 0;
+    Class p2p = NSClassFromString(@"SPP2PBridge");
+    SEL available = NSSelectorFromString(@"available");
+    _p2pAvailable = [p2p respondsToSelector:available] && ((BOOL (*)(id,SEL))objc_msgSend)(p2p,available);
+    _p2pLastUsed = _p2pLastMove = 0;
+    [self invalidateDecision];
+    sp_p2p_enable(_p2pAvailable);
     _active = YES;
     NSUInteger run = ++_run;
     if (self.status) self.status(@"AI ON");

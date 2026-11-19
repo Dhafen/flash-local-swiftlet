@@ -196,3 +196,8 @@ if len(sys.argv) > 2:
 assert 'SPLayaRuntime.shared.decide' in (root / 'apps/client/spgameai.swift').read_text()
 assert 'cpuAndNeuralEngine' in (root / 'apps/client/SPLayaRuntime.swift').read_text()
 assert 'LAYA FILE' in event and 'AI INPUT' in event
+
+assert 'SPP2PRuntime.swift' in (root / 'apps/client/build-launcher.sh').read_text()
+assert 'sp_p2p_capture(cb, tex)' in (root / 'shims/appkit/sphover.m').read_text()
+assert 'sp_p2p_enable(NO)' in event and 'tryP2P:' in event
+assert 'recordMove:' in (root / 'apps/client/SPP2PRuntime.swift').read_text()

@@ -166,8 +166,9 @@ ai_swift = ROOT / "apps/client/spgameai.swift"
 ai_swift.write_bytes(Path(__file__).with_name("spgameai.swift").read_bytes())
 (ROOT / "apps/client/SPAIGraph.swift").write_bytes(Path(__file__).with_name("SPAIGraph.swift").read_bytes())
 (ROOT / "apps/client/SPLayaRuntime.swift").write_bytes(Path(__file__).with_name("SPLayaRuntime.swift").read_bytes())
+(ROOT / "apps/client/SPP2PRuntime.swift").write_bytes(Path(__file__).with_name("SPP2PRuntime.swift").read_bytes())
 launcher_build = ROOT / "apps/client/build-launcher.sh"
-replace_once(launcher_build, "sppatchscreen.swift -o", "sppatchscreen.swift SPLayaRuntime.swift SPAIGraph.swift spgameai.swift -o")
+replace_once(launcher_build, "sppatchscreen.swift -o", "sppatchscreen.swift SPLayaRuntime.swift SPP2PRuntime.swift SPAIGraph.swift spgameai.swift -o")
 launcher_main = ROOT / "apps/client/launcher.m"
 replace_once(launcher_main, "int main(int argc, char **argv) {",
              "extern void sp_game_ai_register(void);\nint main(int argc, char **argv) {\n    sp_game_ai_register();")
@@ -192,3 +193,11 @@ replace_once(hover_native, "    sp_hover_set_rects(fractions, n);", """    sp_ho
     if (getenv("SP_PHONE_UI_RECTS"))
         sp_ai_game_update(sp_hover_asm.data + offset, bytes > offset ? bytes - offset : 0);
 #endif""")
+
+# Stage opt-in, low-rate direct Metal game-frame readback for validated P2P packages.
+replace_once(hover_native, "static void sp_hover_capture(id<MTLCommandBuffer> cb, id drawable) {",
+    Path(__file__).with_name("p2p-capture.m").read_text() + "\nstatic void sp_hover_capture(id<MTLCommandBuffer> cb, id drawable) {")
+replace_once(hover_native, "    MTLPixelFormat format = tex.pixelFormat;", """#if !TARGET_OS_VISION
+    sp_p2p_capture(cb, tex);
+#endif
+    MTLPixelFormat format = tex.pixelFormat;""")
