@@ -208,3 +208,6 @@ assert 'recordMove:' in (root / 'apps/client/SPP2PRuntime.swift').read_text()
 
 assert 'local function unavailable(code)' in (root / "addon/SPHover/SPHover.lua").read_text()
 assert 'AI telemetry: state unavailable reason' in event
+
+assert 'local function spReadHealthPercent(unit)' in (root / "addon/SPHover/SPHover.lua").read_text()
+assert 'AI HP LOCK' in event and 'AI TGT LOCK' in event

@@ -30,7 +30,7 @@ static void sp_ai_game_update(const uint8_t *data, size_t length) {
         !(data[2] & 1) || data[3] > 100 || data[4] > 100) {
         int reason = length >= 6 && data[0] == 'A' && data[1] == 'I' && !(data[2] & 1) ? data[3] : 0;
         if (sp_ai_payload_status != 0 || reason != sp_ai_state_reason) {
-            static const char *const reasons[] = {"missing payload", "UnitExists(player)", "UnitHealthMax(player)", "UnitHealth(player)", "player death API", "UnitExists(target)", "target attack/player API", "target death API", "target health API", "UnitAffectingCombat", "IsMounted", "GetTime/encoding"};
+            static const char *const reasons[] = {"missing payload", "UnitExists(player)", "UnitHealthMax(player)", "UnitHealth(player)", "player death API", "UnitExists(target)", "target attack/player API", "target death API", "target health API", "UnitAffectingCombat", "IsMounted", "GetTime/encoding", "player health restricted", "target health restricted"};
             const char *why = reason >= 0 && reason < sizeof reasons / sizeof reasons[0] ? reasons[reason] : "unknown reason";
             sp_stub_log([[NSString stringWithFormat:@"AI telemetry: state unavailable reason %d (%s)", reason, why] UTF8String]);
         }
@@ -323,6 +323,8 @@ static NSArray<NSNumber *> *sp_ai_luminance(CVPixelBufferRef buffer) {
     NSString *display = @"AI DATA";
     if (sp_ai_strip_at <= 0 || now - sp_ai_strip_at >= 6.0) display = @"AI STRIP";
     else if (sp_ai_packet_at <= 0 || now - sp_ai_packet_at >= 6.0) display = @"AI SYNC";
+    else if (sp_ai_state_reason == 12) display = @"AI HP LOCK";
+    else if (sp_ai_state_reason == 13) display = @"AI TGT LOCK";
     else if (sp_ai_state_reason > 0) display = [NSString stringWithFormat:@"AI DATA %d", sp_ai_state_reason];
     if (sp_ai_game_at > 0 && now - sp_ai_game_at < 6.0) {
         unsigned f = sp_ai_game_flags;

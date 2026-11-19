@@ -29,6 +29,8 @@ jobs:
           lua5.1 slashplayed/mobile/tests/test_combat.lua slashplayed/mobile/addons
           lua5.1 slashplayed/mobile/tests/test_cooldowns.lua slashplayed/mobile/SpellCooldowns.lua
           lua5.1 slashplayed/mobile/tests/test_phone_layout.lua slashplayed/mobile/PhoneLayout.lua
+          luac5.1 -p slashplayed/mobile/HealthTelemetry.lua
+          lua5.1 slashplayed/mobile/tests/test_health_telemetry.lua slashplayed/mobile/HealthTelemetry.lua
           lua5.1 slashplayed/mobile/tests/test_wolkara_setup.lua slashplayed/mobile/WolkaraSetup.lua
           cc -Wall -Wextra -Werror -o "$RUNNER_TEMP/touch-zone" slashplayed/mobile/tests/test_touch_zone.c
           "$RUNNER_TEMP/touch-zone"

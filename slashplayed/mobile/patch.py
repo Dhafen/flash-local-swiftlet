@@ -310,16 +310,11 @@ replace_once(hover_native, '    if (getenv("SP_PHONE_UI_RECTS"))\n        sp_ai_
 hover_text = hover_lua.read_text()
 state_start = hover_text.index("local function spAIState()")
 state_end = hover_text.index("\nlocal function scan()", state_start)
-hover_text = hover_text[:state_start] + """local function spAIState()
+hover_text = hover_text[:state_start] + Path(__file__).with_name("HealthTelemetry.lua").read_text() + "\n" + """local function spAIState()
     if not SPPhoneTouchRects then return "" end
     local stage = 1
     local function unavailable(code)
         return string.char(65, 73, 0, code, 0, 0)
-    end
-    local function numberValue(value)
-        if type(issecretvalue) == "function" and issecretvalue(value) then error("restricted value") end
-        if type(value) ~= "number" then error("not numeric") end
-        return value
     end
     local function boolValue(value)
         if type(issecretvalue) == "function" and issecretvalue(value) then error("restricted value") end
@@ -334,11 +329,9 @@ hover_text = hover_text[:state_start] + """local function spAIState()
     end
     local ok, state = pcall(function()
         if not boolValue(UnitExists("player")) then return unavailable(1) end
-        stage = 2
-        local capacity = numberValue(UnitHealthMax("player"))
-        if capacity <= 0 then return unavailable(2) end
         stage = 3
-        local hp = floor(max(0, min(100, 100 * numberValue(UnitHealth("player")) / capacity)) + 0.5)
+        local hp, healthError = spReadHealthPercent("player")
+        if hp == nil then return unavailable(healthError == "restricted" and 12 or 3) end
         local flags = 1
         stage = 4
         if dead("player") then flags = flags + 2 end
@@ -352,10 +345,9 @@ hover_text = hover_text[:state_start] + """local function spAIState()
             stage = 7
             if dead("target") then flags = flags + 16 end
             stage = 8
-            local targetMax = numberValue(UnitHealthMax("target"))
-            if targetMax > 0 then
-                targetHP = floor(max(0, min(100, 100 * numberValue(UnitHealth("target")) / targetMax)) + 0.5)
-            end
+            local targetError
+            targetHP, targetError = spReadHealthPercent("target")
+            if targetHP == nil then return unavailable(targetError == "restricted" and 13 or 8) end
         end
         stage = 9
         if boolValue(UnitAffectingCombat("player")) then flags = flags + 32 end
