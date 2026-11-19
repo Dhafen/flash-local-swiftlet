@@ -31,18 +31,24 @@ static void sp_p2p_capture(id<MTLCommandBuffer> cb, id<MTLTexture> tex) {
             atomic_store(&sp_p2p_inflight,false);
             return;
         }
-        // Preserve aspect ratio with black bars; cut the telemetry strip.
+        // The original model resizes the full rectangle to 192x192, without
+        // letterboxing. Use area averaging (not the upstream Hamming kernel)
+        // to approximate antialiased downsampling; omit the hidden strip.
         NSMutableData *sample = [NSMutableData dataWithLength:3*192*192];
         uint8_t *out = sample.mutableBytes;
         const uint8_t *src = buf.contents;
-        double scale = MIN(192.0/w,192.0/(h-4));
-        double dw = w*scale, dh = (h-4)*scale;
-        for (int y=0;y<192;y++) for (int x=0;x<192;x++) {
-            double sx=(x+0.5-(192-dw)/2)/scale, sy=(y+0.5-(192-dh)/2)/scale;
-            if (sx<0 || sx>=w || sy<0 || sy>=h-4) continue;
-            const uint8_t *p=src+(size_t)sy*stride+(size_t)sx*4;
+        const size_t visibleH = h - 4;
+        for (size_t y=0;y<192;y++) for (size_t x=0;x<192;x++) {
+            size_t x0=x*w/192, x1=(x+1)*w/192;
+            size_t y0=y*visibleH/192, y1=(y+1)*visibleH/192;
+            unsigned red=0, green=0, blue=0, count=0;
+            for (size_t sy=y0;sy<y1;sy++) for (size_t sx=x0;sx<x1;sx++) {
+                const uint8_t *p=src+sy*stride+sx*4;
+                red+=p[bgra?2:0]; green+=p[1]; blue+=p[bgra?0:2]; ++count;
+            }
+            if (!count) continue;
             size_t i=y*192+x;
-            out[i]=p[bgra?2:0]; out[192*192+i]=p[1]; out[2*192*192+i]=p[bgra?0:2];
+            out[i]=red/count; out[192*192+i]=green/count; out[2*192*192+i]=blue/count;
         }
         dispatch_async(dispatch_get_main_queue(), ^{
             if (atomic_load(&sp_p2p_capture_enabled) && atomic_load(&sp_p2p_capture_epoch)==epoch) {

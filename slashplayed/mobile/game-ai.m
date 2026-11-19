@@ -311,7 +311,7 @@ static NSArray<NSNumber *> *sp_ai_luminance(CVPixelBufferRef buffer) {
             BOOL allowed = strong->_directRulesOnly || [strong->_directPlan isEqualToString:@"TARGET"];
             if (!seeking || !allowed || sp_ai_game_at <= 0 || now-sp_ai_game_at >= 6.0 ||
                 now-captured > 3.0 || now-strong->_p2pLastMove < 0.8) return;
-            if (![@[@"FORWARD",@"BACK",@"LEFT",@"RIGHT"] containsObject:answer]) return;
+            if (![@[@"FORWARD",@"BACK",@"LEFT",@"RIGHT",@"STRAFE_LEFT",@"STRAFE_RIGHT"] containsObject:answer]) return;
             if (strong.action && strong.action(answer, CGPointZero, captured)) {
                 strong->_p2pLastMove = now;
                 SEL record = NSSelectorFromString(@"recordMove:");
@@ -323,8 +323,8 @@ static NSArray<NSNumber *> *sp_ai_luminance(CVPixelBufferRef buffer) {
     };
     ((void (*)(id,SEL,NSData *,void (^)(NSString *)))objc_msgSend)(p2p,pred,sp_p2p_latest_frame,completion);
 }
-// Preview the screen policy when the public state is unavailable. No key or click
-// is emitted and no action is recorded as executed in this diagnostic mode.
+// Explicit AI-button visual movement experiment. No player-health value is
+// inferred or exported. Only one bounded predicted movement; no combat/clicks.
 - (void)previewP2P:(NSUInteger)run {
     if (!_visualPreviewMode || !_p2pAvailable || _visualPreviewError || _p2pPending ||
         !sp_p2p_latest_frame || sp_p2p_latest_at <= _p2pLastUsed ||
@@ -349,11 +349,26 @@ static NSArray<NSNumber *> *sp_ai_luminance(CVPixelBufferRef buffer) {
                 sp_stub_log("AI visual preview: model error");
                 return;
             }
-            if (![@[@"FORWARD", @"BACK", @"LEFT", @"RIGHT", @"WAIT", @"WARMUP"] containsObject:answer]) return;
-            if (NSProcessInfo.processInfo.systemUptime - captured > 5.0) return;
-            strong->_visualPreviewStatus = [@"VIS " stringByAppendingString:answer];
-            strong->_visualPreviewAt = NSProcessInfo.processInfo.systemUptime;
-            sp_stub_log([[NSString stringWithFormat:@"AI visual preview: %@ (no input)", answer] UTF8String]);
+            BOOL move = [@[@"FORWARD", @"BACK", @"LEFT", @"RIGHT", @"STRAFE_LEFT", @"STRAFE_RIGHT"] containsObject:answer];
+            if (!move && ![@[@"WAIT", @"WARMUP"] containsObject:answer]) return;
+            NSTimeInterval now = NSProcessInfo.processInfo.systemUptime;
+            if (now - captured > 3.0 || sp_ai_packet_at <= 0 || now - sp_ai_packet_at >= 6.0 ||
+                (sp_ai_state_reason != 12 && sp_ai_state_reason != 13)) return;
+            NSString *display = [@"VIS " stringByAppendingString:answer];
+            if (move) {
+                BOOL sent = now - strong->_p2pLastMove >= 0.8 && strong.action &&
+                    strong.action(answer, CGPointZero, captured);
+                if (sent) {
+                    strong->_p2pLastMove = now;
+                    SEL record = NSSelectorFromString(@"recordMove:");
+                    if ([p2p respondsToSelector:record])
+                        ((void (*)(id,SEL,NSString *))objc_msgSend)(p2p,record,answer);
+                    display = [@"MOVE " stringByAppendingString:answer];
+                } else display = @"VIS INPUT";
+                sp_stub_log([[NSString stringWithFormat:@"AI visual: %@ sent=%d", answer, sent] UTF8String]);
+            }
+            strong->_visualPreviewStatus = display;
+            strong->_visualPreviewAt = now;
         });
     };
     ((void (*)(id,SEL,NSData *,void (^)(NSString *)))objc_msgSend)(p2p,pred,sp_p2p_latest_frame,completion);
@@ -385,7 +400,7 @@ static NSArray<NSNumber *> *sp_ai_luminance(CVPixelBufferRef buffer) {
         _p2pLastUsed = 0;
         [self invalidateDecision];
         if (self.releaseInput) self.releaseInput();
-        sp_stub_log(preview ? "AI visual preview: protected state; input disabled" : "AI visual preview: exited");
+        sp_stub_log(preview ? "AI visual: movement-only mode; health unknown; combat disabled" : "AI visual: exited");
     }
     if (preview) {
         if (!_p2pAvailable) display = @"VIS FILE";

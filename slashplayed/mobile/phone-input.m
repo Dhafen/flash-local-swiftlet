@@ -300,6 +300,8 @@ static UIButton *sp_mobile_button(NSString *title, NSString *label, id owner, SE
         else if ([action isEqualToString:@"BACK"]) [input sp_mobile_ai_hold_key:0x01 text:@"s"];
         else if ([action isEqualToString:@"LEFT"]) [input sp_mobile_ai_hold_key:0x00 text:@"a"];
         else if ([action isEqualToString:@"RIGHT"]) [input sp_mobile_ai_hold_key:0x02 text:@"d"];
+        else if ([action isEqualToString:@"STRAFE_LEFT"]) [input sp_mobile_ai_hold_key:0x0C text:@"q"];
+        else if ([action isEqualToString:@"STRAFE_RIGHT"]) [input sp_mobile_ai_hold_key:0x0E text:@"e"];
         else if ([action isEqualToString:@"INTERACT"] || [action isEqualToString:@"CLICK"]) {
             CGRect bounds = input.window.bounds;
             CGPoint screen = CGPointMake(CGRectGetMinX(bounds) + point.x * bounds.size.width,

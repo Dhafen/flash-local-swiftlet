@@ -216,5 +216,16 @@ assert 'local function spDisplayHealth(bar, current, capacity)' in (wolkara / "H
 assert 'spDisplayHealth(frame.health, rawHealth, rawMaxHealth)' in (wolkara / "Hud.lua").read_text()
 preview_source = event.split('- (void)previewP2P:',1)[1].split('- (void)pollDirect:',1)[0]
 assert 'predictFrame:completion:' in preview_source
-assert 'self.action' not in preview_source and 'strong.action' not in preview_source and 'recordMove:' not in preview_source
-assert 'AI visual preview: protected state; input disabled' in event and 'VIS FILE' in event
+assert 'strong.action(answer, CGPointZero, captured)' in preview_source and 'recordMove:' in preview_source
+assert '@"ATTACK"' not in preview_source and '@"CLICK"' not in preview_source
+assert 'health unknown; combat disabled' in event and 'VIS FILE' in event
+assert 'now - captured > 3.0' in preview_source and 'VIS INPUT' in preview_source
+assert 'STRAFE_LEFT' in event and 'STRAFE_RIGHT' in event
+if sys.platform == "darwin" and len(sys.argv) == 2:
+    import subprocess
+    import tempfile
+    with tempfile.TemporaryDirectory() as tmp:
+        binary = str(Path(tmp) / "p2p-action-tests")
+        subprocess.run(["xcrun", "swiftc", str(root / "apps/client/SPP2PRuntime.swift"),
+                        str(Path(__file__).with_name("test_p2p_actions.swift")), "-o", binary], check=True)
+        subprocess.run([binary], check=True)

@@ -52,3 +52,6 @@ SPHover på iPhone skickar även en separat, checksummad heartbeat var 0,5 sekun
 
 ### Visual preview for protected health
 When the public API returns protected health, Wolkara attempts to render the normal native health bar without reading or exporting the value. The AI button switches to VIS LOAD, VIS WARMUP, VIS WAIT, VIS FORWARD/BACK/LEFT/RIGHT, VIS FILE or VIS ERR. This is a local Pixel2Play inference preview, not autonomous movement; protected state never authorizes input. Use the installed SPModels/Pixel2Play package. No screenshots are saved. The model's suggestions remain experimental; actual on-device visual accuracy must be validated separately.
+
+### Visual movement experiment
+The AI button now explicitly enables a movement-only Pixel2Play path when health is unavailable, for authorized testing. It uses upstream-style categorical sampling and full-frame resize (area averaging rather than Hamming). MOVE shows a bounded movement pulse was sent, VIS INPUT indicates input was blocked, and VIS WAIT indicates no supported movement was predicted. No combat or clicks are authorized by this path and unknown health is never invented. Manual touch, stale frames, and backgrounding block input. WoW policy quality is not validated. Existing model files unchanged.

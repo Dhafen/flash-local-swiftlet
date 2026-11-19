@@ -1,4 +1,32 @@
 import Foundation
+
+// Upstream uses categorical sampling (temperature 1 by default), not argmax.
+// Keep the whole legal vocabulary, including no-op, and never force movement.
+enum SPP2PAction {
+    static func sample(_ logits: [Double], uniform: Double) -> Int? {
+        guard let peak = logits.max(), peak.isFinite,
+              logits.allSatisfy({ $0.isFinite }), uniform >= 0, uniform < 1 else { return nil }
+        let weights = logits.map { exp($0 - peak) }
+        let total = weights.reduce(0,+)
+        guard total.isFinite, total > 0 else { return nil }
+        var remaining = uniform * total
+        for (i, weight) in weights.enumerated() {
+            remaining -= weight
+            if remaining < 0 { return i }
+        }
+        return weights.lastIndex(where: { $0 > 0 })
+    }
+    // Pinned upstream action_mapping.py keyboard IDs; retain exactly one
+    // supported movement, not arbitrary keys or clicks.
+    static let moves = [6:"LEFT",7:"RIGHT",8:"STRAFE_RIGHT",10:"STRAFE_LEFT",
+                        11:"FORWARD",12:"BACK",14:"BACK",15:"FORWARD",16:"LEFT",17:"RIGHT"]
+    static let executedIDs: [String:Int32] = ["FORWARD":11,"BACK":12,"LEFT":6,"RIGHT":7,
+                                              "STRAFE_LEFT":10,"STRAFE_RIGHT":8]
+    static func movement(_ ids: [Int]) -> String {
+        ids.prefix(4).compactMap { moves[$0] }.first ?? "WAIT"
+    }
+}
+
 #if os(iOS)
 import CoreML
 
@@ -44,8 +72,7 @@ final class SPP2PBridge: NSObject, @unchecked Sendable {
     class func recordMove(_ command: String) {
         shared.queue.async {
             guard shared.pending == command, !shared.actions.isEmpty else { return }
-            let ids: [String:Int32] = ["FORWARD":11,"BACK":12,"LEFT":6,"RIGHT":7]
-            if let id = ids[command] { shared.actions[shared.actions.count - 1][0] = id }
+            if let id = SPP2PAction.executedIDs[command] { shared.actions[shared.actions.count - 1][0] = id }
             shared.pending = nil
         }
     }
@@ -106,20 +133,19 @@ final class SPP2PBridge: NSObject, @unchecked Sendable {
             let d = try MLDictionaryFeatureProvider(dictionary: ["context":ctx,"prefix":prefix])
             guard let logits = try decoder.prediction(from:d).featureValue(for:"logits")?.multiArrayValue,
                   logits.count == 8*23 else { throw PortError.output }
-            var index = 0
-            var value = -Double.infinity
-            for c in 0..<vocab[slot] {
-                let score = logits[[0, NSNumber(value:slot), NSNumber(value:c)]].doubleValue
-                guard score.isFinite else { throw PortError.output }
-                if score > value { index = c; value = score }
+            let scores = (0..<vocab[slot]).map { c in
+                logits[[0, NSNumber(value:slot), NSNumber(value:c)]].doubleValue
+            }
+            guard let index = SPP2PAction.sample(scores, uniform: Double.random(in: 0..<1)) else {
+                throw PortError.output
             }
             prefix[slot] = NSNumber(value:index)
             generated.append(index)
         }
-        // Movement only: do not run arbitrary keys or clicks. The native Laya
-        // supervisor checks fresh game state, and the input layer supports one key.
-        let allowed = [11:"FORWARD",12:"BACK",6:"LEFT",7:"RIGHT",14:"BACK",15:"FORWARD",16:"LEFT",17:"RIGHT"]
-        let result = generated.prefix(4).compactMap { allowed[$0] }.first ?? "WAIT"
+        // Report raw categorical IDs so genuine no-op can be distinguished from
+        // a prediction outside the movement adapter's supported action set.
+        let result = SPP2PAction.movement(generated)
+        NSLog("Pixel2Play: action IDs %@ -> %@", generated.map(String.init).joined(separator: ","), result)
         pending = result
         return result
     }
