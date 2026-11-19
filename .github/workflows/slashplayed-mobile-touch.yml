@@ -7,7 +7,7 @@ on:
       - slashplayed/keyboard/**
       - slashplayed/mobile/**
   push:
-    branches: [experiment/slashplayed-floating-controls]
+    branches: [experiment/slashplayed-floating-controls, experiment/slashplayed-laya-p2p]
   workflow_dispatch:
 
 permissions:
@@ -149,5 +149,28 @@ jobs:
         with:
           name: Slashplayed-iPhone-Wolkara-Windows-Companion
           path: ${{ runner.temp }}/slashplayed-windows-companion-kit
+          retention-days: 30
+          if-no-files-found: error
+
+  laya-model:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    if: github.ref == 'refs/heads/experiment/slashplayed-laya-p2p'
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - name: Prepare original local Laya Core ML package and decision inputs
+        run: |
+          set -euo pipefail
+          python3 -m venv "$RUNNER_TEMP/laya-env"
+          "$RUNNER_TEMP/laya-env/bin/pip" install 'huggingface_hub==0.36.0' 'tokenizers==0.22.2'
+          "$RUNNER_TEMP/laya-env/bin/python" slashplayed/mobile/prepare_laya.py "$RUNNER_TEMP/laya-assets"
+      - name: Upload separate model bundle
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: Slashplayed-Laya-Model
+          path: ${{ runner.temp }}/laya-assets
+          compression-level: 0
           retention-days: 30
           if-no-files-found: error

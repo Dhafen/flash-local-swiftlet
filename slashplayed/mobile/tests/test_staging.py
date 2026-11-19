@@ -192,3 +192,7 @@ if len(sys.argv) > 2:
             for toc in (root / "addon").glob("Hekili*/*.toc"):
                 assert base + "addons/" + toc.relative_to(root / "addon").as_posix() in names
         assert not any(re.search(r"(^|/)(WTF|Cache|Data)/", n, re.I) for n in names)
+
+assert 'SPLayaRuntime.shared.decide' in (root / 'apps/client/spgameai.swift').read_text()
+assert 'cpuAndNeuralEngine' in (root / 'apps/client/SPLayaRuntime.swift').read_text()
+assert 'LAYA FILE' in event and 'AI INPUT' in event

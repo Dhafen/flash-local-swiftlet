@@ -165,8 +165,9 @@ print("Patched 1.5.1: floating iPhone controls, Forever Touchbars, MIT notices")
 ai_swift = ROOT / "apps/client/spgameai.swift"
 ai_swift.write_bytes(Path(__file__).with_name("spgameai.swift").read_bytes())
 (ROOT / "apps/client/SPAIGraph.swift").write_bytes(Path(__file__).with_name("SPAIGraph.swift").read_bytes())
+(ROOT / "apps/client/SPLayaRuntime.swift").write_bytes(Path(__file__).with_name("SPLayaRuntime.swift").read_bytes())
 launcher_build = ROOT / "apps/client/build-launcher.sh"
-replace_once(launcher_build, "sppatchscreen.swift -o", "sppatchscreen.swift SPAIGraph.swift spgameai.swift -o")
+replace_once(launcher_build, "sppatchscreen.swift -o", "sppatchscreen.swift SPLayaRuntime.swift SPAIGraph.swift spgameai.swift -o")
 launcher_main = ROOT / "apps/client/launcher.m"
 replace_once(launcher_main, "int main(int argc, char **argv) {",
              "extern void sp_game_ai_register(void);\nint main(int argc, char **argv) {\n    sp_game_ai_register();")

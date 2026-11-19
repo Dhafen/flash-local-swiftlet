@@ -36,7 +36,7 @@ static void sp_ai_game_update(const uint8_t *data, size_t length) {
     NSUInteger _run, _captureRun;
     BOOL _busy;
     NSTimeInterval _nextFrame, _lastFrame;
-    BOOL _directRulesOnly, _directPending;
+    BOOL _directRulesOnly, _directPending, _directLayaWarmed;
     NSUInteger _directDecisionGeneration;
     NSString *_directCandidate, *_directPlan;
     NSTimeInterval _directNextAction, _directPlanAt;
@@ -236,7 +236,7 @@ static NSArray<NSNumber *> *sp_ai_luminance(CVPixelBufferRef buffer) {
         if ((f & 2) || (f & 64) || sp_ai_game_hp < 35) display = @"AI REST";
         else if (!(f & 4) || (f & 16)) candidate = @"TARGET";
         else if ((f & 8) && sp_ai_game_target_hp > 0) candidate = @"ATTACK";
-        else display = @"AI FRIEND";
+        else candidate = @"TARGET"; // a friendly NPC is not attackable; seek a hostile target
     }
     if (!candidate) {
         if (_directCandidate) { ++_directDecisionGeneration; _directPending = NO; }
@@ -256,14 +256,17 @@ static NSArray<NSNumber *> *sp_ai_luminance(CVPixelBufferRef buffer) {
             else {
                 _directPending = YES;
                 NSUInteger gen = ++_directDecisionGeneration;
-                NSString *state = [NSString stringWithFormat:@"Player HP %u percent; target HP %u percent; in combat %s.",
-                    sp_ai_game_hp, sp_ai_game_target_hp, (sp_ai_game_flags & 32) ? "yes" : "no"];
+                NSString *hp = sp_ai_game_hp < 40 ? @"low" : sp_ai_game_hp < 75 ? @"medium" : @"high";
+                NSString *targetHP = sp_ai_game_target_hp < 35 ? @"low" : sp_ai_game_target_hp < 75 ? @"medium" : @"high";
+                NSString *state = [NSString stringWithFormat:@"%@:%@:%@:%@", candidate, hp,
+                    (sp_ai_game_flags & 32) ? @"combat" : @"peace", targetHP];
                 __weak SPGameAIController *weak = self;
                 void (^completion)(NSString *) = ^(NSString *answer) {
                     dispatch_async(dispatch_get_main_queue(), ^{
                         SPGameAIController *strong = weak;
                         if (!strong || !strong->_active || strong->_run != run || strong->_directDecisionGeneration != gen) return;
                         strong->_directPending = NO;
+                        strong->_directLayaWarmed = YES;
                         strong->_directPlanAt = NSProcessInfo.processInfo.systemUptime;
                         if ([answer hasPrefix:@"ERR:"]) {
                             sp_stub_log([[@"AI model: " stringByAppendingString:answer] UTF8String]);
@@ -272,7 +275,7 @@ static NSArray<NSNumber *> *sp_ai_luminance(CVPixelBufferRef buffer) {
                     });
                 };
                 ((void (*)(id, SEL, NSString *, NSString *, void (^)(NSString *)))objc_msgSend)(bridge, selector, state, candidate, completion);
-                dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 6 * NSEC_PER_SEC), dispatch_get_main_queue(), ^{
+                dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)((_directLayaWarmed ? 6 : 90) * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
                     SPGameAIController *strong = weak;
                     if (!strong || !strong->_active || strong->_run != run || strong->_directDecisionGeneration != gen || !strong->_directPending) return;
                     ++strong->_directDecisionGeneration;
@@ -283,13 +286,15 @@ static NSArray<NSNumber *> *sp_ai_luminance(CVPixelBufferRef buffer) {
             }
         }
         BOOL authorized = _directRulesOnly || [_directPlan isEqualToString:candidate];
-        display = _directPending ? @"AI THINK" : (_directRulesOnly ? @"RULE WAIT" : @"AI WAIT");
-        if (authorized && now >= _directNextAction && self.action &&
-            self.action(candidate, CGPointZero, sp_ai_game_at)) {
-            _directNextAction = now + ([candidate isEqualToString:@"TARGET"] ? 3.0 : 0.85);
+        display = _directPending ? (_directLayaWarmed ? @"LAYA THINK" : @"LAYA LOAD") : (_directRulesOnly ? @"RULE WAIT" : @"LAYA WAIT");
+        if (authorized && now >= _directNextAction && self.action) {
+            BOOL sent = self.action(candidate, CGPointZero, sp_ai_game_at);
+            if (sent) {
+                _directNextAction = now + ([candidate isEqualToString:@"TARGET"] ? 3.0 : 0.85);
+                display = [NSString stringWithFormat:@"%@ %@", _directRulesOnly ? @"RULE" : @"LAYA",
+                    [candidate isEqualToString:@"ATTACK"] ? @"F12" : @"TAB"];
+            } else display = @"AI INPUT";
         }
-        if (authorized) display = [NSString stringWithFormat:@"%@ %@", _directRulesOnly ? @"RULE" : @"AI",
-            [candidate isEqualToString:@"ATTACK"] ? @"F12" : @"TAB"];
     }
     if (self.status) self.status(display);
     __weak SPGameAIController *weak = self;
@@ -300,8 +305,13 @@ static NSArray<NSNumber *> *sp_ai_luminance(CVPixelBufferRef buffer) {
 - (void)start {
     if (_active || _starting || _stopping) return;
     Class bridge = NSClassFromString(@"SPGameAIModel");
-    SEL ready = NSSelectorFromString(@"ready");
-    _directRulesOnly = ![bridge respondsToSelector:ready] || !((BOOL (*)(id, SEL))objc_msgSend)(bridge, ready);
+    SEL ready = NSSelectorFromString(@"layaReady");
+    if (![bridge respondsToSelector:ready] || !((BOOL (*)(id, SEL))objc_msgSend)(bridge, ready)) {
+        if (self.status) self.status(@"LAYA FILE");
+        return;
+    }
+    _directLayaWarmed = NO;
+    _directRulesOnly = NO;
     _directCandidate = _directPlan = nil;
     _directPending = NO;
     _directNextAction = 0;

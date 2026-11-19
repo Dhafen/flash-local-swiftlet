@@ -22,8 +22,15 @@ final class SPGameAIModel: NSObject {
         harness.didExecute(action, observation: decoded)
     }
 
+    @objc class func layaReady() -> Bool { SPLayaRuntime.assetsPresent() }
+
     @objc(decideGameState:candidate:completion:)
-    class func decideGameState(_ state: String, candidate: String, completion: @escaping (String) -> Void) {
+    class func decideGameState(_ state: String, candidate: String, completion: @escaping @Sendable (String) -> Void) {
+        SPLayaRuntime.shared.decide(key: state, candidate: candidate, completion: completion)
+    }
+
+    // Retain the prior Apple model bridge for non-default experiments.
+    class func decideAppleGameState(_ state: String, candidate: String, completion: @escaping (String) -> Void) {
         Task { @MainActor in
             guard SystemLanguageModel.default.isAvailable else { completion("ERR:unavailable"); return }
             do {
