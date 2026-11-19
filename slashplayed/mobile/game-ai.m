@@ -5,6 +5,21 @@
 #import <CoreMedia/CoreMedia.h>
 #import <ImageIO/ImageIO.h>
 
+// State emitted by the game's own read-only addon API. Written and read on main.
+static uint8_t sp_ai_game_flags, sp_ai_game_hp, sp_ai_game_target_hp;
+static NSTimeInterval sp_ai_game_at;
+static void sp_ai_game_update(const uint8_t *data, size_t length) {
+    if (length < 6 || data[0] != 'A' || data[1] != 'I' ||
+        !(data[2] & 1) || data[3] > 100 || data[4] > 100) {
+        sp_ai_game_at = 0;
+        return;
+    }
+    sp_ai_game_flags = data[2];
+    sp_ai_game_hp = data[3];
+    sp_ai_game_target_hp = data[4];
+    sp_ai_game_at = NSProcessInfo.processInfo.systemUptime;
+}
+
 @interface SPGameAIController : NSObject
 @property(nonatomic, readonly) BOOL active;
 @property(nonatomic, readonly) BOOL starting;
@@ -21,6 +36,10 @@
     NSUInteger _run, _captureRun;
     BOOL _busy;
     NSTimeInterval _nextFrame, _lastFrame;
+    BOOL _directRulesOnly, _directPending;
+    NSUInteger _directDecisionGeneration;
+    NSString *_directCandidate, *_directPlan;
+    NSTimeInterval _directNextAction, _directPlanAt;
 }
 - (BOOL)active { return _active; }
 - (BOOL)starting { return _starting && _active; }
@@ -72,6 +91,8 @@ static NSArray<NSNumber *> *sp_ai_luminance(CVPixelBufferRef buffer) {
     _active = NO;
     ++_run;
     @synchronized(self) { _captureRun = 0; _busy = NO; }
+    ++_directDecisionGeneration;
+    _directPending = NO;
     if (self.releaseInput) self.releaseInput();
     [self invalidateDecision];
     [self haltCapture];
@@ -205,7 +226,93 @@ static NSArray<NSNumber *> *sp_ai_luminance(CVPixelBufferRef buffer) {
         [strong watchCapture:run];
     });
 }
+- (void)pollDirect:(NSUInteger)run {
+    if (!_active || _run != run) return;
+    NSTimeInterval now = NSProcessInfo.processInfo.systemUptime;
+    NSString *candidate = nil;
+    NSString *display = @"AI DATA";
+    if (sp_ai_game_at > 0 && now - sp_ai_game_at < 6.0) {
+        unsigned f = sp_ai_game_flags;
+        if ((f & 2) || (f & 64) || sp_ai_game_hp < 35) display = @"AI REST";
+        else if (!(f & 4) || (f & 16)) candidate = @"TARGET";
+        else if ((f & 8) && sp_ai_game_target_hp > 0) candidate = @"ATTACK";
+        else display = @"AI FRIEND";
+    }
+    if (!candidate) {
+        if (_directCandidate) { ++_directDecisionGeneration; _directPending = NO; }
+        _directCandidate = _directPlan = nil;
+    } else {
+        if (![_directCandidate isEqualToString:candidate]) {
+            ++_directDecisionGeneration;
+            _directCandidate = candidate;
+            _directPlan = nil;
+            _directPending = NO;
+        }
+        if (!_directRulesOnly && !_directPending &&
+            (!_directPlan || now - _directPlanAt > 12.0)) {
+            Class bridge = NSClassFromString(@"SPGameAIModel");
+            SEL selector = NSSelectorFromString(@"decideGameState:candidate:completion:");
+            if (![bridge respondsToSelector:selector]) _directRulesOnly = YES;
+            else {
+                _directPending = YES;
+                NSUInteger gen = ++_directDecisionGeneration;
+                NSString *state = [NSString stringWithFormat:@"Player HP %u percent; target HP %u percent; in combat %s.",
+                    sp_ai_game_hp, sp_ai_game_target_hp, (sp_ai_game_flags & 32) ? "yes" : "no"];
+                __weak SPGameAIController *weak = self;
+                void (^completion)(NSString *) = ^(NSString *answer) {
+                    dispatch_async(dispatch_get_main_queue(), ^{
+                        SPGameAIController *strong = weak;
+                        if (!strong || !strong->_active || strong->_run != run || strong->_directDecisionGeneration != gen) return;
+                        strong->_directPending = NO;
+                        strong->_directPlanAt = NSProcessInfo.processInfo.systemUptime;
+                        if ([answer hasPrefix:@"ERR:"]) {
+                            sp_stub_log([[@"AI model: " stringByAppendingString:answer] UTF8String]);
+                            strong->_directRulesOnly = YES;
+                        } else strong->_directPlan = [answer isEqualToString:candidate] ? candidate : @"WAIT";
+                    });
+                };
+                ((void (*)(id, SEL, NSString *, NSString *, void (^)(NSString *)))objc_msgSend)(bridge, selector, state, candidate, completion);
+                dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 6 * NSEC_PER_SEC), dispatch_get_main_queue(), ^{
+                    SPGameAIController *strong = weak;
+                    if (!strong || !strong->_active || strong->_run != run || strong->_directDecisionGeneration != gen || !strong->_directPending) return;
+                    ++strong->_directDecisionGeneration;
+                    strong->_directPending = NO;
+                    strong->_directRulesOnly = YES;
+                    sp_stub_log("AI model: response timeout; using deterministic game-state rules");
+                });
+            }
+        }
+        BOOL authorized = _directRulesOnly || [_directPlan isEqualToString:candidate];
+        display = _directPending ? @"AI THINK" : (_directRulesOnly ? @"RULE WAIT" : @"AI WAIT");
+        if (authorized && now >= _directNextAction && self.action &&
+            self.action(candidate, CGPointZero, sp_ai_game_at)) {
+            _directNextAction = now + ([candidate isEqualToString:@"TARGET"] ? 3.0 : 0.85);
+        }
+        if (authorized) display = [NSString stringWithFormat:@"%@ %@", _directRulesOnly ? @"RULE" : @"AI",
+            [candidate isEqualToString:@"ATTACK"] ? @"F12" : @"TAB"];
+    }
+    if (self.status) self.status(display);
+    __weak SPGameAIController *weak = self;
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.4 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+        [weak pollDirect:run];
+    });
+}
 - (void)start {
+    if (_active || _starting || _stopping) return;
+    Class bridge = NSClassFromString(@"SPGameAIModel");
+    SEL ready = NSSelectorFromString(@"ready");
+    _directRulesOnly = ![bridge respondsToSelector:ready] || !((BOOL (*)(id, SEL))objc_msgSend)(bridge, ready);
+    _directCandidate = _directPlan = nil;
+    _directPending = NO;
+    _directNextAction = 0;
+    _active = YES;
+    NSUInteger run = ++_run;
+    if (self.status) self.status(@"AI ON");
+    [self pollDirect:run];
+}
+
+// Keep the earlier screen-based experiment available in source for later testing.
+- (void)startScreen {
     if (_active || _starting || _stopping) return;
     Class bridge = NSClassFromString(@"SPGameAIModel");
     SEL ready = NSSelectorFromString(@"ready");

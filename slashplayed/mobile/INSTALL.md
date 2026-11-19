@@ -26,3 +26,8 @@ Funktionen är ett experiment i en tillåten testmiljö. Vision klassificerar he
 ### Återställning & diagnostik
 
 Appen startar alltid i Play-läget. Dra på nedre vänstra delen av spelbilden för att visa den flytande styrspaken. Håll inne tangentbordsknappen och välj Restore floating joystick (Play) om den saknas. UI-läget kan användas för att flytta paneler, men kan stängas av igen. Skärmfångstens behörighetsdialog ska inte längre stoppa en pågående AI-start. AI-knappen visar AI ON… (behörighet), AI VIDEO (bildfångst startad), AI THINK (modell), AI WAIT (inget säkert beslut), AI SLOW (för gammalt beslut), AI NO TEXT (ingen läsbar text), AI NO VID (bildrutor saknas), AI CAP! (skärmfångstfel), AI MODEL! (modellfel), samt faktiskt utförd handling. Tryck på samma knapp för att stoppa. Funktion på riktig telefon måste bekräftas.
+
+
+### Direkt spelläge (ny standard)
+
+AI-knappen läser nu spelstatus från SPHover-addonet genom dess befintliga bildremsprotokoll: hälsa, valt mål, om målet är attackbart/är en NPC, om målet är dött, strid och om spelaren är monterad. Ingen ReplayKit-dialog för detta läge. Apple-modellen får bara en liten strukturerad spelstatus och kan välja en tillåten handling eller vänta. Om modellen inte är tillgänglig, returnerar fel eller överskrider sex sekunder används regelbaserad styrning (RULE F12/TAB), inte en AI-modell. AI DATA = addondata saknas, AI FRIEND = vänligt/icke attackbart mål, AI REST = låg hälsa/död/monterad, AI THINK = modell, AI F12/TAB = planerad åtgärd. Inaktuella data ger inga handlingar. Detta är en första strids-/målsökningsversion: questlogg, navigering och loot är inte implementerade i direktläget. Tidigare OCR-experiment finns i källkoden men är inte standard. Testa på fysisk iPhone i en tillåten spelmiljö.

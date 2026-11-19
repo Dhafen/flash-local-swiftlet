@@ -174,3 +174,20 @@ shim_build = ROOT / "shims/generated/build.sh"
 replace_once(shim_build, '$CC -fobjc-arc -dynamiclib -O1 -Wno-objc-root-class libspAppKit.m',
              'AI_FRAMEWORKS=""\nif [ "$PLATFORM" = ios ]; then AI_FRAMEWORKS="-framework Vision -framework ReplayKit -framework CoreMedia -framework CoreVideo"; fi\n'
              '$CC $AI_FRAMEWORKS -fobjc-arc -dynamiclib -O1 -Wno-objc-root-class libspAppKit.m')
+
+# Extend the existing pixel-strip message; don't request ReplayKit permission for
+# the default AI path. Keep the existing UI rectangle decoder compatible.
+hover_lua = ROOT / "addon/SPHover/SPHover.lua"
+replace_once(hover_lua, "local function scan()", "-- Read-only, compact game telemetry; appended to the existing SPHover message.\nlocal function spAIState()\n    if not SPPhoneTouchRects then return \"\" end\n    local ok, state = pcall(function()\n        if not UnitExists(\"player\") or UnitHealthMax(\"player\") <= 0 then return \"\" end\n        local flags = 1\n        if UnitIsDeadOrGhost(\"player\") then flags = flags + 2 end\n        if UnitExists(\"target\") then\n            flags = flags + 4\n            if UnitCanAttack(\"player\", \"target\") and not UnitIsPlayer(\"target\") then flags = flags + 8 end\n            if UnitIsDeadOrGhost(\"target\") then flags = flags + 16 end\n        end\n        if UnitAffectingCombat(\"player\") then flags = flags + 32 end\n        if IsMounted and IsMounted() then flags = flags + 64 end\n        local hp = floor(max(0, min(100, 100 * UnitHealth(\"player\") / UnitHealthMax(\"player\"))) + 0.5)\n        local targetHP = 0\n        if UnitExists(\"target\") and UnitHealthMax(\"target\") > 0 then\n            targetHP = floor(max(0, min(100, 100 * UnitHealth(\"target\") / UnitHealthMax(\"target\"))) + 0.5)\n        end\n        return string.char(65, 73, flags, hp, targetHP, floor(GetTime() / 2) % 256)\n    end)\n    return ok and state or \"\"\nend\n\nlocal function scan()")
+replace_once(hover_lua, "return string.char(floor(n / 256), n % 256) .. table.concat(out)",
+             "return string.char(floor(n / 256), n % 256) .. table.concat(out) .. spAIState()")
+strip_header = ROOT / "shims/appkit/sphoverstrip.h"
+replace_once(strip_header, "(2 + SPH_MAX_RECTS * 6)", "(2 + SPH_MAX_RECTS * 6 + 6)")
+hover_native = ROOT / "shims/appkit/sphover.m"
+replace_once(hover_native, "    sp_hover_set_rects(fractions, n);", """    sp_hover_set_rects(fractions, n);
+#if !TARGET_OS_VISION
+    size_t offset = 2 + (size_t)n * 6;
+    size_t bytes = sp_hover_asm.count * SPH_PAYLOAD_BYTES;
+    if (getenv("SP_PHONE_UI_RECTS"))
+        sp_ai_game_update(sp_hover_asm.data + offset, bytes > offset ? bytes - offset : 0);
+#endif""")

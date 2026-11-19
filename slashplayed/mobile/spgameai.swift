@@ -22,6 +22,27 @@ final class SPGameAIModel: NSObject {
         harness.didExecute(action, observation: decoded)
     }
 
+    @objc(decideGameState:candidate:completion:)
+    class func decideGameState(_ state: String, candidate: String, completion: @escaping (String) -> Void) {
+        Task { @MainActor in
+            guard SystemLanguageModel.default.isAvailable else { completion("ERR:unavailable"); return }
+            do {
+                let session = LanguageModelSession(instructions: """
+                You are choosing a move in a fictional video game test.
+                The game engine has supplied one permissible move. Choose that move
+                or WAIT if the player should not proceed. Reply with exactly the move
+                name or WAIT.
+                """)
+                let response = try await session.respond(to: state + " Permissible move: " + candidate)
+                let answer = response.content.trimmingCharacters(in: .whitespacesAndNewlines).uppercased()
+                completion(answer == candidate ? candidate : "WAIT")
+            } catch {
+                let e = error as NSError
+                completion("ERR:\(e.domain):\(e.code)")
+            }
+        }
+    }
+
     @objc(decide:completion:)
     class func decide(_ observation: String, completion: @escaping (String) -> Void) {
         Task { @MainActor in
@@ -46,6 +67,8 @@ final class SPGameAIModel: NSObject {
                 let response = try await session.respond(to: String(plan.prompt.prefix(3000)))
                 completion(harness.validate(response.content, for: plan).wire)
             } catch {
+                let e = error as NSError
+                NSLog("AI model generation error: %@ %ld", e.domain, e.code)
                 completion("ERROR")
             }
         }

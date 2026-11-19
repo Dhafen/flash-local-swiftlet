@@ -16,6 +16,11 @@ kit = (root / "scripts/release/device-kit.sh").read_text()
 assert 'SP_PHONE_UI_RECTS' in (root / 'apps/client/launcher.m').read_text()
 assert 'sp_mobile_end_interface' in event
 assert '@interface SPGameAIController' in event
+assert 'sp_ai_game_update' in event and 'pollDirect:' in event
+assert 'decideGameState:candidate:completion:' in event
+assert 'sp_ai_game_update(sp_hover_asm.data + offset' in (root / "shims/appkit/sphover.m").read_text()
+assert 'SPH_MAX_RECTS * 6 + 6' in (root / "shims/appkit/sphoverstrip.h").read_text()
+assert '.. spAIState()' in (root / "addon/SPHover/SPHover.lua").read_text()
 assert '[_mobileAI stop];' in event
 assert 'sp_mobile_emit_rotation()' in event
 assert 'RPSampleBufferTypeVideo' in event
