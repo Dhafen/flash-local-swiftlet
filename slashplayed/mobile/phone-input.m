@@ -298,7 +298,9 @@ static UIButton *sp_mobile_button(NSString *title, NSString *label, id owner, SE
     _mobileAIButton.titleLabel.font = [UIFont systemFontOfSize:10 weight:UIFontWeightSemibold];
     _mobileAIButton.layer.cornerRadius = 22;
     _mobileAIButton.hidden = YES;
-    for (UIButton *button in @[_mobileRotation, _mobileUI, _mobileEdit, _mobileSpeed, _mobileReset, _mobileAIButton, _softToggle])
+    // The AI toggle is an explicit request to start or stop automation.
+    // TouchDown on the other controls still yields to manual input.
+    for (UIButton *button in @[_mobileRotation, _mobileUI, _mobileEdit, _mobileSpeed, _mobileReset, _softToggle])
         [button addTarget:self action:@selector(sp_mobile_ai_yield:) forControlEvents:UIControlEventTouchDown];
     _mobileAI.releaseInput = ^{
         SPInputView *input = weakSelf;
@@ -353,7 +355,7 @@ static UIButton *sp_mobile_button(NSString *title, NSString *label, id owner, SE
         if (!input) return;
         [input->_mobileAIButton setTitle:status forState:UIControlStateNormal];
         input->_mobileAIButton.backgroundColor = input->_mobileAI.active
-            ? [UIColor colorWithRed:0.65 green:0.15 blue:0.15 alpha:0.85] : [UIColor colorWithWhite:0 alpha:0.55];
+            ? [UIColor colorWithRed:0.10 green:0.39 blue:0.22 alpha:0.92] : [UIColor colorWithWhite:0 alpha:0.55];
         input->_mobileAIButton.accessibilityHint = input->_mobileAI.active
             ? @"Tap to stop AI" : @"Tap to start AI; the title shows the last status";
     };
@@ -637,7 +639,16 @@ static UIButton *sp_mobile_button(NSString *title, NSString *label, id owner, SE
         _mobileLeft || _mobileRight || _mobileInterface || _touches.count || sp_mouse_buttons) return;
     ++_mobileAIKeyGeneration;
     [_mobileStick prepareAI];
-    [_mobileAI start];
+    // Begin after UIKit finishes the button event, so its highlight cannot
+    // reject the first action. Gate the deferred task with the input generation.
+    NSUInteger generation = _mobileAIKeyGeneration;
+    __weak SPInputView *weakSelf = self;
+    dispatch_async(dispatch_get_main_queue(), ^{
+        SPInputView *input = weakSelf;
+        if (!input || input->_mobileAIKeyGeneration != generation || !sp_client_window ||
+            input.window.windowScene.activationState != UISceneActivationStateForegroundActive) return;
+        [input->_mobileAI start];
+    });
 }
 
 - (void)sp_mobile_rotation:(UIButton *)button {

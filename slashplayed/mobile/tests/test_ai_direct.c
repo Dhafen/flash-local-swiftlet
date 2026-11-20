@@ -89,6 +89,10 @@ int main(void) {
     assert(plan.phase == SP_FARM_SEARCH && plan.usePixel2Play);
     plan = sp_ai_plan_farm(SP_AI_ATTACK, 13, 129, 1, false, &examples);
     assert(plan.phase == SP_FARM_ENGAGE && !plan.usePixel2Play);
+    plan = sp_ai_plan_farm(SP_AI_ATTACK, 13, 129 + 8 * 8, 0, false, &examples);
+    assert(plan.phase == SP_FARM_APPROACH && plan.movement == SP_MOVE_FORWARD);
+    assert(sp_ai_nav_has_slot(0.8, sp_ai_direct_interval(SP_AI_ATTACK, true)));
+    assert(!sp_ai_nav_has_slot(0.8, sp_ai_direct_interval(SP_AI_ATTACK, false)));
     plan = sp_ai_plan_farm(SP_AI_ATTACK, 45, 129 + 8 * 8, 2, false, &examples);
     assert(plan.phase == SP_FARM_APPROACH && plan.movement == SP_MOVE_FORWARD);
     plan = sp_ai_plan_farm(SP_AI_ATTACK, 45, 129 + 8 * 11, 2, true, &examples);

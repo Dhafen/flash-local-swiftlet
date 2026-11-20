@@ -239,3 +239,9 @@ assert 'sp_ai_health_known' in event and '@"HP? F12"' in event
 assert 'sp_ai_nav_feedback' in event and 'sp_ai_nav_has_slot' in event
 assert 'sp_mobile_ai_yield:' in event and 'UIControlEventTouchDown' in event
 assert 'NSProcessInfoThermalStateCritical' in event
+
+start_method = event.split("- (void)sp_mobile_ai_toggle:(UIButton *)button {", 1)[1].split("\n}", 1)[0]
+assert "dispatch_async(dispatch_get_main_queue()" in start_method
+assert "input->_mobileAIKeyGeneration != generation" in start_method
+manual_button_group = next(line for line in event.splitlines() if "@[_mobileRotation, _mobileUI, _mobileEdit" in line)
+assert "_mobileAIButton" not in manual_button_group

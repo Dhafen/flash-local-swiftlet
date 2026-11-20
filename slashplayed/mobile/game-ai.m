@@ -622,8 +622,7 @@ static NSArray<NSNumber *> *sp_ai_luminance(CVPixelBufferRef buffer) {
                 if (decision == SP_AI_LOOT) ++_lootAttempts;
                 BOOL approach = plan.phase == SP_FARM_APPROACH &&
                     (visibleMove != SP_MOVE_NONE || plan.usePixel2Play);
-                _directNextAction = now + (decision == SP_AI_TARGET || approach ? 3.2 :
-                    decision == SP_AI_LOOT ? 1.4 : 0.85);
+                _directNextAction = now + sp_ai_direct_interval(decision, approach);
                 BOOL unknownHP = !sp_ai_health_known(sp_ai_game_hp);
                 _directLastAction = decision == SP_AI_ATTACK ? (unknownHP ? @"HP? F12" : @"AI F12") :
                     decision == SP_AI_LOOT ? @"AI LOOT" : (unknownHP ? @"HP? TAB" : @"AI TAB");
@@ -657,8 +656,8 @@ static NSArray<NSNumber *> *sp_ai_luminance(CVPixelBufferRef buffer) {
             }
         }
     }
-    if (decision == SP_AI_ATTACK && !hasColumn && _directAttackAttempts >= 2 &&
-        [display isEqualToString:@"AI WAIT"]) display = @"NAV NO PLATE";
+    if (decision == SP_AI_ATTACK && !hasColumn && !combat && _directAttackAttempts >= 2 &&
+        (!_p2pAvailable || [display isEqualToString:@"AI WAIT"])) display = @"NAV NO PLATE";
     if (decision == SP_AI_ATTACK && hasColumn && _visiblePulses >= 12 &&
         [display isEqualToString:@"AI WAIT"]) display = @"NAV LIMIT";
     if (self.status) self.status(display);

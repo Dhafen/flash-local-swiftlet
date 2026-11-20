@@ -111,12 +111,20 @@ static inline SPAIFarmPlan sp_ai_plan_farm(SPAIDecision decision, uint8_t flags,
     if (decision != SP_AI_ATTACK) return (SPAIFarmPlan){SP_FARM_PAUSE, SP_MOVE_NONE, false};
     bool combat = (flags & 32) != 0;
     if (combat && recentDamage) return (SPAIFarmPlan){SP_FARM_COMBAT, SP_MOVE_NONE, false};
-    if (attempts < 2) return (SPAIFarmPlan){SP_FARM_ENGAGE, SP_MOVE_NONE, false};
-    SPAIMove move = sp_ai_visible_approach(meta, attempts, combat, recentDamage);
+    // An off-combat target with a visible nameplate can be approached from
+    // the first poll. Missing direction still needs the existing attack probes.
+    SPAIMove move = sp_ai_visible_approach(meta, combat ? attempts : 2, combat, recentDamage);
     if (move != SP_MOVE_NONE)
         return (SPAIFarmPlan){SP_FARM_APPROACH, sp_ai_apply_approach(examples, move, combat), false};
+    if (attempts < 2) return (SPAIFarmPlan){SP_FARM_ENGAGE, SP_MOVE_NONE, false};
     if (combat) return (SPAIFarmPlan){SP_FARM_COMBAT, SP_MOVE_NONE, false};
     return (SPAIFarmPlan){SP_FARM_APPROACH, SP_MOVE_NONE, sp_ai_nav_allowed(decision, flags, attempts)};
+}
+
+static inline double sp_ai_direct_interval(SPAIDecision decision, bool moving) {
+    if (decision == SP_AI_TARGET || moving) return 3.2;
+    if (decision == SP_AI_LOOT) return 1.4;
+    return 0.85;
 }
 
 static inline double sp_ai_nav_duration(const SPAINavigation *nav, SPAIMove move) {
