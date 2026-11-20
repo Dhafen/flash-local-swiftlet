@@ -17,5 +17,10 @@ int main(void) {
     assert(sp_ai_nav_allowed(SP_AI_TARGET,1,0));
     assert(!sp_ai_nav_allowed(SP_AI_TARGET,33,0));
     assert(!sp_ai_nav_allowed(SP_AI_BIND,13,4));
+    assert(!sp_ai_scout_allowed(SP_AI_TARGET,1,2,0));
+    assert(sp_ai_scout_allowed(SP_AI_TARGET,1,3,0));
+    assert(!sp_ai_scout_allowed(SP_AI_TARGET,1,3,3));
+    assert(!sp_ai_scout_allowed(SP_AI_ATTACK,13,3,0));
+    assert(!sp_ai_scout_allowed(SP_AI_TARGET,33,3,0));
     return 0;
 }

@@ -76,6 +76,15 @@ final class SPP2PBridge: NSObject, @unchecked Sendable {
             shared.pending = nil
         }
     }
+    @objc(recordScoutMove:)
+    class func recordScoutMove(_ command: String) {
+        shared.queue.async {
+            guard shared.pending == "WAIT", !shared.actions.isEmpty,
+                  let id = SPP2PAction.executedIDs[command] else { return }
+            shared.actions[shared.actions.count - 1][0] = id
+            shared.pending = nil
+        }
+    }
     private func load() throws -> (MLModel, MLModel) {
         if let models { return models }
         let m = try JSONDecoder().decode(Manifest.self, from: Data(contentsOf: Self.folder.appendingPathComponent("manifest.json")))

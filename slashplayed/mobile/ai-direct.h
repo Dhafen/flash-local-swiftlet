@@ -22,4 +22,9 @@ static inline bool sp_ai_nav_allowed(SPAIDecision decision, uint8_t flags, unsig
     // Only use model-proposed movement; never presume range or direction is known.
     return decision == SP_AI_TARGET || (decision == SP_AI_ATTACK && attempts >= 2);
 }
+// Bounded fallback only in the target search phase. No approach in unknown
+// direction, no movement during combat, and no endless blind wandering.
+static inline bool sp_ai_scout_allowed(SPAIDecision decision, uint8_t flags, unsigned waits, unsigned pulses) {
+    return decision == SP_AI_TARGET && !(flags & (2|32|64)) && waits >= 3 && pulses < 3;
+}
 #endif

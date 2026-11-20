@@ -12,6 +12,18 @@ static atomic_bool sp_p2p_capture_enabled;
 static atomic_uint sp_p2p_capture_epoch;
 static NSData *sp_p2p_latest_frame;
 static NSTimeInterval sp_p2p_latest_at;
+// Approximate visual change, not proof that the character moved or is safe.
+static BOOL sp_p2p_scene_changed(NSData *before, NSData *after) {
+    if (before.length != 3*192*192 || after.length != before.length) return NO;
+    const uint8_t *a = before.bytes, *b = after.bytes;
+    unsigned sum = 0, count = 0;
+    for (unsigned c=0;c<3;c++) for (unsigned y=42;y<150;y+=8)
+        for (unsigned x=24;x<168;x+=8) {
+            unsigned i=c*192*192+y*192+x;
+            sum += (unsigned)abs((int)a[i]-(int)b[i]); ++count;
+        }
+    return count && sum >= count*3;
+}
 static void sp_p2p_enable(BOOL enabled) {
     atomic_fetch_add(&sp_p2p_capture_epoch, 1);
     atomic_store(&sp_p2p_capture_enabled, enabled);
@@ -91,7 +103,8 @@ static void sp_ai_heartbeat(uint8_t seq, const uint8_t *data, size_t length) {
     NSTimeInterval _directNextAction, _directPlanAt, _directLastActionAt;
     NSString *_directLastAction, *_p2pLastStatus;
     NSTimeInterval _p2pStatusAt;
-    unsigned _directAttackAttempts;
+    unsigned _directAttackAttempts, _p2pWaits, _scoutPulses;
+    NSData *_scoutBefore;
     BOOL _directWasPartial;
     BOOL _p2pAvailable, _p2pPending;
     NSTimeInterval _p2pLastUsed, _p2pLastMove;
@@ -304,6 +317,7 @@ static NSArray<NSNumber *> *sp_ai_luminance(CVPixelBufferRef buffer) {
     if (![p2p respondsToSelector:pred]) return;
     NSUInteger gen = _p2pGeneration;
     NSTimeInterval captured = sp_p2p_latest_at;
+    NSData *frame = sp_p2p_latest_frame;
     _p2pLastUsed = captured;
     _p2pPending = YES;
     __weak SPGameAIController *weak = self;
@@ -325,35 +339,61 @@ static NSArray<NSNumber *> *sp_ai_luminance(CVPixelBufferRef buffer) {
             BOOL seeking = sp_ai_nav_allowed(decision, f, strong->_directAttackAttempts);
             BOOL allowed = strong->_directRulesOnly || [strong->_directPlan isEqualToString:strong->_directCandidate] ||
                 !sp_ai_health_known(sp_ai_game_hp) || !sp_ai_health_known(sp_ai_game_target_hp);
-            if (!seeking || !allowed || now-strong->_p2pLastMove < 0.8) return;
+            NSString *current = decision == SP_AI_TARGET ? @"TARGET" : decision == SP_AI_ATTACK ? @"ATTACK" : nil;
+            if (!seeking || !allowed || ![strong->_directCandidate isEqualToString:current] ||
+                now-strong->_p2pLastMove < 0.8) return;
             if (now-captured > 3.0) {
                 strong->_p2pLastStatus = @"P2P SLOW";
                 strong->_p2pStatusAt = now;
                 return;
             }
+            NSString *move = answer;
+            BOOL scout = NO;
             if (![@[@"FORWARD",@"BACK",@"LEFT",@"RIGHT",@"STRAFE_LEFT",@"STRAFE_RIGHT"] containsObject:answer]) {
-                strong->_p2pLastStatus = [answer isEqualToString:@"WARMUP"] ? @"P2P WARM" : @"P2P WAIT";
-                strong->_p2pStatusAt = now;
-                return;
+                if ([answer isEqualToString:@"WAIT"]) {
+                    if (strong->_p2pWaits < 1000) ++strong->_p2pWaits;
+                    if (sp_ai_scout_allowed(decision,f,strong->_p2pWaits,strong->_scoutPulses)) {
+                        // At most three search pulses per phase; stop on unchanged visual
+                        // input. A changed scene does not prove successful movement.
+                        if (strong->_scoutBefore && !sp_p2p_scene_changed(strong->_scoutBefore,frame)) {
+                            strong->_scoutPulses = 3;
+                            strong->_p2pLastStatus = @"SCOUT BLOCK";
+                            strong->_p2pStatusAt = now;
+                            return;
+                        }
+                        move = @[@"LEFT",@"FORWARD",@"RIGHT"][strong->_scoutPulses];
+                        scout = YES;
+                    }
+                }
+                if (!scout) {
+                    strong->_p2pLastStatus = [answer isEqualToString:@"WARMUP"] ? @"P2P WARM" : @"P2P WAIT";
+                    strong->_p2pStatusAt = now;
+                    return;
+                }
             }
-            if (strong.action && strong.action(answer, CGPointZero, captured)) {
+            if (strong.action && strong.action(move, CGPointZero, captured)) {
                 strong->_p2pLastMove = now;
-                SEL record = NSSelectorFromString(@"recordMove:");
+                SEL record = NSSelectorFromString(scout ? @"recordScoutMove:" : @"recordMove:");
                 if ([p2p respondsToSelector:record])
-                    ((void (*)(id,SEL,NSString *))objc_msgSend)(p2p,record,answer);
-                strong->_p2pLastStatus = @"P2P MOVE";
+                    ((void (*)(id,SEL,NSString *))objc_msgSend)(p2p,record,move);
+                if (scout) {
+                    ++strong->_scoutPulses;
+                    strong->_scoutBefore = frame;
+                    sp_stub_log([[NSString stringWithFormat:@"AI scout rule: %@ (%u/3)",move,strong->_scoutPulses] UTF8String]);
+                }
+                strong->_p2pWaits = 0;
+                strong->_p2pLastStatus = scout ? @"RULE SCOUT" : @"P2P MOVE";
                 strong->_p2pStatusAt = now;
-                if (strong.status) strong.status(@"P2P MOVE");
+                if (strong.status) strong.status(strong->_p2pLastStatus);
             } else {
                 strong->_p2pLastStatus = @"P2P INPUT";
                 strong->_p2pStatusAt = now;
             }
         });
     };
-    ((void (*)(id,SEL,NSData *,void (^)(NSString *)))objc_msgSend)(p2p,pred,sp_p2p_latest_frame,completion);
+    ((void (*)(id,SEL,NSData *,void (^)(NSString *)))objc_msgSend)(p2p,pred,frame,completion);
 }
-// Explicit AI-button visual movement experiment. No player-health value is
-// inferred or exported. Only one bounded predicted movement; no combat/clicks.
+// Legacy visual observation only when public decision flags are unavailable.
 - (void)previewP2P:(NSUInteger)run {
     if (!_visualPreviewMode || !_p2pAvailable || _visualPreviewError || _p2pPending ||
         !sp_p2p_latest_frame || sp_p2p_latest_at <= _p2pLastUsed ||
@@ -443,7 +483,8 @@ static NSArray<NSNumber *> *sp_ai_luminance(CVPixelBufferRef buffer) {
             if (self.releaseInput) self.releaseInput();
         }
         _directCandidate = _directPlan = nil;
-        _directAttackAttempts = 0;
+        _directAttackAttempts = _p2pWaits = _scoutPulses = 0;
+        _scoutBefore = nil;
         _directLastAction = _p2pLastStatus = nil;
     } else {
         if (![_directCandidate isEqualToString:candidate]) {
@@ -452,7 +493,8 @@ static NSArray<NSNumber *> *sp_ai_luminance(CVPixelBufferRef buffer) {
             _directPlan = nil;
             _directPending = NO;
             _directNextAction = 0;
-            _directAttackAttempts = 0;
+            _directAttackAttempts = _p2pWaits = _scoutPulses = 0;
+            _scoutBefore = nil;
             _directLastAction = _p2pLastStatus = nil;
             [self invalidateDecision];
             if (self.releaseInput) self.releaseInput();
@@ -554,7 +596,8 @@ static NSArray<NSNumber *> *sp_ai_luminance(CVPixelBufferRef buffer) {
     _directCandidate = _directPlan = nil;
     _directPending = NO;
     _directNextAction = _directLastActionAt = _p2pStatusAt = 0;
-    _directAttackAttempts = 0;
+    _directAttackAttempts = _p2pWaits = _scoutPulses = 0;
+    _scoutBefore = nil;
     _directWasPartial = NO;
     _directLastAction = _p2pLastStatus = nil;
     Class p2p = NSClassFromString(@"SPP2PBridge");
