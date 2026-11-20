@@ -592,21 +592,45 @@ static UIButton *sp_mobile_button(NSString *title, NSString *label, id owner, SE
     }
 }
 
+static void sp_mobile_ai_movement_key(unsigned char key, BOOL pressed) {
+    NSString *characters = [NSString stringWithFormat:@"%c", key];
+    SPEvent *event = sp_event(pressed ? SPKeyDown : SPKeyUp);
+    event->keyCode = sp_soft_mac_code(key);
+    event->characters = characters;
+    event->charactersIgnoringModifiers = characters;
+    BOOL previousTyping = sp_soft_typing;
+    sp_soft_typing = YES;
+    sp_post(event);
+    sp_soft_typing = previousTyping;
+}
+
 - (void)sp_mobile_ai_release_key {
     if (!_mobileAIKeyHeld) return;
     _mobileAIKeyHeld = NO;
     ++_mobileAIKeyGeneration;
-    [_mobileStick stop];
+    if (_mobileAIKeyboardHeld) {
+        sp_mobile_ai_movement_key(_mobileAIKeyboardHeld, NO);
+        _mobileAIKeyboardHeld = 0;
+    } else [_mobileStick stop];
 }
 - (BOOL)sp_mobile_ai_hold_axis:(CGPoint)axis duration:(NSTimeInterval)duration {
     [self sp_mobile_ai_release_key];
-    if (![_mobileStick driveAI:axis]) {
-        sp_stub_log("AI input: virtual controller not ready");
+    SPAIMove move = axis.y > 0 ? SP_MOVE_FORWARD : axis.y < 0 ? SP_MOVE_BACK :
+        axis.x < 0 ? SP_MOVE_LEFT : axis.x > 0 ? SP_MOVE_RIGHT : SP_MOVE_NONE;
+    NSTimeInterval now = NSProcessInfo.processInfo.systemUptime;
+    if (sp_ai_game_at > 0 && now-sp_ai_game_at < 3.0)
+        _mobileAIKeyboardHeld = sp_ai_movement_key(move, sp_ai_game_move_keys);
+    if (_mobileAIKeyboardHeld) {
+        sp_mobile_ai_movement_key(_mobileAIKeyboardHeld, YES);
+        sp_stub_log([[NSString stringWithFormat:@"AI input: held verified key %c", _mobileAIKeyboardHeld] UTF8String]);
+    } else if ([_mobileStick driveAI:axis]) {
+        sp_stub_log([[NSString stringWithFormat:@"AI input: virtual stick %.1f %.1f", axis.x, axis.y] UTF8String]);
+    } else {
+        sp_stub_log("AI input: no verified key and virtual controller not ready");
         return NO;
     }
     _mobileAIKeyHeld = YES;
     NSUInteger generation = ++_mobileAIKeyGeneration;
-    sp_stub_log([[NSString stringWithFormat:@"AI input: virtual stick %.1f %.1f", axis.x, axis.y] UTF8String]);
     __weak SPInputView *weakSelf = self;
     NSTimeInterval hold = duration > 0 ? MIN(duration, 0.70) : 0.55;
     dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(hold * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{

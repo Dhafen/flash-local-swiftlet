@@ -42,6 +42,7 @@ def patch_input():
     UIButton *_mobileRotation, *_mobileAIButton;
     SPGameAIController *_mobileAI;
     BOOL _mobileAIKeyHeld;
+    unsigned char _mobileAIKeyboardHeld;
     NSUInteger _mobileAIKeyGeneration;
     NSTimeInterval _mobileAIManualUntil;
     UIPanGestureRecognizer *_mobileJumpPan, *_mobileRotationPan;
@@ -183,7 +184,7 @@ replace_once(hover_lua, "local function scan()", "-- Read-only, compact game tel
 replace_once(hover_lua, "return string.char(floor(n / 256), n % 256) .. table.concat(out)",
              "return string.char(floor(n / 256), n % 256) .. table.concat(out) .. spAIState()")
 strip_header = ROOT / "shims/appkit/sphoverstrip.h"
-replace_once(strip_header, "(2 + SPH_MAX_RECTS * 6)", "(2 + SPH_MAX_RECTS * 6 + 6)")
+replace_once(strip_header, "(2 + SPH_MAX_RECTS * 6)", "(2 + SPH_MAX_RECTS * 6 + 8)")
 hover_native = ROOT / "shims/appkit/sphover.m"
 replace_once(hover_native, "    sp_hover_set_rects(fractions, n);", """    sp_hover_set_rects(fractions, n);
 #if !TARGET_OS_VISION
@@ -265,7 +266,7 @@ replace_once(hover_lua, "local sinceScan = SCAN_INTERVAL",
 local aiElapsed, aiBeat, aiFrame, aiTick = 1, 0, nil, 0
 local function aiHeartbeat()
     local state = spAIState()
-    if #state ~= 6 then state = string.char(65, 73, 0, 0, 0, 0) end
+    if #state ~= 8 then state = string.char(65, 73, 0, 0, 0, 0, 75, 0) end
     aiBeat = (aiBeat + 1) % 256
     local b = {65, 73, aiBeat, 0, 1}
     for i = 1, PAYLOAD_BYTES do b[5+i] = state:byte(i) or 0 end

@@ -25,6 +25,20 @@ static inline bool sp_ai_nav_allowed(SPAIDecision decision, uint8_t flags, unsig
 // A model proposal is advisory. Feedback is consumed once per completed input,
 // and scene change is only a proxy for progress.
 typedef enum { SP_MOVE_NONE, SP_MOVE_FORWARD, SP_MOVE_BACK, SP_MOVE_LEFT, SP_MOVE_RIGHT } SPAIMove;
+
+static inline uint8_t sp_ai_movement_bindings(const uint8_t *packet, unsigned length) {
+    return length >= 8 && packet[6] == 'K' ? packet[7] & 63 : 0;
+}
+
+static inline char sp_ai_movement_key(SPAIMove move, uint8_t bindings) {
+    switch (move) {
+        case SP_MOVE_FORWARD: return (bindings & 1) ? 'w' : 0;
+        case SP_MOVE_BACK: return (bindings & 2) ? 's' : 0;
+        case SP_MOVE_LEFT: return (bindings & 4) ? 'q' : (bindings & 8) ? 'a' : 0;
+        case SP_MOVE_RIGHT: return (bindings & 16) ? 'e' : (bindings & 32) ? 'd' : 0;
+        default: return 0;
+    }
+}
 typedef struct {
     SPAIMove last, proposed;
     unsigned votes, stalls, streak;

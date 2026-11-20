@@ -41,7 +41,7 @@ static SPAIMove sp_ai_move(NSString *move) {
 }
 
 // State emitted by the game's own read-only addon API. Written and read on main.
-static uint8_t sp_ai_game_flags, sp_ai_game_hp, sp_ai_game_target_hp, sp_ai_game_meta;
+static uint8_t sp_ai_game_flags, sp_ai_game_hp, sp_ai_game_target_hp, sp_ai_game_meta, sp_ai_game_move_keys;
 static NSTimeInterval sp_ai_game_at, sp_ai_strip_at, sp_ai_packet_at;
 static BOOL sp_ai_heartbeat_seen;
 static BOOL sp_ai_health_known(uint8_t value) { return sp_ai_hp_known(value); }
@@ -65,6 +65,7 @@ static void sp_ai_game_update(const uint8_t *data, size_t length) {
         sp_ai_state_reason = reason;
         sp_ai_payload_status = 0;
         sp_ai_game_at = 0;
+        sp_ai_game_move_keys = 0;
         return;
     }
     if (sp_ai_game_at <= 0 || sp_ai_packet_at - sp_ai_game_at >= 6.0 ||
@@ -78,6 +79,7 @@ static void sp_ai_game_update(const uint8_t *data, size_t length) {
     sp_ai_game_hp = data[3];
     sp_ai_game_target_hp = data[4];
     sp_ai_game_meta = data[5];
+    sp_ai_game_move_keys = sp_ai_movement_bindings(data, (unsigned)length);
     sp_ai_game_at = NSProcessInfo.processInfo.systemUptime;
 }
 

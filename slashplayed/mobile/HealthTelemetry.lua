@@ -47,6 +47,18 @@ local function spAIBinding(key)
     if ok and spAIReadable(value) and type(value) == "string" then return value end
 end
 
+local function spAIMovementBindings()
+    -- Only advertise bindings explicitly confirmed by the client.
+    local bits = 0
+    if spAIBinding("W") == "MOVEFORWARD" then bits = bits + 1 end
+    if spAIBinding("S") == "MOVEBACKWARD" then bits = bits + 2 end
+    if spAIBinding("Q") == "STRAFELEFT" then bits = bits + 4
+    elseif spAIBinding("A") == "STRAFELEFT" then bits = bits + 8 end
+    if spAIBinding("E") == "STRAFERIGHT" then bits = bits + 16
+    elseif spAIBinding("D") == "STRAFERIGHT" then bits = bits + 32 end
+    return bits
+end
+
 local function spAITargetColumn()
     local ok, column = pcall(function()
         if not C_NamePlate or not C_NamePlate.GetNamePlateForUnit then return end
@@ -91,7 +103,7 @@ local spAICombatTarget
 local function spAIState()
     if not SPPhoneTouchRects then return "" end
     local stage = 1
-    local function unavailable(code) return string.char(65, 73, 0, code, 0, 0) end
+    local function unavailable(code) return string.char(65, 73, 0, code, 0, 0, 75, 0) end
     local function boolValue(value)
         if type(issecretvalue) == "function" and issecretvalue(value) then error("restricted value") end
         if type(canaccessvalue) == "function" and not canaccessvalue(value) then error("restricted value") end
@@ -149,7 +161,7 @@ local function spAIState()
             meta = meta - (meta % 2) + (f and 5 or 4)
         end
         if hostile and not targetDead then meta = meta + 8 * spAITargetColumn() end
-        return string.char(65, 73, flags, hp, targetHP, meta)
+        return string.char(65, 73, flags, hp, targetHP, meta, 75, spAIMovementBindings())
     end)
     if not ok then spAICombatTarget = nil; return unavailable(stage) end
     return state

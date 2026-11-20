@@ -19,7 +19,7 @@ assert '@interface SPGameAIController' in event
 assert 'sp_ai_game_update' in event and 'pollDirect:' in event
 assert 'decideGameState:candidate:completion:' in event
 assert 'sp_ai_game_update(sp_hover_asm.data + offset' in (root / "shims/appkit/sphover.m").read_text()
-assert 'SPH_MAX_RECTS * 6 + 6' in (root / "shims/appkit/sphoverstrip.h").read_text()
+assert 'SPH_MAX_RECTS * 6 + 8' in (root / "shims/appkit/sphoverstrip.h").read_text()
 assert '.. spAIState()' in (root / "addon/SPHover/SPHover.lua").read_text()
 assert 'local function aiHeartbeat()' in (root / "addon/SPHover/SPHover.lua").read_text()
 assert 'showChunk(aiFrame)' in (root / "addon/SPHover/SPHover.lua").read_text()
@@ -245,3 +245,7 @@ assert "dispatch_async(dispatch_get_main_queue()" in start_method
 assert "input->_mobileAIKeyGeneration != generation" in start_method
 manual_button_group = next(line for line in event.splitlines() if "@[_mobileRotation, _mobileUI, _mobileEdit" in line)
 assert "_mobileAIButton" not in manual_button_group
+
+assert 'sp_mobile_ai_movement_key(_mobileAIKeyboardHeld, YES)' in event
+assert 'sp_mobile_ai_movement_key(_mobileAIKeyboardHeld, NO)' in event
+assert 'pressed ? SPKeyDown : SPKeyUp' in event

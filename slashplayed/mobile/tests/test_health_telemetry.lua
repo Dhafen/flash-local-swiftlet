@@ -44,7 +44,7 @@ IsMounted = function() return false end
 GetTime = function() return 2 end
 reset(val(secret), val(secret), val(secret))
 local packet = state()
-assert(#packet == 6 and packet:byte(3) == 45 and packet:byte(4) == 255 and packet:byte(5) == 255)
+assert(#packet == 8 and packet:byte(3) == 45 and packet:byte(4) == 255 and packet:byte(5) == 255)
 UnitCanAttack = val(secret)
 packet = state()
 assert(packet:byte(3) == 0 and packet:byte(4) == 6)
@@ -126,3 +126,14 @@ assert(state():byte(6) > 132)
 UnitIsUnit = val(secret)
 assert(state():byte(6) == 132)
 print("nameplate unit token fallback passed")
+
+GetBindingAction = function(key, override)
+    assert(override)
+    local keys = { W = "MOVEFORWARD", S = secret, Q = "TURNLEFT", A = "STRAFELEFT", E = "STRAFERIGHT", D = "STRAFERIGHT" }
+    return keys[key]
+end
+local bound = state()
+assert(bound:byte(7) == 75 and bound:byte(8) == 1 + 8 + 16)
+GetBindingAction = val(secret)
+assert(state():byte(8) == 0)
+print("public keyboard movement bindings passed")

@@ -99,6 +99,15 @@ int main(void) {
     assert(plan.phase == SP_FARM_COMBAT && plan.movement == SP_MOVE_NONE && !plan.usePixel2Play);
     plan = sp_ai_plan_farm(SP_AI_LOOT, 149, 133, 0, false, &examples);
     assert(plan.phase == SP_FARM_LOOT && !plan.usePixel2Play);
+    const uint8_t packet[] = {'A', 'I', 1, 100, 0, 128, 'K', 1|8|16};
+    assert(sp_ai_movement_bindings(packet, 6) == 0);
+    assert(sp_ai_movement_bindings(packet, 8) == (1|8|16));
+    assert(sp_ai_movement_key(SP_MOVE_FORWARD, 1|8|16) == 'w');
+    assert(sp_ai_movement_key(SP_MOVE_BACK, 1|8|16) == 0);
+    assert(sp_ai_movement_key(SP_MOVE_LEFT, 1|8|16) == 'a');
+    assert(sp_ai_movement_key(SP_MOVE_RIGHT, 1|8|16) == 'e');
+    assert(sp_ai_movement_key(SP_MOVE_LEFT, 4|8) == 'q');
+    assert(sp_ai_movement_key(SP_MOVE_RIGHT, 32) == 'd');
     test_navigation();
     return 0;
 }
