@@ -12,18 +12,6 @@ static atomic_bool sp_p2p_capture_enabled;
 static atomic_uint sp_p2p_capture_epoch;
 static NSData *sp_p2p_latest_frame;
 static NSTimeInterval sp_p2p_latest_at;
-// Approximate visual change, not proof that the character moved or is safe.
-static BOOL sp_p2p_scene_changed(NSData *before, NSData *after) {
-    if (before.length != 3*192*192 || after.length != before.length) return NO;
-    const uint8_t *a = before.bytes, *b = after.bytes;
-    unsigned sum = 0, count = 0;
-    for (unsigned c=0;c<3;c++) for (unsigned y=42;y<150;y+=8)
-        for (unsigned x=24;x<168;x+=8) {
-            unsigned i=c*192*192+y*192+x;
-            sum += (unsigned)abs((int)a[i]-(int)b[i]); ++count;
-        }
-    return count && sum >= count*3;
-}
 static void sp_p2p_enable(BOOL enabled) {
     if (atomic_load(&sp_p2p_capture_enabled) == enabled) return;
     atomic_fetch_add(&sp_p2p_capture_epoch, 1);
@@ -43,7 +31,17 @@ static SPAIMove sp_ai_move(NSString *move) {
 // State emitted by the game's own read-only addon API. Written and read on main.
 static uint8_t sp_ai_game_flags, sp_ai_game_hp, sp_ai_game_target_hp, sp_ai_game_meta, sp_ai_game_move_keys;
 static SPAIFarmFeedback sp_ai_game_feedback;
+static SPAINavEvidence sp_ai_game_evidence;
 static NSTimeInterval sp_ai_game_at, sp_ai_strip_at, sp_ai_packet_at;
+static SPAINavSample sp_ai_game_sample(void) {
+    return (SPAINavSample){sp_ai_game_at, sp_ai_game_feedback, sp_ai_game_evidence,
+        (sp_ai_game_meta & 128) ? (sp_ai_game_meta >> 3) & 15 : 0};
+}
+static const char *sp_ai_nav_outcome_name(SPAINavOutcome outcome) {
+    static const char *const names[] = {"pending", "no-fresh-position", "context-changed", "stalled",
+        "displacement-only", "target-closer", "plate-centered", "no-target-progress"};
+    return names[outcome];
+}
 static BOOL sp_ai_heartbeat_seen;
 static BOOL sp_ai_health_known(uint8_t value) { return sp_ai_hp_known(value); }
 static SPAIDecision sp_ai_current_decision(NSTimeInterval now) {
@@ -52,7 +50,8 @@ static SPAIDecision sp_ai_current_decision(NSTimeInterval now) {
 }
 static uint8_t sp_ai_heartbeat_seq;
 static int sp_ai_payload_status = -1, sp_ai_state_reason = -1;
-static void sp_ai_game_update(const uint8_t *data, size_t length) {
+static void sp_ai_game_update(const uint8_t *data, size_t length, NSTimeInterval observedAt) {
+    if (observedAt <= sp_ai_game_at) return;
     sp_ai_packet_at = NSProcessInfo.processInfo.systemUptime;
     if (length < 6 || data[0] != 'A' || data[1] != 'I' ||
         !(data[2] & 1) || ((data[2] & 128) && (data[2] & (4|16)) != (4|16)) ||
@@ -68,6 +67,7 @@ static void sp_ai_game_update(const uint8_t *data, size_t length) {
         sp_ai_game_at = 0;
         sp_ai_game_move_keys = 0;
         sp_ai_game_feedback = (SPAIFarmFeedback){0};
+        sp_ai_game_evidence = (SPAINavEvidence){0, 0, 0, SP_AI_DISTANCE_UNKNOWN};
         return;
     }
     if (sp_ai_game_at <= 0 || sp_ai_packet_at - sp_ai_game_at >= 6.0 ||
@@ -83,20 +83,26 @@ static void sp_ai_game_update(const uint8_t *data, size_t length) {
     sp_ai_game_meta = data[5];
     sp_ai_game_move_keys = sp_ai_movement_bindings(data, (unsigned)length);
     sp_ai_game_feedback = sp_ai_farm_feedback(data, (unsigned)length);
-    sp_ai_game_at = NSProcessInfo.processInfo.systemUptime;
+    sp_ai_game_evidence = sp_ai_nav_evidence(data, (unsigned)length);
+    sp_ai_game_at = observedAt;
 }
 
-static void sp_ai_heartbeat(uint8_t seq, const uint8_t *data, size_t length) {
+static void sp_ai_heartbeat(uint8_t seq, const uint8_t *data, size_t length, NSTimeInterval observedAt) {
+    static NSTimeInterval lastHeartbeat;
+    if (observedAt <= lastHeartbeat) return;
     if (sp_ai_heartbeat_seen && seq == sp_ai_heartbeat_seq) return;
     if (!sp_ai_heartbeat_seen) sp_stub_log("AI telemetry: independent heartbeat detected");
     sp_ai_heartbeat_seen = YES;
     sp_ai_heartbeat_seq = seq;
-    sp_ai_game_update(data, length);
+    lastHeartbeat = observedAt;
+    sp_ai_game_update(data, length, observedAt);
 }
 
 @interface SPGameAIController : NSObject
 @property(nonatomic, readonly) BOOL active;
 @property(nonatomic, readonly) BOOL starting;
+@property(nonatomic) BOOL autonomousTest;
+@property(nonatomic) BOOL modelDiagnostics;
 @property(nonatomic, copy) BOOL (^action)(NSString *, CGPoint, NSTimeInterval, NSTimeInterval);
 @property(nonatomic, copy) void (^releaseInput)(void);
 @property(nonatomic, copy) void (^status)(NSString *);
@@ -113,28 +119,23 @@ static void sp_ai_heartbeat(uint8_t seq, const uint8_t *data, size_t length) {
     BOOL _busy;
     NSTimeInterval _nextFrame, _lastFrame;
     BOOL _layaEnabled, _layaPending;
-    NSString *_directCandidate, *_layaState;
-    NSTimeInterval _directNextAction, _directLastActionAt, _p2pMetricsAt;
-    NSString *_directLastAction, *_p2pLastStatus;
-    NSTimeInterval _p2pStatusAt;
-    unsigned _directAttackAttempts, _visiblePulses, _lootAttempts;
-    unsigned _searchTabAttempts, _searchSteps, _searchVisionWaits;
+    NSString *_layaState, *_lastPhase;
+    NSTimeInterval _directNextAction;
+    unsigned _lootAttempts, _searchAttempts;
     SPAIMove _visibleProposal;
-    NSTimeInterval _visibleSeenAt, _lastDamageAt;
-    unsigned _patrolSteps, _motionStalls;
-    NSTimeInterval _motionDeadline;
-    SPAIFarmFeedback _motionStart;
-    uint8_t _lastTargetHP;
+    NSTimeInterval _visibleSeenAt, _lastMoveAt, _lastDamageAt;
+    SPAINavPulse _pulse;
+    SPAINavBudget _navBudget;
+    SPAICombatEvidence _combatEvidence;
+    uint8_t _encounter;
+    BOOL _recovering, _probeAfterMove;
+    NSProcessInfoThermalState _lastThermal;
     SPAIApproachExamples _approachExamples;
     BOOL _teaching;
     NSTimeInterval _lastTeachingPacket;
     unsigned _teachingSamples;
-    SPAINavigation _navigation;
-    NSData *_sceneBeforeMove;
-    NSTimeInterval _moveEndsAt;
-    BOOL _wasInCombat, _navigationThermalPause;
     BOOL _p2pAvailable, _p2pPending;
-    NSTimeInterval _p2pLastUsed, _p2pLastMove;
+    NSTimeInterval _p2pLastUsed, _p2pMetricsAt;
     NSUInteger _p2pGeneration;
     BOOL _visualPreviewMode;
     BOOL _visualPreviewError;
@@ -191,9 +192,8 @@ static void sp_ai_heartbeat(uint8_t seq, const uint8_t *data, size_t length) {
     SEL selector = NSSelectorFromString(@"resetDecision");
     if ([bridge respondsToSelector:selector]) ((void (*)(id, SEL))objc_msgSend)(bridge, selector);
     ++_p2pGeneration;
-    _navigation = (SPAINavigation){0};
-    _sceneBeforeMove = nil;
-    _moveEndsAt = 0;
+    if (_pulse.deadline) sp_stub_log("AI navigation: cancelled");
+    _pulse = (SPAINavPulse){0};
     _visibleProposal = SP_MOVE_NONE;
     _visibleSeenAt = 0;
     // Keep single-flight ownership until the previous callback finishes.
@@ -256,46 +256,13 @@ static NSArray<NSNumber *> *sp_ai_luminance(CVPixelBufferRef buffer) {
     [self stop];
     if (self.status) self.status(reason);
 }
-- (void)finish:(NSString *)answer points:(NSArray<NSValue *> *)points labels:(NSArray<NSString *> *)labels observation:(NSString *)observation captured:(NSTimeInterval)captured run:(NSUInteger)run {
+- (void)finish:(NSString *)answer captured:(NSTimeInterval)captured run:(NSUInteger)run {
     if (!_active || _run != run) return;
     if ([answer isEqualToString:@"ERROR"] || [answer isEqualToString:@"UNAVAILABLE"]) {
         [self fail:@"AI MODEL!"];
         return;
     }
-    NSString *display = @"AI WAIT";
-    // Don't execute a decision made on an old frame.
-    if (self.action && NSProcessInfo.processInfo.systemUptime - captured <= 8.0) {
-        NSSet *keys = [NSSet setWithArray:@[@"ATTACK", @"TARGET", @"FORWARD", @"BACK", @"LEFT", @"RIGHT"]];
-        BOOL executed = NO;
-        if ([keys containsObject:answer]) executed = self.action(answer, CGPointZero, captured, 0);
-        else {
-            NSArray<NSString *> *parts = [answer componentsSeparatedByString:@" "];
-            if (parts.count == 2 && ([parts[0] isEqualToString:@"CLICK"] || [parts[0] isEqualToString:@"INTERACT"])) {
-                NSInteger index = parts[1].integerValue;
-                if (index >= 1 && index <= (NSInteger)points.count && index <= (NSInteger)labels.count) {
-                    NSString *label = labels[index - 1].lowercaseString;
-                    // Restrict left clicks to descriptive quest/loot controls; never arbitrary UI.
-                    NSSet *allowed = [NSSet setWithArray:@[@"accept", @"accept quest", @"complete quest", @"continue", @"loot", @"loot all", @"take all"]];
-                    BOOL allowedClick = [parts[0] isEqualToString:@"CLICK"] && [allowed containsObject:label];
-                    BOOL blocked = [label containsString:@"trade"] || [label containsString:@"buy"] ||
-                        [label containsString:@"sell"] || [label containsString:@"delete"] ||
-                        [label containsString:@"settings"] || [label containsString:@"password"] ||
-                        [label containsString:@"auction"] || [label containsString:@"mail"] ||
-                        [label containsString:@"logout"] || [label containsString:@"exit"];
-                    if (!blocked && (allowedClick || [parts[0] isEqualToString:@"INTERACT"]))
-                        executed = self.action(parts[0], points[index - 1].CGPointValue, captured, 0);
-                }
-            }
-        }
-        if (executed) {
-            display = [@"AI " stringByAppendingString:[[answer componentsSeparatedByString:@" "] firstObject]];
-            Class bridge = NSClassFromString(@"SPGameAIModel");
-            SEL record = NSSelectorFromString(@"recordAction:observation:");
-            if ([bridge respondsToSelector:record])
-                ((void (*)(id, SEL, NSString *, NSString *))objc_msgSend)(bridge, record, answer, observation);
-        }
-    }
-    if (NSProcessInfo.processInfo.systemUptime - captured > 8.0) display = @"AI SLOW";
+    NSString *display = NSProcessInfo.processInfo.systemUptime - captured <= 8.0 ? @"AI OBS" : @"AI SLOW";
     if (self.status) self.status(display);
     @synchronized(self) {
         if (_captureRun == run) {
@@ -326,16 +293,12 @@ static NSArray<NSNumber *> *sp_ai_luminance(CVPixelBufferRef buffer) {
     NSError *error = nil;
     BOOL ok = [handler performRequests:@[request] error:&error];
     NSMutableArray<NSDictionary *> *observedLabels = [NSMutableArray array];
-    NSMutableArray<NSValue *> *points = [NSMutableArray array];
-    NSMutableArray<NSString *> *labels = [NSMutableArray array];
     if (ok) for (VNRecognizedTextObservation *observation in request.results) {
         VNRecognizedText *text = [[observation topCandidates:1] firstObject];
         if (text.confidence < 0.45 || text.string.length < 2) continue;
         CGRect rect = observation.boundingBox;
         CGPoint point = CGPointMake(CGRectGetMidX(rect), 1 - CGRectGetMidY(rect));
-        [points addObject:[NSValue valueWithCGPoint:point]];
-        [labels addObject:[text.string stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceAndNewlineCharacterSet]];
-        [observedLabels addObject:@{@"id": @(points.count), @"x": @(point.x), @"y": @(point.y),
+        [observedLabels addObject:@{@"id": @(observedLabels.count + 1), @"x": @(point.x), @"y": @(point.y),
             @"text": [text.string substringToIndex:MIN(text.string.length, 120)]}];
         if (observedLabels.count >= 25) break;
     }
@@ -354,8 +317,8 @@ static NSArray<NSNumber *> *sp_ai_luminance(CVPixelBufferRef buffer) {
     NSString *observation = json ? [[NSString alloc] initWithData:json encoding:NSUTF8StringEncoding] : @"";
     dispatch_async(dispatch_get_main_queue(), ^{
         if (!self->_active || self->_run != run) return;
-        if (!ok || !observation.length || !points.count) {
-            [self finish:@"WAIT" points:points labels:labels observation:observation captured:captured run:run];
+        if (!ok || !observation.length || !observedLabels.count) {
+            [self finish:@"WAIT" captured:captured run:run];
             if (self.status) self.status(@"AI NO TEXT");
             return;
         }
@@ -364,7 +327,7 @@ static NSArray<NSNumber *> *sp_ai_luminance(CVPixelBufferRef buffer) {
         SEL selector = NSSelectorFromString(@"decide:completion:");
         if (![bridge respondsToSelector:selector]) { [self fail:@"AI MODEL!"]; return; }
         void (^completion)(NSString *) = ^(NSString *answer) {
-            dispatch_async(dispatch_get_main_queue(), ^{ [self finish:answer points:points labels:labels observation:observation captured:captured run:run]; });
+            dispatch_async(dispatch_get_main_queue(), ^{ [self finish:answer captured:captured run:run]; });
         };
         ((void (*)(id, SEL, NSString *, void (^)(NSString *)))objc_msgSend)(bridge, selector, observation, completion);
     });
@@ -380,95 +343,7 @@ static NSArray<NSNumber *> *sp_ai_luminance(CVPixelBufferRef buffer) {
         [strong watchCapture:run];
     });
 }
-- (void)setNavigationStatus:(NSString *)status at:(NSTimeInterval)now {
-    _p2pLastStatus = status;
-    _p2pStatusAt = now;
-}
-- (void)tryP2P:(NSUInteger)run {
-    if (!_p2pAvailable || _p2pPending || !sp_p2p_latest_frame ||
-        sp_p2p_latest_at <= _p2pLastUsed ||
-        NSProcessInfo.processInfo.systemUptime - sp_p2p_latest_at > 2.2 || _navigation.blocked) return;
-    Class p2p = NSClassFromString(@"SPP2PBridge");
-    SEL pred = NSSelectorFromString(@"predictFrame:completion:");
-    if (![p2p respondsToSelector:pred]) return;
-    NSUInteger gen = _p2pGeneration;
-    NSTimeInterval captured = sp_p2p_latest_at;
-    NSData *frame = sp_p2p_latest_frame;
-    NSTimeInterval submitted = NSProcessInfo.processInfo.systemUptime;
-    _p2pLastUsed = captured;
-    _p2pPending = YES;
-    __weak SPGameAIController *weak = self;
-    void (^completion)(NSString *) = ^(NSString *answer) {
-        dispatch_async(dispatch_get_main_queue(), ^{
-            SPGameAIController *strong = weak;
-            if (!strong) return;
-            strong->_p2pPending = NO;
-            if (!strong->_active || strong->_run != run || strong->_p2pGeneration != gen) return;
-            if ([answer hasPrefix:@"ERR:"]) {
-                strong->_p2pAvailable = NO;
-                sp_p2p_enable(NO);
-                if (strong.status) strong.status(@"P2P ERR");
-                return;
-            }
-            NSTimeInterval now = NSProcessInfo.processInfo.systemUptime;
-            unsigned f = sp_ai_game_flags;
-            SPAIDecision decision = sp_ai_current_decision(now);
-            NSString *current = decision == SP_AI_TARGET ? @"TARGET" : decision == SP_AI_ATTACK ? @"ATTACK" : nil;
-            if (!sp_ai_nav_allowed(decision, f, strong->_directAttackAttempts) ||
-                ![strong->_directCandidate isEqualToString:current] || strong->_navigationThermalPause ||
-                (decision == SP_AI_ATTACK && (sp_ai_game_meta & 0x78))) return;
-            if (now - strong->_p2pMetricsAt >= 10.0) {
-                strong->_p2pMetricsAt = now;
-                sp_stub_log([[NSString stringWithFormat:@"AI navigation: frame age %.2fs; Core ML queue and prediction %.2fs",
-                    now-captured, now-submitted] UTF8String]);
-            }
-            if (now-captured > 2.2) {
-                strong->_navigation.proposed = SP_MOVE_NONE;
-                strong->_navigation.votes = 0;
-                [strong setNavigationStatus:@"P2P SLOW" at:now];
-                return;
-            }
-            if (strong->_sceneBeforeMove) {
-                if (captured < strong->_moveEndsAt) return;
-                sp_ai_nav_feedback(&strong->_navigation, sp_p2p_scene_changed(strong->_sceneBeforeMove, frame));
-                strong->_sceneBeforeMove = nil;
-            }
-            if (strong->_navigation.blocked) {
-                [strong setNavigationStatus:@"NAV BLOCK" at:now];
-                sp_stub_log("AI navigation: scene unchanged after bounded recovery; holding position");
-                return;
-            }
-            SPAIMove proposed = sp_ai_move(answer);
-            SPAIMove selected = sp_ai_nav_proposal(&strong->_navigation, proposed);
-            if (selected == SP_MOVE_NONE) {
-                if (decision == SP_AI_TARGET && [answer isEqualToString:@"WAIT"] && strong->_searchVisionWaits < 3)
-                    ++strong->_searchVisionWaits;
-                NSString *status = proposed != SP_MOVE_NONE ? @"NAV CHECK" :
-                    [answer isEqualToString:@"WARMUP"] ? @"P2P WARM" : @"P2P WAIT";
-                [strong setNavigationStatus:status at:now];
-                return;
-            }
-            if (!sp_ai_nav_has_slot(now, strong->_directNextAction) || now-strong->_p2pLastMove < 0.8) return;
-            BOOL recovering = strong->_navigation.stalls == 2;
-            NSString *move = recovering ? (selected == SP_MOVE_LEFT ? @"STRAFE_LEFT" : @"FORWARD") : answer;
-            NSTimeInterval duration = sp_ai_nav_duration(&strong->_navigation, selected);
-            if (strong.action && strong.action(move, CGPointZero, captured, duration)) {
-                sp_ai_nav_sent(&strong->_navigation, selected);
-                strong->_p2pLastMove = now;
-                strong->_searchVisionWaits = 0;
-                strong->_searchTabAttempts = 0;
-                strong->_sceneBeforeMove = frame;
-                strong->_moveEndsAt = now + duration;
-                SEL record = NSSelectorFromString(@"recordMove:");
-                if ([p2p respondsToSelector:record])
-                    ((void (*)(id,SEL,NSString *))objc_msgSend)(p2p, record, move);
-                [strong setNavigationStatus:recovering ? @"NAV RECOVER" : @"P2P MOVE" at:now];
-            } else [strong setNavigationStatus:@"P2P INPUT" at:now];
-        });
-    };
-    ((void (*)(id,SEL,NSData *,void (^)(NSString *)))objc_msgSend)(p2p,pred,frame,completion);
-}
-// Legacy visual observation only when public decision flags are unavailable.
+// Read-only model diagnostics. Predictions have no connection to the executor.
 - (void)previewP2P:(NSUInteger)run {
     if (!_visualPreviewMode || !_p2pAvailable || _visualPreviewError || _p2pPending ||
         !sp_p2p_latest_frame || sp_p2p_latest_at <= _p2pLastUsed ||
@@ -478,6 +353,7 @@ static NSArray<NSNumber *> *sp_ai_luminance(CVPixelBufferRef buffer) {
     if (![p2p respondsToSelector:pred]) { _visualPreviewError = YES; return; }
     NSUInteger gen = _p2pGeneration;
     NSTimeInterval captured = sp_p2p_latest_at;
+    NSTimeInterval submitted = NSProcessInfo.processInfo.systemUptime;
     _p2pLastUsed = captured;
     _p2pPending = YES;
     __weak SPGameAIController *weak = self;
@@ -496,8 +372,11 @@ static NSArray<NSNumber *> *sp_ai_luminance(CVPixelBufferRef buffer) {
             BOOL move = [@[@"FORWARD", @"BACK", @"LEFT", @"RIGHT", @"STRAFE_LEFT", @"STRAFE_RIGHT"] containsObject:answer];
             if (!move && ![@[@"WAIT", @"WARMUP"] containsObject:answer]) return;
             NSTimeInterval now = NSProcessInfo.processInfo.systemUptime;
-            if (sp_ai_packet_at <= 0 || now - sp_ai_packet_at >= 6.0 ||
-                (sp_ai_state_reason != 12 && sp_ai_state_reason != 13)) return;
+            if (now - strong->_p2pMetricsAt >= 10.0) {
+                strong->_p2pMetricsAt = now;
+                sp_stub_log([[NSString stringWithFormat:@"AI Pixel2Play: frame age %.2fs, prediction %.2fs",
+                    now-captured, now-submitted] UTF8String]);
+            }
             if (now - captured > 3.0) {
                 strong->_visualPreviewStatus = @"VIS SLOW";
                 strong->_visualPreviewAt = now;
@@ -505,7 +384,7 @@ static NSArray<NSNumber *> *sp_ai_luminance(CVPixelBufferRef buffer) {
                 return;
             }
             NSString *display = [@"VIS " stringByAppendingString:answer];
-            if (move) sp_stub_log([[NSString stringWithFormat:@"AI visual preview: %@ (public flags unknown)", answer] UTF8String]);
+            if (move) sp_stub_log([[NSString stringWithFormat:@"AI visual preview: %@ (diagnostic only)", answer] UTF8String]);
             strong->_visualPreviewStatus = display;
             strong->_visualPreviewAt = now;
         });
@@ -540,195 +419,207 @@ static NSArray<NSNumber *> *sp_ai_luminance(CVPixelBufferRef buffer) {
     };
     ((void (*)(id, SEL, NSString *, NSString *, void (^)(NSString *)))objc_msgSend)(bridge, selector, state, candidate, completion);
 }
+
+- (void)showPhase:(NSString *)phase {
+    if ([_lastPhase isEqualToString:phase]) return;
+    _lastPhase = phase;
+    sp_stub_log([[@"AI phase: " stringByAppendingString:phase] UTF8String]);
+    if (self.status) self.status(phase);
+}
+
+- (BOOL)submit:(NSString *)action forSample:(SPAINavSample)sample hold:(NSTimeInterval)hold {
+    BOOL accepted = self.autonomousTest && self.action && self.action(action, CGPointZero, sample.at, hold);
+    sp_stub_log([[NSString stringWithFormat:@"AI action: rules %@ observation %.3f adapter %@",
+        action, sample.at, accepted ? @"accepted" : @"rejected"] UTF8String]);
+    return accepted;
+}
+
+- (void)recordNavigation:(SPAINavOutcome)outcome {
+    sp_ai_nav_resolve(&_navBudget, outcome);
+    const char *name = sp_ai_nav_outcome_name(outcome);
+    SPAINavSample after = sp_ai_game_sample();
+    sp_stub_log([[NSString stringWithFormat:
+        @"AI navigation: %s target %u/%u position %u/%u counter %u/%u column %u/%u distance-q4 %u/%u",
+        name, (unsigned)_pulse.before.evidence.target, (unsigned)after.evidence.target,
+        (unsigned)_pulse.before.evidence.position, (unsigned)after.evidence.position,
+        (unsigned)_pulse.before.motion.counter, (unsigned)after.motion.counter,
+        _pulse.before.column, after.column, (unsigned)_pulse.before.evidence.distance,
+        (unsigned)after.evidence.distance] UTF8String]);
+    NSUserDefaults *prefs = NSUserDefaults.standardUserDefaults;
+    NSString *key = [@"sp_ai_navigation_count_" stringByAppendingString:[NSString stringWithUTF8String:name]];
+    NSInteger count = [prefs integerForKey:key];
+    if (count < 10000) [prefs setInteger:count + 1 forKey:key];
+}
+
+- (NSString *)advance:(SPAINavSample)sample now:(NSTimeInterval)now reduced:(BOOL)reduced {
+    if (!sp_ai_heartbeat_seen || !sp_ai_sample_fresh(sample.at, now)) {
+        if (_pulse.deadline) {
+            [self recordNavigation:SP_NAV_NO_SAMPLE];
+            _pulse = (SPAINavPulse){0};
+        }
+        if (self.releaseInput) self.releaseInput();
+        if (sp_ai_strip_at <= 0 || now-sp_ai_strip_at >= 6.0) return @"AI STRIP";
+        if (sp_ai_packet_at <= 0 || now-sp_ai_packet_at >= 6.0) return @"AI SYNC";
+        return sp_ai_state_reason > 0 ? [NSString stringWithFormat:@"AI DATA %d", sp_ai_state_reason] : @"AI STALE";
+    }
+
+    SPAIDecision decision = sp_ai_current_decision(now);
+    BOOL hostile = decision == SP_AI_ATTACK || decision == SP_AI_BIND;
+    uint8_t target = sample.evidence.target;
+    if (_encounter != target) {
+        if (_pulse.deadline) sp_stub_log("AI navigation: cancelled on target change");
+        if (self.releaseInput) self.releaseInput();
+        _directNextAction = _lastDamageAt = 0;
+        _visibleProposal = SP_MOVE_NONE;
+        _pulse = (SPAINavPulse){0};
+        _navBudget = (SPAINavBudget){0};
+        _combatEvidence = (SPAICombatEvidence){0, 255};
+        _probeAfterMove = NO;
+        _lootAttempts = 0;
+        if (hostile) _searchAttempts = 0;
+        _encounter = target;
+    }
+
+    if (sp_ai_health_known(sp_ai_game_hp)) {
+        if (sp_ai_game_hp < 35) _recovering = YES;
+        if (sp_ai_game_hp >= 50) _recovering = NO;
+    }
+    if (!sp_ai_health_known(sp_ai_game_hp) || decision == SP_AI_REST || _recovering) {
+        if (_pulse.deadline) [self invalidateDecision];
+        if (self.releaseInput) self.releaseInput();
+        if (sp_ai_game_flags & 2) return @"PLAYER DEAD";
+        return sp_ai_health_known(sp_ai_game_hp) ? @"RECOVER" : @"HP UNKNOWN";
+    }
+
+    if (_pulse.deadline) {
+        BOOL canContinue = hostile && target && sample.column && sp_ai_movement_key(_pulse.move, sp_ai_game_move_keys);
+        SPAINavOutcome outcome = sp_ai_nav_outcome(_pulse, sample, now);
+        if (!canContinue && (outcome == SP_NAV_PENDING || outcome == SP_NAV_NO_SAMPLE))
+            outcome = SP_NAV_CONTEXT_CHANGED;
+        if (outcome == SP_NAV_PENDING) return reduced ? @"HEAT WALK" : @"APPROACH";
+        if (self.releaseInput) self.releaseInput();
+        [self recordNavigation:outcome];
+        _probeAfterMove = _pulse.move == SP_MOVE_FORWARD && outcome == SP_NAV_DISPLACED;
+        _pulse = (SPAINavPulse){0};
+        _directNextAction = now + 0.4;
+    }
+
+    if (sample.motion.lootConfirmed && (sp_ai_game_flags & (16|128)) == (16|128) && target &&
+        (sp_ai_game_flags & 32) == 0 && _lootAttempts < 3) {
+        sp_stub_log("AI loot: selected corpse slot cleared");
+        _lootAttempts = 3;
+        _directNextAction = now + 0.4;
+        return @"LOOT OK";
+    }
+    decision = sp_ai_farm_decision(decision, sp_ai_game_flags, sp_ai_game_meta, _lootAttempts,
+        sample.motion.lootConfirmed);
+    if (decision == SP_AI_LOOT_BIND) return @"INTERACT BIND";
+    if (decision == SP_AI_LOOT_WAIT) return @"LOOT UNCONF";
+    if (decision == SP_AI_LOOT) {
+        if (!target) return @"LOOT UNKNOWN";
+        if (now >= _directNextAction) {
+            _directNextAction = now + 1.4;
+            if (![self submit:@"LOOT" forSample:sample hold:0]) return @"AI INPUT";
+            ++_lootAttempts;
+        }
+        return @"LOOT CHECK";
+    }
+    if (decision == SP_AI_TARGET) {
+        if (!(sample.evidence.bindings & SP_AI_TAB_BOUND)) return @"TAB BIND";
+        if (_searchAttempts >= 4) return @"NO TARGET";
+        if (now >= _directNextAction) {
+            _directNextAction = now + 1.0;
+            if (![self submit:@"TARGET" forSample:sample hold:0]) return @"AI INPUT";
+            ++_searchAttempts;
+        }
+        return reduced ? @"HEAT SEEK" : @"SEARCH";
+    }
+    if (decision == SP_AI_BIND) return @"F12 BIND";
+    if (!hostile) return @"AI WAIT";
+    if (!(sample.evidence.bindings & SP_AI_ROTATION_BOUND)) return @"F12 BIND";
+    if (!target) return @"TARGET UNKNOWN";
+
+    if (sp_ai_observe_damage(&_combatEvidence, sp_ai_game_target_hp)) {
+        _lastDamageAt = now;
+        sp_stub_log("AI combat: selected target health decreased");
+    }
+    BOOL combat = (sp_ai_game_flags & 32) != 0;
+    BOOL recentDamage = _lastDamageAt > 0 && now - _lastDamageAt < 3.0;
+    BOOL nearby = sample.evidence.distance <= 16; // horizontal proximity only
+    SPAIMove move = sp_ai_visible_approach(sp_ai_game_meta, 2, false, false);
+    if (sample.evidence.distance != SP_AI_DISTANCE_UNKNOWN)
+        move = sp_ai_apply_approach(&_approachExamples, move, combat);
+    if (move != _visibleProposal) {
+        _visibleProposal = move;
+        _visibleSeenAt = sample.at;
+    }
+    if (!sp_ai_combat_budget_open(_combatEvidence)) return @"NO DAMAGE";
+    if (now < _directNextAction) return combat ? @"IN COMBAT" : @"ENGAGE";
+
+    if (_combatEvidence.attacks > 0 && !_probeAfterMove && !nearby && !recentDamage && move != SP_MOVE_NONE) {
+        if (!sample.evidence.position || sample.motion.source != SP_MOTION_POSITION) return @"NAV POSITION";
+        if (!sp_ai_nav_budget_open(_navBudget, move)) return @"NAV BLOCK";
+        if (!sp_ai_movement_key(move, sp_ai_game_move_keys)) return @"MOVE BIND";
+        if (sample.at - _visibleSeenAt < 0.12 || now - _lastMoveAt < (reduced ? 2.0 : 0.8))
+            return reduced ? @"HEAT WALK" : @"APPROACH";
+        NSString *key = move == SP_MOVE_LEFT ? @"STRAFE_LEFT" : move == SP_MOVE_RIGHT ? @"STRAFE_RIGHT" : @"FORWARD";
+        NSTimeInterval hold = 0.60; // cover the nominal 0.5s SPHover cadence
+        if (![self submit:key forSample:sample hold:hold]) {
+            _directNextAction = now + 0.8;
+            return @"NAV INPUT";
+        }
+        sp_ai_nav_accept(&_navBudget, move);
+        _lastMoveAt = now;
+        _pulse = (SPAINavPulse){sample, move, now + hold, now + 1.8};
+        return reduced ? @"HEAT WALK" : @"APPROACH";
+    }
+
+    _directNextAction = now + 0.85;
+    if (![self submit:@"ATTACK" forSample:sample hold:0]) return @"AI INPUT";
+    ++_combatEvidence.attacks;
+    _probeAfterMove = NO;
+    return combat ? @"IN COMBAT" : @"ENGAGE";
+}
+
 - (void)pollDirect:(NSUInteger)run {
     if (!_active || _run != run) return;
     NSProcessInfo *process = NSProcessInfo.processInfo;
     NSTimeInterval now = process.systemUptime;
     NSProcessInfoThermalState thermal = process.thermalState;
+    if (thermal != _lastThermal || !_lastPhase) {
+        _lastThermal = thermal;
+        sp_stub_log([[NSString stringWithFormat:@"AI thermal: %ld", (long)thermal] UTF8String]);
+    }
     if (thermal == NSProcessInfoThermalStateCritical) { [self fail:@"AI HEAT"]; return; }
-    BOOL thermalPause = thermal >= NSProcessInfoThermalStateSerious;
-    BOOL telemetryFresh = sp_ai_game_at > 0 && now-sp_ai_game_at < 3.0;
-    BOOL combat = telemetryFresh && (sp_ai_game_flags & 32);
-    SPAIDecision base = sp_ai_current_decision(now);
-    if (!(sp_ai_game_flags & 128)) {
-        _lootAttempts = 0;
-    }
-    SPAIDecision decision = sp_ai_farm_decision(base, sp_ai_game_flags, sp_ai_game_meta, _lootAttempts,
-        sp_ai_game_feedback.lootConfirmed);
-    NSString *candidate = decision == SP_AI_TARGET ? @"TARGET" : decision == SP_AI_ATTACK ? @"ATTACK" :
-        decision == SP_AI_LOOT ? @"LOOT" : nil;
-    BOOL preview = (sp_ai_packet_at > 0 && now-sp_ai_packet_at < 6.0 &&
-        (sp_ai_state_reason == 12 || sp_ai_state_reason == 13));
-    BOOL phaseChanged = ((candidate || _directCandidate) && ![candidate isEqualToString:_directCandidate]) ||
-        combat != _wasInCombat;
-    if (phaseChanged || preview != _visualPreviewMode || thermalPause != _navigationThermalPause) {
-        if (combat != _wasInCombat)
-            sp_stub_log(combat ? "AI combat: public combat flag entered" :
-                telemetryFresh ? "AI combat: public combat flag ended" : "AI combat: public state lost");
-        if (phaseChanged) _layaState = nil;
-        _directCandidate = candidate;
-        _wasInCombat = combat;
-        _navigationThermalPause = thermalPause;
-        _visualPreviewMode = preview;
-        _visualPreviewStatus = nil;
-        _visualPreviewAt = 0;
-        _visualPreviewError = NO;
-        _p2pLastUsed = 0;
-        _p2pLastStatus = nil;
-        _directLastAction = nil;
-        if (phaseChanged) {
-            _directAttackAttempts = _visiblePulses = 0;
-            _searchTabAttempts = _searchSteps = _searchVisionWaits = 0;
-            _patrolSteps = _motionStalls = 0;
-            _motionDeadline = 0;
-            _lastTargetHP = 255;
-            _lastDamageAt = 0;
-            _directNextAction = 0;
-        }
+    BOOL reduced = thermal >= NSProcessInfoThermalStateSerious;
+    SPAINavSample sample = sp_ai_game_sample();
+
+    BOOL preview = self.modelDiagnostics && !self.autonomousTest && !reduced;
+    if (preview != _visualPreviewMode) {
         [self invalidateDecision];
-        if (self.releaseInput) self.releaseInput();
+        _visualPreviewMode = preview;
+    }
+    sp_p2p_enable(preview && _p2pAvailable && !_visualPreviewError);
+    if (self.autonomousTest) {
+        [self showPhase:[self advance:sample now:now reduced:reduced]];
+    } else if (preview) {
+        if (sp_ai_sample_fresh(sample.at, now)) {
+            SPAIDecision decision = sp_ai_current_decision(now);
+            NSString *candidate = decision == SP_AI_TARGET ? @"TARGET" : decision == SP_AI_ATTACK ? @"ATTACK" : nil;
+            [self evaluateLaya:candidate combat:(sp_ai_game_flags & 32) != 0 run:run];
+        }
+        [self previewP2P:run];
+        NSString *status = !_p2pAvailable ? (_layaEnabled ? @"LAYA DIAG" : @"MODEL FILE") : _visualPreviewError ? @"MODEL ERROR" :
+            (_visualPreviewStatus && now-_visualPreviewAt < 5.0 ? _visualPreviewStatus : @"VIS LOAD");
+        [self showPhase:status];
+    } else {
+        [self showPhase:reduced ? @"HEAT PAUSE" :
+            (sp_ai_sample_fresh(sample.at, now) ? @"OBSERVING" : @"AI STALE")];
     }
 
-    if (_motionDeadline > 0 && telemetryFresh) {
-        if (sp_ai_farm_progress(_motionStart, sp_ai_game_feedback)) {
-            _motionStalls = 0;
-            _motionDeadline = 0;
-        } else if (now >= _motionDeadline) {
-            if (_motionStart.source == sp_ai_game_feedback.source && _motionStalls < 2)
-                ++_motionStalls;
-            _motionDeadline = 0;
-        }
-    }
-    NSString *display = @"AI WAIT";
-    if (sp_ai_strip_at <= 0 || now-sp_ai_strip_at >= 6.0) display = @"AI STRIP";
-    else if (sp_ai_packet_at <= 0 || now-sp_ai_packet_at >= 6.0) display = @"AI SYNC";
-    else if (sp_ai_state_reason > 0) display = [NSString stringWithFormat:@"AI DATA %d", sp_ai_state_reason];
-    if (decision == SP_AI_REST) display = @"AI REST";
-    else if (decision == SP_AI_BIND) display = @"F12 BIND";
-    else if (decision == SP_AI_LOOT_BIND) display = @"INTERACT BIND";
-    else if (decision == SP_AI_LOOT_WAIT) display = @"LOOT WAIT";
-    else if (combat) display = @"AI COMBAT";
-
-    if (decision == SP_AI_ATTACK && sp_ai_health_known(sp_ai_game_target_hp)) {
-        if (sp_ai_health_known(_lastTargetHP) && sp_ai_game_target_hp < _lastTargetHP) {
-            _lastDamageAt = now;
-            _visiblePulses = 0;
-        }
-        _lastTargetHP = sp_ai_game_target_hp;
-    }
-    BOOL recentDamage = _lastDamageAt > 0 && now-_lastDamageAt < 3.0;
-    SPAIFarmPlan plan = sp_ai_plan_farm(decision, sp_ai_game_flags, sp_ai_game_meta, _directAttackAttempts,
-        recentDamage, &_approachExamples);
-    // The expensive frame capture and both models pause, while the existing
-    // public target column can still guide short, infrequent movement pulses.
-    SPAIMove visibleMove = _visiblePulses < 12 && _motionStalls < 2 ? plan.movement : SP_MOVE_NONE;
-    BOOL hasColumn = decision == SP_AI_ATTACK && (sp_ai_game_meta & 0x78);
-    BOOL patrol = decision == SP_AI_TARGET && sp_ai_game_feedback.source != SP_MOTION_UNKNOWN;
-    BOOL navigate = plan.usePixel2Play && !patrol && _motionStalls < 2;
-    sp_p2p_enable(_p2pAvailable && !thermalPause && (preview || (navigate && !_navigation.blocked)));
-    if (preview) {
-        if (thermalPause) display = @"VIS HEAT";
-        else if (!_p2pAvailable) display = @"VIS FILE";
-        else if (_visualPreviewError) display = @"VIS ERR";
-        else {
-            [self previewP2P:run];
-            display = _visualPreviewStatus && now-_visualPreviewAt < 5.0 ? _visualPreviewStatus : @"VIS LOAD";
-        }
-    } else if (candidate) {
-        if (!thermalPause && decision != SP_AI_LOOT)
-            [self evaluateLaya:candidate combat:combat run:run];
-        BOOL keyDue = now >= _directNextAction;
-        if (keyDue && self.action) {
-            BOOL sent = self.action(candidate, CGPointZero, sp_ai_game_at, 0);
-            if (sent) {
-                if (decision == SP_AI_ATTACK && _directAttackAttempts < 2) ++_directAttackAttempts;
-                if (decision == SP_AI_LOOT) ++_lootAttempts;
-                if (decision == SP_AI_TARGET && _searchTabAttempts < 5) ++_searchTabAttempts;
-                BOOL approach = plan.phase == SP_FARM_APPROACH &&
-                    (visibleMove != SP_MOVE_NONE || plan.usePixel2Play);
-                _directNextAction = now + sp_ai_direct_interval(decision, approach);
-                BOOL unknownHP = !sp_ai_health_known(sp_ai_game_hp);
-                _directLastAction = decision == SP_AI_ATTACK ? (unknownHP ? @"HP? F12" : @"AI F12") :
-                    decision == SP_AI_LOOT ? @"AI LOOT" : (unknownHP ? @"HP? TAB" : @"AI TAB");
-                _directLastActionAt = now;
-                display = _directLastAction;
-            } else { display = @"AI INPUT"; _directNextAction = now + 0.4; }
-        } else if (_directLastAction && now-_directLastActionAt < 1.0) display = _directLastAction;
-        // Use only fresh, public on-screen target columns, and require two
-        // agreeing packets before steering. Do not send this branch through P2P.
-        if (visibleMove != _visibleProposal) {
-            _visibleProposal = visibleMove;
-            _visibleSeenAt = sp_ai_game_at;
-        } else if (!keyDue && !_motionDeadline && visibleMove != SP_MOVE_NONE && sp_ai_game_at - _visibleSeenAt >= 0.12 &&
-                   now-sp_ai_game_at < 0.85 && now-_p2pLastMove >= sp_ai_visible_move_spacing(thermalPause) &&
-                   sp_ai_nav_has_slot(now, _directNextAction) && self.action) {
-            NSString *move = visibleMove == SP_MOVE_LEFT ? @"STRAFE_LEFT" :
-                visibleMove == SP_MOVE_RIGHT ? @"STRAFE_RIGHT" : @"FORWARD";
-            NSTimeInterval duration = sp_ai_visible_move_duration(visibleMove, thermalPause);
-            if (sp_ai_game_feedback.source == SP_MOTION_SPEED) duration = MAX(duration, 0.59);
-            if (self.action(move, CGPointZero, sp_ai_game_at, duration)) {
-                if (sp_ai_game_feedback.source != SP_MOTION_UNKNOWN) {
-                    _motionStart = sp_ai_game_feedback;
-                    _motionDeadline = now + 1.8;
-                }
-                ++_visiblePulses;
-                _p2pLastMove = now;
-                display = thermalPause ? @"HEAT WALK" : @"AI APPROACH";
-            } else display = @"NAV INPUT";
-        }
-        SPAIMove search = sp_ai_search_step(decision, sp_ai_game_flags, _searchTabAttempts,
-            _searchVisionWaits, _searchSteps, thermalPause || !_p2pAvailable);
-        if (patrol)
-            search = _searchTabAttempts > 0 ? sp_ai_patrol_step(decision, sp_ai_game_flags, _patrolSteps, _motionStalls) : SP_MOVE_NONE;
-        BOOL searchSent = NO;
-        if (search != SP_MOVE_NONE && !keyDue && !combat && !_motionDeadline && _motionStalls < 2 && !_navigation.blocked &&
-            !_sceneBeforeMove && !_p2pPending && now-sp_ai_game_at < 0.85 && now-_p2pLastMove >= 1.4 &&
-            sp_ai_nav_has_slot(now, _directNextAction) && self.action) {
-            NSString *move = search == SP_MOVE_LEFT ? @"STRAFE_LEFT" :
-                search == SP_MOVE_RIGHT ? @"STRAFE_RIGHT" : search == SP_MOVE_BACK ? @"BACK" : @"FORWARD";
-            NSTimeInterval duration = patrol ? 0.60 : thermalPause ? 0.22 : 0.32;
-            if (self.action(move, CGPointZero, sp_ai_game_at, duration)) {
-                if (patrol) {
-                    ++_patrolSteps;
-                    _motionStart = sp_ai_game_feedback;
-                    _motionDeadline = now + 1.8;
-                } else ++_searchSteps;
-                _searchTabAttempts = 0;
-                _searchVisionWaits = 0;
-                _p2pLastMove = now;
-                if (!patrol && sp_p2p_latest_frame && now-sp_p2p_latest_at < 1.5) {
-                    _sceneBeforeMove = sp_p2p_latest_frame;
-                    _moveEndsAt = now + duration;
-                }
-                sp_stub_log([[NSString stringWithFormat:@"AI search: %@ %@ (%u/%u)",
-                    patrol ? @"patrol" : @"scout", move, patrol ? _patrolSteps : _searchSteps,
-                    patrol ? 12 : 3] UTF8String]);
-                display = patrol ? @"AI PATROL" : @"AI SCOUT";
-                searchSent = YES;
-            } else display = @"NAV INPUT";
-        }
-        if (navigate && !searchSent && ![display isEqualToString:@"NAV INPUT"]) {
-            if (thermalPause) display = decision == SP_AI_TARGET ? @"HEAT SEEK" : @"HEAT NO PLATE";
-            else if (_navigation.blocked) display = @"NAV BLOCK";
-            else {
-                [self tryP2P:run];
-                if (_p2pLastStatus && now-_p2pStatusAt < 2.0 && now-_directLastActionAt >= 1.0)
-                    display = _p2pLastStatus;
-            }
-        }
-    }
-    if (_motionStalls >= 2 && (decision == SP_AI_TARGET || decision == SP_AI_ATTACK) &&
-        [display isEqualToString:@"AI WAIT"]) display = @"NAV BLOCK";
-    if (patrol && _patrolSteps >= 12 && [display isEqualToString:@"AI WAIT"]) display = @"PATROL END";
-    if (decision == SP_AI_ATTACK && !hasColumn && !combat && _directAttackAttempts >= 2 &&
-        (!_p2pAvailable || [display isEqualToString:@"AI WAIT"])) display = @"NAV NO PLATE";
-    if (decision == SP_AI_ATTACK && hasColumn && _visiblePulses >= 12 &&
-        [display isEqualToString:@"AI WAIT"]) display = @"NAV LIMIT";
-    if (self.status) self.status(display);
     __weak SPGameAIController *weak = self;
-    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.4 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
-        [weak pollDirect:run];
-    });
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)((reduced ? 0.8 : 0.4) * NSEC_PER_SEC)),
+        dispatch_get_main_queue(), ^{ [weak pollDirect:run]; });
 }
 - (void)start {
     if (_active || _starting || _stopping) return;
@@ -751,20 +642,17 @@ static NSArray<NSNumber *> *sp_ai_luminance(CVPixelBufferRef buffer) {
     _visualPreviewMode = _visualPreviewError = NO;
     _visualPreviewStatus = nil;
     _visualPreviewAt = 0;
-    _wasInCombat = _navigationThermalPause = NO;
-    _directCandidate = nil;
-    _directNextAction = _directLastActionAt = _p2pStatusAt = _p2pMetricsAt = 0;
-    _directAttackAttempts = _visiblePulses = _lootAttempts = 0;
-    _searchTabAttempts = _searchSteps = _searchVisionWaits = 0;
-    _patrolSteps = _motionStalls = 0;
-    _motionDeadline = 0;
-    _lastTargetHP = 255;
-    _lastDamageAt = 0;
-    _directLastAction = _p2pLastStatus = nil;
+    _lastPhase = nil;
+    _directNextAction = _lastMoveAt = _lastDamageAt = 0;
+    _lootAttempts = _searchAttempts = 0;
+    _navBudget = (SPAINavBudget){0};
+    _combatEvidence = (SPAICombatEvidence){0, 255};
+    _encounter = 0;
+    _recovering = _probeAfterMove = NO;
     Class p2p = NSClassFromString(@"SPP2PBridge");
     SEL available = NSSelectorFromString(@"available");
     _p2pAvailable = [p2p respondsToSelector:available] && ((BOOL (*)(id,SEL))objc_msgSend)(p2p,available);
-    _p2pLastUsed = _p2pLastMove = 0;
+    _p2pLastUsed = _p2pMetricsAt = 0;
     [self invalidateDecision];
     _active = YES;
     NSUInteger run = ++_run;

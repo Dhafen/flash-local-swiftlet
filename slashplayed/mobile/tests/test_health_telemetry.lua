@@ -44,7 +44,7 @@ IsMounted = function() return false end
 GetTime = function() return 2 end
 reset(val(secret), val(secret), val(secret))
 local packet = state()
-assert(#packet == 12 and packet:byte(3) == 45 and packet:byte(4) == 255 and packet:byte(5) == 255)
+assert(#packet == 18 and packet:byte(3) == 45 and packet:byte(4) == 255 and packet:byte(5) == 255)
 UnitCanAttack = val(secret)
 packet = state()
 assert(packet:byte(3) == 0 and packet:byte(4) == 6)
@@ -151,6 +151,33 @@ local moving = state()
 assert(moving:byte(10) == 2 and state():byte(11) ~= moving:byte(11))
 GetUnitSpeed = val(secret)
 assert(state():byte(10) == 0)
+
+local map, targetX, targetMap = 4, 11, 4
+UnitPosition = function(unit)
+    if unit == "target" then return targetX, 2, 3, targetMap end
+    return motionX, 2, 3, map
+end
+GetBindingAction = function(key)
+    if key == "TAB" then return "TARGETNEARESTENEMY" end
+    if key == "F12" then return "CLICK TactaraMainButton:LeftButton" end
+    if key == "F" then return "INTERACTTARGET" end
+end
+local nav = state()
+assert(nav:byte(13) == 78 and nav:byte(14) ~= 0 and nav:byte(15) ~= 0)
+assert(nav:byte(16) == 0 and nav:byte(17) == 36 and nav:byte(18) == 3)
+targetX = secret
+assert(state():byte(17) == 255)
+targetX, targetMap = 11, 5
+assert(state():byte(17) == 255)
+map = 5
+assert(state():byte(15) ~= nav:byte(15))
+nav = state()
+motionX = 80
+assert(state():byte(15) ~= nav:byte(15))
+UnitGUID = val("new-selected-target")
+assert(state():byte(14) ~= nav:byte(14))
+UnitGUID = val(secret)
+assert(state():byte(14) == 0 and state():byte(17) == 255)
 
 local lootEvent, lootState = assert(loadstring(source .. "\nreturn spAILootEvent, spAIState"))()
 targetDead = false

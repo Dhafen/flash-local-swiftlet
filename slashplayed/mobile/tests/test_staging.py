@@ -19,20 +19,21 @@ assert '@interface SPGameAIController' in event
 assert 'sp_ai_game_update' in event and 'pollDirect:' in event
 assert 'decideGameState:candidate:completion:' in event
 assert 'sp_ai_game_update(sp_hover_asm.data + offset' in (root / "shims/appkit/sphover.m").read_text()
-assert 'SPH_MAX_RECTS * 6 + 12' in (root / "shims/appkit/sphoverstrip.h").read_text()
-assert '.. spAIState()' in (root / "addon/SPHover/SPHover.lua").read_text()
+assert 'SPH_MAX_RECTS * 6 + 18' in (root / "shims/appkit/sphoverstrip.h").read_text()
+assert '.. spLastAIState' in (root / "addon/SPHover/SPHover.lua").read_text()
 assert 'local function aiHeartbeat()' in (root / "addon/SPHover/SPHover.lua").read_text()
 assert 'showChunk(aiFrame)' in (root / "addon/SPHover/SPHover.lua").read_text()
-assert 'sp_ai_heartbeat(frame[2], frame + 5, SPH_PAYLOAD_BYTES)' in (root / "shims/appkit/sphover.m").read_text()
+assert 'sp_ai_heartbeat(frame[2], frame + 5, SPH_PAYLOAD_BYTES, observedAt)' in (root / "shims/appkit/sphover.m").read_text()
 assert 'seq == sp_ai_heartbeat_seq' in event
 assert '[_mobileAI stop];' in event
 assert 'sp_mobile_emit_rotation()' in event
 assert 'RPSampleBufferTypeVideo' in event
 assert 'VNRecognizeTextRequest' in event
 assert 'VNClassifyImageRequest' in event and 'sp_ai_luminance' in event
-assert 'recordAction:observation:' in event and 'resetDecision' in event
+assert 'resetDecision' in event
 assert 'captured < input->_mobileAIManualUntil' in event
-assert 'executed = self.action' in event
+legacy_result = event.split('- (void)finish:', 1)[1].split('- (void)inspect:', 1)[0]
+assert 'self.action' not in legacy_result
 assert 'SPAIHarness' in (root / "apps/client/SPAIGraph.swift").read_text()
 assert 'harness.validate' in (root / "apps/client/spgameai.swift").read_text()
 if sys.platform == "darwin" and len(sys.argv) == 2:
@@ -57,7 +58,6 @@ assert 'AI input: Tactara F12 rotation' in event and 'sp_mobile_emit_rotation();
 assert 'VIS SLOW' in event
 assert 'NSProcessInfo.processInfo.systemUptime - captured <= 8.0' in event
 assert 'input->_mobileAIManualUntil' in event
-assert '[parts[0] isEqualToString:@"INTERACT"]' in event
 assert 'SystemLanguageModel.default.isAvailable' in (root / "apps/client/spgameai.swift").read_text()
 assert 'spgameai.swift -o' in (root / "apps/client/build-launcher.sh").read_text()
 assert 'sp_game_ai_register();' in (root / "apps/client/launcher.m").read_text()
@@ -206,24 +206,24 @@ assert 'AI Laya comparison:' in event and 'AI INPUT' in event
 
 assert 'SPP2PRuntime.swift' in (root / 'apps/client/build-launcher.sh').read_text()
 assert 'sp_p2p_capture(cb, tex)' in (root / 'shims/appkit/sphover.m').read_text()
-assert 'sp_p2p_enable(NO)' in event and 'tryP2P:' in event
+assert 'sp_p2p_enable(NO)' in event and 'tryP2P:' not in event
 assert 'recordMove:' in (root / 'apps/client/SPP2PRuntime.swift').read_text()
 
 assert 'local function unavailable(code)' in (root / "addon/SPHover/SPHover.lua").read_text()
 assert 'AI telemetry: state unavailable reason' in event
 
 assert 'local function spReadHealthPercent(unit)' in (root / "addon/SPHover/SPHover.lua").read_text()
-assert 'else if (sp_ai_state_reason > 0)' in event
+assert 'sp_ai_state_reason > 0 ?' in event
 
 assert 'local function spDisplayHealth(bar, current, capacity)' in (wolkara / "Hud.lua").read_text()
 assert 'spDisplayHealth(frame.health, rawHealth, rawMaxHealth)' in (wolkara / "Hud.lua").read_text()
 preview_source = event.split('- (void)previewP2P:',1)[1].split('- (void)evaluateLaya:',1)[0]
 assert 'predictFrame:completion:' in preview_source
 assert 'strong.action(' not in preview_source and 'recordMove:' not in preview_source
-assert 'sp_ai_nav_allowed(decision' in event and 'F12 BIND' in event
+assert 'SP_AI_ROTATION_BOUND' in event and 'F12 BIND' in event
 assert '@"ATTACK"' not in preview_source and '@"CLICK"' not in preview_source
-assert 'sp_ai_state_reason == 12 || sp_ai_state_reason == 13' in event and 'VIS FILE' in event
-assert 'now - captured > 3.0' in preview_source and 'P2P INPUT' in event
+assert 'self.modelDiagnostics && !self.autonomousTest && !reduced' in event and 'MODEL FILE' in event
+assert 'now - captured > 3.0' in preview_source and 'MODEL ERROR' in event
 assert 'STRAFE_LEFT' in event and 'STRAFE_RIGHT' in event
 if sys.platform == "darwin" and len(sys.argv) == 2:
     import subprocess
@@ -235,10 +235,13 @@ if sys.platform == "darwin" and len(sys.argv) == 2:
         subprocess.run([binary], check=True)
 
 assert 'local hp = spReadHealthPercent("player") or 255' in (root / "addon/SPHover/SPHover.lua").read_text()
-assert 'sp_ai_health_known' in event and '@"HP? F12"' in event
-assert 'sp_ai_nav_feedback' in event and 'sp_ai_nav_has_slot' in event
+assert 'sp_ai_health_known' in event and '@"HP UNKNOWN"' in event
+assert 'sp_ai_nav_outcome(_pulse, sample, now)' in event and 'sp_ai_nav_budget_open(_navBudget, move)' in event
 assert 'sp_mobile_ai_yield:' in event and 'UIControlEventTouchDown' in event
-assert 'NSProcessInfoThermalStateCritical' in event
+yield_method = event.split('- (void)sp_mobile_ai_yield:(id)sender {', 1)[1].split('\n}', 1)[0]
+assert '[self sp_mobile_ai_release_key]' in yield_method and '[_mobileAI stop]' in yield_method
+assert 'NSProcessInfoThermalStateCritical' in event and 'reduced ? 0.8 : 0.4' in event
+assert 'input->_mobileAI.autonomousTest' in event and '_mobileAI.autonomousTest = NO' in event
 
 start_method = event.split("- (void)sp_mobile_ai_toggle:(UIButton *)button {", 1)[1].split("\n}", 1)[0]
 assert "dispatch_async(dispatch_get_main_queue()" in start_method

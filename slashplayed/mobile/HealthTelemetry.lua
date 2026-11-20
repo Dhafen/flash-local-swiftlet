@@ -133,33 +133,52 @@ if type(CreateFrame) == "function" then
     frame:SetScript("OnEvent", function(...) pcall(spAILootEvent, ...) end)
 end
 
-local spAIMotionCounter, spAIMotionSource = 0, 0
+local spAIMotionCounter, spAIMotionSource, spAIPositionEpoch = 0, 0, 0
 local spAIAnchorX, spAIAnchorY, spAIAnchorMap
-local function spAIMotion()
-    local function number(value)
-        return spAIReadable(value) and type(value) == "number" and value == value
-            and value ~= math.huge and value ~= -math.huge
-    end
+local spAIPreviousTarget, spAITargetEpoch = nil, 0
+local function spAIFinite(value)
+    return spAIReadable(value) and type(value) == "number" and value == value
+        and value ~= math.huge and value ~= -math.huge
+end
+
+local function spAIPosition(unit)
+    if type(UnitPosition) ~= "function" then return end
+    local ok, x, y, _, map = pcall(UnitPosition, unit)
+    if ok and spAIFinite(x) and spAIFinite(y) and spAIFinite(map) then return x, y, map end
+end
+
+local function spAIMotion(foeID)
     local source = 0
-    if type(UnitPosition) == "function" then
-        local ok, x, y, _, map = pcall(UnitPosition, "player")
-        if ok and number(x) and number(y) and number(map) then
-            source = 1
-            if spAIAnchorMap == map then
-                local dx, dy = x-spAIAnchorX, y-spAIAnchorY
-                local displacement = dx*dx + dy*dy
-                if displacement >= 0.25 and displacement <= 900 then
-                    spAIMotionCounter = (spAIMotionCounter + 1) % 256
-                end
-                if displacement >= 0.25 then spAIAnchorX, spAIAnchorY = x, y end
-            else spAIAnchorX, spAIAnchorY, spAIAnchorMap = x, y, map end
+    local distance = 65535
+    local x, y, map = spAIPosition("player")
+    if map then
+        source = 1
+        if spAIAnchorMap ~= map then
+            spAIPositionEpoch = spAIPositionEpoch % 255 + 1
+            spAIAnchorX, spAIAnchorY, spAIAnchorMap = x, y, map
+        else
+            local dx, dy = x-spAIAnchorX, y-spAIAnchorY
+            local displacement = dx*dx + dy*dy
+            if displacement > 900 then
+                spAIPositionEpoch = spAIPositionEpoch % 255 + 1
+            elseif displacement >= 0.25 then
+                spAIMotionCounter = (spAIMotionCounter + 1) % 256
+            end
+            if displacement >= 0.25 then spAIAnchorX, spAIAnchorY = x, y end
+        end
+        if foeID then
+            local tx, ty, targetMap = spAIPosition("target")
+            if map == targetMap then
+                local dx, dy = x-tx, y-ty
+                distance = math.min(65534, math.floor(4 * math.sqrt(dx*dx + dy*dy) + 0.5))
+            end
         end
     end
     if source == 0 then
         spAIAnchorX, spAIAnchorY, spAIAnchorMap = nil, nil, nil
         if type(GetUnitSpeed) == "function" then
             local ok, speed = pcall(GetUnitSpeed, "player")
-            if ok and number(speed) then
+            if ok and spAIFinite(speed) then
                 source = 2
                 if spAIMotionSource == source and speed > 0.1 then
                     spAIMotionCounter = (spAIMotionCounter + 1) % 256
@@ -168,7 +187,7 @@ local function spAIMotion()
         end
     end
     spAIMotionSource = source
-    return source, spAIMotionCounter
+    return source, spAIMotionCounter, source == 1 and spAIPositionEpoch or 0, distance
 end
 
 -- Health is optional. All decision flags must be public and known.
@@ -176,7 +195,7 @@ end
 local function spAIState()
     if not SPPhoneTouchRects then return "" end
     local stage = 1
-    local function unavailable(code) return string.char(65, 73, 0, code, 0, 0, 75, 0, 70, 0, 0, 0) end
+    local function unavailable(code) return string.char(65, 73, 0, code, 0, 0, 75, 0, 70, 0, 0, 0, 78, 0, 0, 255, 255, 0) end
     local function boolValue(value)
         if type(issecretvalue) == "function" and issecretvalue(value) then error("restricted value") end
         if type(canaccessvalue) == "function" and not canaccessvalue(value) then error("restricted value") end
@@ -235,11 +254,18 @@ local function spAIState()
         end
         if hostile and not targetDead then meta = meta + 8 * spAITargetColumn() end
         if not targetDead and foeID == spAILootedTarget then spAILootedTarget = nil end
-        local motionSource, motionCounter = spAIMotion()
+        if foeID ~= spAIPreviousTarget then
+            spAITargetEpoch = spAITargetEpoch % 255 + 1
+            spAIPreviousTarget = foeID
+        end
+        local motionSource, motionCounter, positionEpoch, distance = spAIMotion(foeID)
+        local bindings = (spAIBinding("TAB") == "TARGETNEARESTENEMY" and 1 or 0)
+            + (rotation == "CLICK TactaraMainButton:LeftButton" and 2 or 0)
         local looted = targetDead and foeID and foeID == spAILootedTarget and 1 or 0
         return string.char(65, 73, flags, hp, targetHP, meta, 75, spAIMovementBindings(),
-            70, motionSource, motionCounter, looted)
+            70, motionSource, motionCounter, looted, 78, foeID and spAITargetEpoch or 0, positionEpoch,
+            math.floor(distance / 256), distance % 256, bindings)
     end)
-    if not ok then spAICombatTarget = nil; return unavailable(stage) end
+    if not ok then spAICombatTarget = nil; spAIPreviousTarget = nil; return unavailable(stage) end
     return state
 end

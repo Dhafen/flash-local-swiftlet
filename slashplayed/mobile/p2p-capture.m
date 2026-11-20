@@ -35,6 +35,7 @@ static void sp_p2p_capture(id<MTLCommandBuffer> cb, id<MTLTexture> tex) {
         // letterboxing. Use area averaging (not the upstream Hamming kernel)
         // to approximate antialiased downsampling; omit the hidden strip.
         NSMutableData *sample = [NSMutableData dataWithLength:3*192*192];
+        NSTimeInterval resizeStarted = NSProcessInfo.processInfo.systemUptime;
         uint8_t *out = sample.mutableBytes;
         const uint8_t *src = buf.contents;
         const size_t visibleH = h - 4;
@@ -50,10 +51,17 @@ static void sp_p2p_capture(id<MTLCommandBuffer> cb, id<MTLTexture> tex) {
             size_t i=y*192+x;
             out[i]=red/count; out[192*192+i]=green/count; out[2*192*192+i]=blue/count;
         }
+        NSTimeInterval resized = NSProcessInfo.processInfo.systemUptime;
         dispatch_async(dispatch_get_main_queue(), ^{
             if (atomic_load(&sp_p2p_capture_enabled) && atomic_load(&sp_p2p_capture_epoch)==epoch) {
                 sp_p2p_latest_frame = sample;
                 sp_p2p_latest_at = started;
+                static NSTimeInterval lastMetrics;
+                if (started - lastMetrics >= 10.0) {
+                    lastMetrics = started;
+                    sp_stub_log([[NSString stringWithFormat:@"AI capture: %zux%zu %zu bytes, GPU wait %.1fms, resize %.1fms",
+                        w, h, bytes, 1000*(resizeStarted-started), 1000*(resized-resizeStarted)] UTF8String]);
+                }
             }
         });
         atomic_store(&sp_p2p_inflight,false);
