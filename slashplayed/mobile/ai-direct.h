@@ -3,7 +3,7 @@
 #define SP_AI_DIRECT_H
 #include <stdbool.h>
 #include <stdint.h>
-typedef enum { SP_AI_WAIT, SP_AI_REST, SP_AI_TARGET, SP_AI_ATTACK, SP_AI_BIND } SPAIDecision;
+typedef enum { SP_AI_WAIT, SP_AI_REST, SP_AI_TARGET, SP_AI_ATTACK, SP_AI_BIND, SP_AI_LOOT, SP_AI_LOOT_BIND } SPAIDecision;
 static inline bool sp_ai_hp_known(uint8_t hp) { return hp <= 100; }
 static inline bool sp_ai_hostile(uint8_t flags, uint8_t hp) {
     return (flags & 4) && (flags & 8) && !(flags & 16) && (!sp_ai_hp_known(hp) || hp > 0);
@@ -56,6 +56,21 @@ static inline SPAIMove sp_ai_nav_proposal(SPAINavigation *nav, SPAIMove move) {
     }
     unsigned required = move == nav->last ? 1 : sp_ai_move_opposes(nav->last, move) ? 3 : 2;
     return nav->votes >= required ? move : SP_MOVE_NONE;
+}
+
+// Confirmed local encounter, selected NPC corpse and combat ended.
+static inline SPAIDecision sp_ai_farm_decision(SPAIDecision base, uint8_t flags, uint8_t meta, unsigned attempts) {
+    if (base != SP_AI_TARGET || (flags & (4|16|128)) != (4|16|128) || attempts >= 2) return base;
+    return (meta & (128|4)) == (128|4) ? SP_AI_LOOT : SP_AI_LOOT_BIND;
+}
+
+static inline SPAIMove sp_ai_visible_approach(uint8_t meta, unsigned attempts, bool combat, bool recentDamage) {
+    unsigned column = (meta >> 3) & 15;
+    if (!(meta & 128) || !column || attempts < 2) return SP_MOVE_NONE;
+    if (column <= 6) return SP_MOVE_LEFT;
+    if (column >= 10) return SP_MOVE_RIGHT;
+    if (combat && recentDamage) return SP_MOVE_NONE;
+    return SP_MOVE_FORWARD;
 }
 
 static inline double sp_ai_nav_duration(const SPAINavigation *nav, SPAIMove move) {

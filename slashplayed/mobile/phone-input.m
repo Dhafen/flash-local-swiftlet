@@ -320,6 +320,12 @@ static UIButton *sp_mobile_button(NSString *title, NSString *label, id owner, SE
             sp_stub_log("AI input: Tactara F12 rotation");
         }
         else if ([action isEqualToString:@"TARGET"]) sp_soft_emit(@"\t", 0x30, NO);
+        else if ([action isEqualToString:@"LOOT"]) {
+            if (!(sp_ai_game_meta & 4)) return NO;
+            if (sp_ai_game_meta & 1) sp_soft_emit(@"f", 0x03, NO);
+            else sp_soft_emit([NSString stringWithFormat:@"%C", (unichar)0xF70D], 0x6D, NO);
+            sp_stub_log("AI input: interact with selected corpse");
+        }
         else if ([action isEqualToString:@"FORWARD"]) return [input sp_mobile_ai_hold_axis:CGPointMake(0,1) duration:duration];
         else if ([action isEqualToString:@"BACK"]) return [input sp_mobile_ai_hold_axis:CGPointMake(0,-1) duration:duration];
         else if ([action isEqualToString:@"LEFT"] || [action isEqualToString:@"STRAFE_LEFT"])

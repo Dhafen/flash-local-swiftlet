@@ -57,9 +57,55 @@ packet = state()
 assert(packet:byte(4) == 20)
 print("partial public game-state tests passed")
 
-GetBindingAction = function(key,checkOverride) assert(key=="F12" and checkOverride); return "CLICK TactaraMainButton:LeftButton" end
+GetBindingAction = function(key, checkOverride)
+    assert(checkOverride)
+    if key == "F12" then return "CLICK TactaraMainButton:LeftButton" end
+end
 assert(state():byte(6)==129)
 GetBindingAction = val("JUMP"); assert(state():byte(6)==130)
 GetBindingAction = val(secret); assert(state():byte(6)==128)
 GetBindingAction = nil; assert(state():byte(6)==128)
 print("public F12 binding checks passed")
+
+UnitExists = val(true)
+UnitCanAttack = val(true)
+UnitAffectingCombat = val(true)
+UnitGUID = val("test-foe-A")
+local targetDead = false
+UnitIsDeadOrGhost = function(unit) return unit == "target" and targetDead end
+local x = 100
+local forbidden = false
+local p = {
+    IsForbidden = function() return forbidden end,
+    IsVisible = val(true),
+    GetCenter = function() return x, 60 end
+}
+UIParent = { GetWidth = val(200) }
+C_NamePlate = {
+    GetNamePlateForUnit = function(unit)
+        assert(unit == "target")
+        return p
+    end
+}
+GetBindingAction = function(key) if key == "F" then return "INTERACTTARGET" end end
+reset(val(.9), nil, nil)
+assert(state():byte(6) == 133 + 8 * 8)
+x = secret
+assert(state():byte(6) == 133)
+x = 180
+forbidden = true
+assert(state():byte(6) == 133)
+forbidden = false
+assert(state():byte(6) > 133)
+targetDead = true
+UnitAffectingCombat = val(false)
+UnitCanAttack = val(false)
+assert(state():byte(3) == 149)
+assert(state():byte(6) == 133)
+GetBindingAction = function(key) if key == "F10" then return "INTERACTTARGET" end end
+assert(state():byte(6) == 132)
+UnitGUID = val("test-foe-B")
+assert(state():byte(3) == 21)
+UnitGUID = val(secret)
+assert(state():byte(3) == 21)
+print("public target columns and same-corpse checks passed")

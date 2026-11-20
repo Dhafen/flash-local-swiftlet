@@ -36,6 +36,41 @@ local function spReadHealthPercent(unit)
     return nil, "unavailable"
 end
 
+local function spAIReadable(value)
+    return not (type(issecretvalue) == "function" and issecretvalue(value))
+        and not (type(canaccessvalue) == "function" and not canaccessvalue(value))
+end
+
+local function spAIBinding(key)
+    if type(GetBindingAction) ~= "function" then return nil end
+    local ok, value = pcall(GetBindingAction, key, true)
+    if ok and spAIReadable(value) and type(value) == "string" then return value end
+end
+
+local function spAITargetColumn()
+    local ok, column = pcall(function()
+        if not C_NamePlate or not C_NamePlate.GetNamePlateForUnit then return end
+        local plate = C_NamePlate.GetNamePlateForUnit("target")
+        if not spAIReadable(plate) or not plate or not plate.IsForbidden or plate:IsForbidden() then return end
+        local visible = plate:IsVisible()
+        if not spAIReadable(visible) or not visible then return end
+        local x = plate:GetCenter()
+        local width = UIParent:GetWidth()
+        if not spAIReadable(x) or not spAIReadable(width)
+            or type(x) ~= "number" or type(width) ~= "number" or not (width > 0)
+            or not (x >= 0 and x <= width) then return end
+        return math.floor(0.5 + 14 * x / width) + 1
+    end)
+    return ok and column or 0
+end
+
+local function spAITargetIdentity()
+    if type(UnitGUID) ~= "function" then return nil end
+    local ok, value = pcall(UnitGUID, "target")
+    if ok and spAIReadable(value) and type(value) == "string" and value ~= "" then return value end
+end
+
+local spAICombatTarget
 -- Health is optional. All decision flags must be public and known.
 -- 255 is an explicit unknown sentinel, never a fabricated percentage.
 local function spAIState()
@@ -63,35 +98,44 @@ local function spAIState()
         stage = 4
         if dead("player") then flags = flags + 2 end
         stage = 5
+        local hostile, targetDead, foeID = false, false, nil
         local hasTarget = boolValue(UnitExists("target"))
         if hasTarget then
             flags = flags + 4
             stage = 6
-            if boolValue(UnitCanAttack("player", "target")) and not boolValue(UnitIsPlayer("target")) then flags = flags + 8 end
+            local npc = not boolValue(UnitIsPlayer("target"))
+            hostile = npc and boolValue(UnitCanAttack("player", "target"))
+            if hostile then flags = flags + 8 end
             stage = 7
-            if dead("target") then flags = flags + 16 end
+            targetDead = dead("target")
+            if targetDead then flags = flags + 16 end
+            if npc then foeID = spAITargetIdentity() end
         end
         stage = 9
-        if boolValue(UnitAffectingCombat("player")) then flags = flags + 32 end
+        local combat = boolValue(UnitAffectingCombat("player"))
+        if combat then flags = flags + 32 end
+        if not hasTarget or (not targetDead and not hostile) then spAICombatTarget = nil
+        elseif not targetDead then
+            if combat then spAICombatTarget = foeID
+            elseif spAICombatTarget ~= foeID then spAICombatTarget = nil end
+        elseif foeID and foeID == spAICombatTarget then flags = flags + 128 end
         stage = 10
         if type(IsMounted) ~= "function" then return unavailable(10) end
         if boolValue(IsMounted()) then flags = flags + 64 end
         stage = 11
         local hp = spReadHealthPercent("player") or 255
         local targetHP = hasTarget and (spReadHealthPercent("target") or 255) or 0
-        -- Optional public binding check. Never read protected binding strings.
         local meta = 128
-        if type(GetBindingAction) == "function" then
-            local bindingOK, binding = pcall(GetBindingAction, "F12", true)
-            if bindingOK and not (type(issecretvalue) == "function" and issecretvalue(binding))
-                and not (type(canaccessvalue) == "function" and not canaccessvalue(binding))
-                and type(binding) == "string" then
-                if binding == "CLICK TactaraMainButton:LeftButton" then meta = 129
-                else meta = 130 end
-            end
+        local rotation = spAIBinding("F12")
+        if rotation then meta = meta + (rotation == "CLICK TactaraMainButton:LeftButton" and 1 or 2) end
+        -- With bit 2 set, bit 0 selects F (set) or F10 (clear).
+        local f = spAIBinding("F") == "INTERACTTARGET"
+        if f or spAIBinding("F10") == "INTERACTTARGET" then
+            meta = meta - (meta % 2) + (f and 5 or 4)
         end
+        if hostile and not targetDead then meta = meta + 8 * spAITargetColumn() end
         return string.char(65, 73, flags, hp, targetHP, meta)
     end)
-    if not ok then return unavailable(stage) end
+    if not ok then spAICombatTarget = nil; return unavailable(stage) end
     return state
 end

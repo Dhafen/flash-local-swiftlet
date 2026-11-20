@@ -54,7 +54,7 @@ static int sp_ai_payload_status = -1, sp_ai_state_reason = -1;
 static void sp_ai_game_update(const uint8_t *data, size_t length) {
     sp_ai_packet_at = NSProcessInfo.processInfo.systemUptime;
     if (length < 6 || data[0] != 'A' || data[1] != 'I' ||
-        !(data[2] & 1) || (data[2] & 128) ||
+        !(data[2] & 1) || ((data[2] & 128) && (data[2] & (4|16)) != (4|16)) ||
         (data[3] > 100 && data[3] != 255) || (data[4] > 100 && data[4] != 255)) {
         int reason = length >= 6 && data[0] == 'A' && data[1] == 'I' && !(data[2] & 1) ? data[3] : 0;
         if (sp_ai_payload_status != 0 || reason != sp_ai_state_reason) {
@@ -110,7 +110,10 @@ static void sp_ai_heartbeat(uint8_t seq, const uint8_t *data, size_t length) {
     NSTimeInterval _directNextAction, _directLastActionAt, _p2pMetricsAt;
     NSString *_directLastAction, *_p2pLastStatus;
     NSTimeInterval _p2pStatusAt;
-    unsigned _directAttackAttempts;
+    unsigned _directAttackAttempts, _visiblePulses, _lootAttempts;
+    SPAIMove _visibleProposal;
+    NSTimeInterval _visibleSeenAt, _lastDamageAt, _lootBindSince;
+    uint8_t _lastTargetHP;
     SPAINavigation _navigation;
     NSData *_sceneBeforeMove;
     NSTimeInterval _moveEndsAt;
@@ -134,6 +137,8 @@ static void sp_ai_heartbeat(uint8_t seq, const uint8_t *data, size_t length) {
     _navigation = (SPAINavigation){0};
     _sceneBeforeMove = nil;
     _moveEndsAt = 0;
+    _visibleProposal = SP_MOVE_NONE;
+    _visibleSeenAt = 0;
     // Keep single-flight ownership until the previous callback finishes.
     Class p2p = NSClassFromString(@"SPP2PBridge");
     SEL reset = NSSelectorFromString(@"resetHistory");
@@ -353,7 +358,8 @@ static NSArray<NSNumber *> *sp_ai_luminance(CVPixelBufferRef buffer) {
             SPAIDecision decision = sp_ai_current_decision(now);
             NSString *current = decision == SP_AI_TARGET ? @"TARGET" : decision == SP_AI_ATTACK ? @"ATTACK" : nil;
             if (!sp_ai_nav_allowed(decision, f, strong->_directAttackAttempts) ||
-                ![strong->_directCandidate isEqualToString:current] || strong->_navigationThermalPause) return;
+                ![strong->_directCandidate isEqualToString:current] || strong->_navigationThermalPause ||
+                (decision == SP_AI_ATTACK && (sp_ai_game_meta & 0x78))) return;
             if (now - strong->_p2pMetricsAt >= 10.0) {
                 strong->_p2pMetricsAt = now;
                 sp_stub_log([[NSString stringWithFormat:@"AI navigation: frame age %.2fs; Core ML queue and prediction %.2fs",
@@ -482,8 +488,21 @@ static NSArray<NSNumber *> *sp_ai_luminance(CVPixelBufferRef buffer) {
     BOOL thermalPause = thermal >= NSProcessInfoThermalStateSerious;
     BOOL telemetryFresh = sp_ai_game_at > 0 && now-sp_ai_game_at < 3.0;
     BOOL combat = telemetryFresh && (sp_ai_game_flags & 32);
-    SPAIDecision decision = sp_ai_current_decision(now);
-    NSString *candidate = decision == SP_AI_TARGET ? @"TARGET" : decision == SP_AI_ATTACK ? @"ATTACK" : nil;
+    SPAIDecision base = sp_ai_current_decision(now);
+    if (!(sp_ai_game_flags & 128)) {
+        _lootAttempts = 0;
+        _lootBindSince = 0;
+    }
+    SPAIDecision decision = sp_ai_farm_decision(base, sp_ai_game_flags, sp_ai_game_meta, _lootAttempts);
+    if (decision == SP_AI_LOOT_BIND) {
+        if (!_lootBindSince) _lootBindSince = now;
+        if (now-_lootBindSince >= 2.4) {
+            _lootAttempts = 2;
+            decision = base;
+        }
+    }
+    NSString *candidate = decision == SP_AI_TARGET ? @"TARGET" : decision == SP_AI_ATTACK ? @"ATTACK" :
+        decision == SP_AI_LOOT ? @"LOOT" : nil;
     BOOL preview = (sp_ai_packet_at > 0 && now-sp_ai_packet_at < 6.0 &&
         (sp_ai_state_reason == 12 || sp_ai_state_reason == 13));
     BOOL phaseChanged = ((candidate || _directCandidate) && ![candidate isEqualToString:_directCandidate]) ||
@@ -504,7 +523,9 @@ static NSArray<NSNumber *> *sp_ai_luminance(CVPixelBufferRef buffer) {
         _p2pLastStatus = nil;
         _directLastAction = nil;
         if (phaseChanged) {
-            _directAttackAttempts = 0;
+            _directAttackAttempts = _visiblePulses = 0;
+            _lastTargetHP = 255;
+            _lastDamageAt = 0;
             _directNextAction = 0;
         }
         [self invalidateDecision];
@@ -517,9 +538,21 @@ static NSArray<NSNumber *> *sp_ai_luminance(CVPixelBufferRef buffer) {
     else if (sp_ai_state_reason > 0) display = [NSString stringWithFormat:@"AI DATA %d", sp_ai_state_reason];
     if (decision == SP_AI_REST) display = @"AI REST";
     else if (decision == SP_AI_BIND) display = @"F12 BIND";
+    else if (decision == SP_AI_LOOT_BIND) display = @"INTERACT BIND";
     else if (combat) display = @"AI COMBAT";
 
-    BOOL navigate = sp_ai_nav_allowed(decision, sp_ai_game_flags, _directAttackAttempts);
+    if (decision == SP_AI_ATTACK && sp_ai_health_known(sp_ai_game_target_hp)) {
+        if (sp_ai_health_known(_lastTargetHP) && sp_ai_game_target_hp < _lastTargetHP) {
+            _lastDamageAt = now;
+            _visiblePulses = 0;
+        }
+        _lastTargetHP = sp_ai_game_target_hp;
+    }
+    BOOL recentDamage = _lastDamageAt > 0 && now-_lastDamageAt < 3.0;
+    SPAIMove visibleMove = decision == SP_AI_ATTACK && !thermalPause && _visiblePulses < 6 ?
+        sp_ai_visible_approach(sp_ai_game_meta, _directAttackAttempts, combat, recentDamage) : SP_MOVE_NONE;
+    BOOL hasColumn = decision == SP_AI_ATTACK && (sp_ai_game_meta & 0x78);
+    BOOL navigate = !hasColumn && sp_ai_nav_allowed(decision, sp_ai_game_flags, _directAttackAttempts);
     sp_p2p_enable(_p2pAvailable && !thermalPause && (preview || (navigate && !_navigation.blocked)));
     if (preview) {
         if (thermalPause) display = @"VIS HEAT";
@@ -530,20 +563,40 @@ static NSArray<NSNumber *> *sp_ai_luminance(CVPixelBufferRef buffer) {
             display = _visualPreviewStatus && now-_visualPreviewAt < 5.0 ? _visualPreviewStatus : @"VIS LOAD";
         }
     } else if (candidate) {
-        if (!thermalPause) [self evaluateLaya:candidate combat:combat run:run];
+        if (!thermalPause && decision != SP_AI_LOOT)
+            [self evaluateLaya:candidate combat:combat run:run];
         if (now >= _directNextAction && self.action) {
             BOOL sent = self.action(candidate, CGPointZero, sp_ai_game_at, 0);
             if (sent) {
-                if (decision == SP_AI_ATTACK && !combat && _directAttackAttempts < 2) ++_directAttackAttempts;
-                BOOL approach = decision == SP_AI_ATTACK && !combat && _directAttackAttempts >= 2;
-                _directNextAction = now + (decision == SP_AI_TARGET || approach ? 3.2 : 0.85);
+                if (decision == SP_AI_ATTACK && _directAttackAttempts < 2) ++_directAttackAttempts;
+                if (decision == SP_AI_LOOT) ++_lootAttempts;
+                BOOL approach = decision == SP_AI_ATTACK && _directAttackAttempts >= 2 &&
+                    (visibleMove != SP_MOVE_NONE || !combat);
+                _directNextAction = now + (decision == SP_AI_TARGET || approach ? 3.2 :
+                    decision == SP_AI_LOOT ? 1.4 : 0.85);
                 BOOL unknownHP = !sp_ai_health_known(sp_ai_game_hp);
                 _directLastAction = decision == SP_AI_ATTACK ? (unknownHP ? @"HP? F12" : @"AI F12") :
-                    (unknownHP ? @"HP? TAB" : @"AI TAB");
+                    decision == SP_AI_LOOT ? @"AI LOOT" : (unknownHP ? @"HP? TAB" : @"AI TAB");
                 _directLastActionAt = now;
                 display = _directLastAction;
             } else { display = @"AI INPUT"; _directNextAction = now + 0.4; }
         } else if (_directLastAction && now-_directLastActionAt < 1.0) display = _directLastAction;
+        // Use only fresh, public on-screen target columns, and require two
+        // agreeing packets before steering. Do not send this branch through P2P.
+        if (visibleMove != _visibleProposal) {
+            _visibleProposal = visibleMove;
+            _visibleSeenAt = sp_ai_game_at;
+        } else if (visibleMove != SP_MOVE_NONE && sp_ai_game_at - _visibleSeenAt >= 0.12 &&
+                   now-sp_ai_game_at < 0.85 && now-_p2pLastMove >= 0.65 &&
+                   sp_ai_nav_has_slot(now, _directNextAction) && self.action) {
+            NSString *move = visibleMove == SP_MOVE_LEFT ? @"STRAFE_LEFT" :
+                visibleMove == SP_MOVE_RIGHT ? @"STRAFE_RIGHT" : @"FORWARD";
+            if (self.action(move, CGPointZero, sp_ai_game_at, visibleMove == SP_MOVE_FORWARD ? 0.42 : 0.24)) {
+                ++_visiblePulses;
+                _p2pLastMove = now;
+                display = @"AI APPROACH";
+            }
+        }
         if (navigate) {
             if (thermalPause) display = @"NAV HEAT";
             else if (_navigation.blocked) display = @"NAV BLOCK";
@@ -572,7 +625,10 @@ static NSArray<NSNumber *> *sp_ai_luminance(CVPixelBufferRef buffer) {
     _wasInCombat = _navigationThermalPause = NO;
     _directCandidate = nil;
     _directNextAction = _directLastActionAt = _p2pStatusAt = _p2pMetricsAt = 0;
-    _directAttackAttempts = 0;
+    _directAttackAttempts = _visiblePulses = _lootAttempts = 0;
+    _lootBindSince = 0;
+    _lastTargetHP = 255;
+    _lastDamageAt = 0;
     _directLastAction = _p2pLastStatus = nil;
     Class p2p = NSClassFromString(@"SPP2PBridge");
     SEL available = NSSelectorFromString(@"available");
