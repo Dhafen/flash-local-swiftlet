@@ -42,6 +42,7 @@ static SPAIMove sp_ai_move(NSString *move) {
 
 // State emitted by the game's own read-only addon API. Written and read on main.
 static uint8_t sp_ai_game_flags, sp_ai_game_hp, sp_ai_game_target_hp, sp_ai_game_meta, sp_ai_game_move_keys;
+static SPAIFarmFeedback sp_ai_game_feedback;
 static NSTimeInterval sp_ai_game_at, sp_ai_strip_at, sp_ai_packet_at;
 static BOOL sp_ai_heartbeat_seen;
 static BOOL sp_ai_health_known(uint8_t value) { return sp_ai_hp_known(value); }
@@ -66,6 +67,7 @@ static void sp_ai_game_update(const uint8_t *data, size_t length) {
         sp_ai_payload_status = 0;
         sp_ai_game_at = 0;
         sp_ai_game_move_keys = 0;
+        sp_ai_game_feedback = (SPAIFarmFeedback){0};
         return;
     }
     if (sp_ai_game_at <= 0 || sp_ai_packet_at - sp_ai_game_at >= 6.0 ||
@@ -80,6 +82,7 @@ static void sp_ai_game_update(const uint8_t *data, size_t length) {
     sp_ai_game_target_hp = data[4];
     sp_ai_game_meta = data[5];
     sp_ai_game_move_keys = sp_ai_movement_bindings(data, (unsigned)length);
+    sp_ai_game_feedback = sp_ai_farm_feedback(data, (unsigned)length);
     sp_ai_game_at = NSProcessInfo.processInfo.systemUptime;
 }
 
@@ -117,7 +120,10 @@ static void sp_ai_heartbeat(uint8_t seq, const uint8_t *data, size_t length) {
     unsigned _directAttackAttempts, _visiblePulses, _lootAttempts;
     unsigned _searchTabAttempts, _searchSteps, _searchVisionWaits;
     SPAIMove _visibleProposal;
-    NSTimeInterval _visibleSeenAt, _lastDamageAt, _lootBindSince;
+    NSTimeInterval _visibleSeenAt, _lastDamageAt;
+    unsigned _patrolSteps, _motionStalls;
+    NSTimeInterval _motionDeadline;
+    SPAIFarmFeedback _motionStart;
     uint8_t _lastTargetHP;
     SPAIApproachExamples _approachExamples;
     BOOL _teaching;
@@ -546,16 +552,9 @@ static NSArray<NSNumber *> *sp_ai_luminance(CVPixelBufferRef buffer) {
     SPAIDecision base = sp_ai_current_decision(now);
     if (!(sp_ai_game_flags & 128)) {
         _lootAttempts = 0;
-        _lootBindSince = 0;
     }
-    SPAIDecision decision = sp_ai_farm_decision(base, sp_ai_game_flags, sp_ai_game_meta, _lootAttempts);
-    if (decision == SP_AI_LOOT_BIND) {
-        if (!_lootBindSince) _lootBindSince = now;
-        if (now-_lootBindSince >= 2.4) {
-            _lootAttempts = 2;
-            decision = base;
-        }
-    }
+    SPAIDecision decision = sp_ai_farm_decision(base, sp_ai_game_flags, sp_ai_game_meta, _lootAttempts,
+        sp_ai_game_feedback.lootConfirmed);
     NSString *candidate = decision == SP_AI_TARGET ? @"TARGET" : decision == SP_AI_ATTACK ? @"ATTACK" :
         decision == SP_AI_LOOT ? @"LOOT" : nil;
     BOOL preview = (sp_ai_packet_at > 0 && now-sp_ai_packet_at < 6.0 &&
@@ -580,6 +579,8 @@ static NSArray<NSNumber *> *sp_ai_luminance(CVPixelBufferRef buffer) {
         if (phaseChanged) {
             _directAttackAttempts = _visiblePulses = 0;
             _searchTabAttempts = _searchSteps = _searchVisionWaits = 0;
+            _patrolSteps = _motionStalls = 0;
+            _motionDeadline = 0;
             _lastTargetHP = 255;
             _lastDamageAt = 0;
             _directNextAction = 0;
@@ -588,6 +589,16 @@ static NSArray<NSNumber *> *sp_ai_luminance(CVPixelBufferRef buffer) {
         if (self.releaseInput) self.releaseInput();
     }
 
+    if (_motionDeadline > 0 && telemetryFresh) {
+        if (sp_ai_farm_progress(_motionStart, sp_ai_game_feedback)) {
+            _motionStalls = 0;
+            _motionDeadline = 0;
+        } else if (now >= _motionDeadline) {
+            if (_motionStart.source == sp_ai_game_feedback.source && _motionStalls < 2)
+                ++_motionStalls;
+            _motionDeadline = 0;
+        }
+    }
     NSString *display = @"AI WAIT";
     if (sp_ai_strip_at <= 0 || now-sp_ai_strip_at >= 6.0) display = @"AI STRIP";
     else if (sp_ai_packet_at <= 0 || now-sp_ai_packet_at >= 6.0) display = @"AI SYNC";
@@ -595,6 +606,7 @@ static NSArray<NSNumber *> *sp_ai_luminance(CVPixelBufferRef buffer) {
     if (decision == SP_AI_REST) display = @"AI REST";
     else if (decision == SP_AI_BIND) display = @"F12 BIND";
     else if (decision == SP_AI_LOOT_BIND) display = @"INTERACT BIND";
+    else if (decision == SP_AI_LOOT_WAIT) display = @"LOOT WAIT";
     else if (combat) display = @"AI COMBAT";
 
     if (decision == SP_AI_ATTACK && sp_ai_health_known(sp_ai_game_target_hp)) {
@@ -609,9 +621,10 @@ static NSArray<NSNumber *> *sp_ai_luminance(CVPixelBufferRef buffer) {
         recentDamage, &_approachExamples);
     // The expensive frame capture and both models pause, while the existing
     // public target column can still guide short, infrequent movement pulses.
-    SPAIMove visibleMove = _visiblePulses < 12 ? plan.movement : SP_MOVE_NONE;
+    SPAIMove visibleMove = _visiblePulses < 12 && _motionStalls < 2 ? plan.movement : SP_MOVE_NONE;
     BOOL hasColumn = decision == SP_AI_ATTACK && (sp_ai_game_meta & 0x78);
-    BOOL navigate = plan.usePixel2Play;
+    BOOL patrol = decision == SP_AI_TARGET && sp_ai_game_feedback.source != SP_MOTION_UNKNOWN;
+    BOOL navigate = plan.usePixel2Play && !patrol && _motionStalls < 2;
     sp_p2p_enable(_p2pAvailable && !thermalPause && (preview || (navigate && !_navigation.blocked)));
     if (preview) {
         if (thermalPause) display = @"VIS HEAT";
@@ -646,12 +659,18 @@ static NSArray<NSNumber *> *sp_ai_luminance(CVPixelBufferRef buffer) {
         if (visibleMove != _visibleProposal) {
             _visibleProposal = visibleMove;
             _visibleSeenAt = sp_ai_game_at;
-        } else if (!keyDue && visibleMove != SP_MOVE_NONE && sp_ai_game_at - _visibleSeenAt >= 0.12 &&
+        } else if (!keyDue && !_motionDeadline && visibleMove != SP_MOVE_NONE && sp_ai_game_at - _visibleSeenAt >= 0.12 &&
                    now-sp_ai_game_at < 0.85 && now-_p2pLastMove >= sp_ai_visible_move_spacing(thermalPause) &&
                    sp_ai_nav_has_slot(now, _directNextAction) && self.action) {
             NSString *move = visibleMove == SP_MOVE_LEFT ? @"STRAFE_LEFT" :
                 visibleMove == SP_MOVE_RIGHT ? @"STRAFE_RIGHT" : @"FORWARD";
-            if (self.action(move, CGPointZero, sp_ai_game_at, sp_ai_visible_move_duration(visibleMove, thermalPause))) {
+            NSTimeInterval duration = sp_ai_visible_move_duration(visibleMove, thermalPause);
+            if (sp_ai_game_feedback.source == SP_MOTION_SPEED) duration = MAX(duration, 0.59);
+            if (self.action(move, CGPointZero, sp_ai_game_at, duration)) {
+                if (sp_ai_game_feedback.source != SP_MOTION_UNKNOWN) {
+                    _motionStart = sp_ai_game_feedback;
+                    _motionDeadline = now + 1.8;
+                }
                 ++_visiblePulses;
                 _p2pLastMove = now;
                 display = thermalPause ? @"HEAT WALK" : @"AI APPROACH";
@@ -659,25 +678,32 @@ static NSArray<NSNumber *> *sp_ai_luminance(CVPixelBufferRef buffer) {
         }
         SPAIMove search = sp_ai_search_step(decision, sp_ai_game_flags, _searchTabAttempts,
             _searchVisionWaits, _searchSteps, thermalPause || !_p2pAvailable);
+        if (patrol)
+            search = _searchTabAttempts > 0 ? sp_ai_patrol_step(decision, sp_ai_game_flags, _patrolSteps, _motionStalls) : SP_MOVE_NONE;
         BOOL searchSent = NO;
-        if (search != SP_MOVE_NONE && !keyDue && !combat && !_navigation.blocked &&
+        if (search != SP_MOVE_NONE && !keyDue && !combat && !_motionDeadline && _motionStalls < 2 && !_navigation.blocked &&
             !_sceneBeforeMove && !_p2pPending && now-sp_ai_game_at < 0.85 && now-_p2pLastMove >= 1.4 &&
             sp_ai_nav_has_slot(now, _directNextAction) && self.action) {
             NSString *move = search == SP_MOVE_LEFT ? @"STRAFE_LEFT" :
-                search == SP_MOVE_RIGHT ? @"STRAFE_RIGHT" : @"FORWARD";
-            NSTimeInterval duration = thermalPause ? 0.22 : 0.32;
+                search == SP_MOVE_RIGHT ? @"STRAFE_RIGHT" : search == SP_MOVE_BACK ? @"BACK" : @"FORWARD";
+            NSTimeInterval duration = patrol ? 0.60 : thermalPause ? 0.22 : 0.32;
             if (self.action(move, CGPointZero, sp_ai_game_at, duration)) {
-                ++_searchSteps;
+                if (patrol) {
+                    ++_patrolSteps;
+                    _motionStart = sp_ai_game_feedback;
+                    _motionDeadline = now + 1.8;
+                } else ++_searchSteps;
                 _searchTabAttempts = 0;
                 _searchVisionWaits = 0;
                 _p2pLastMove = now;
-                if (sp_p2p_latest_frame && now-sp_p2p_latest_at < 1.5) {
+                if (!patrol && sp_p2p_latest_frame && now-sp_p2p_latest_at < 1.5) {
                     _sceneBeforeMove = sp_p2p_latest_frame;
                     _moveEndsAt = now + duration;
                 }
-                sp_stub_log([[NSString stringWithFormat:@"AI search: bounded %@ (%u/3)",
-                    move, _searchSteps] UTF8String]);
-                display = @"AI SCOUT";
+                sp_stub_log([[NSString stringWithFormat:@"AI search: %@ %@ (%u/%u)",
+                    patrol ? @"patrol" : @"scout", move, patrol ? _patrolSteps : _searchSteps,
+                    patrol ? 12 : 3] UTF8String]);
+                display = patrol ? @"AI PATROL" : @"AI SCOUT";
                 searchSent = YES;
             } else display = @"NAV INPUT";
         }
@@ -691,6 +717,9 @@ static NSArray<NSNumber *> *sp_ai_luminance(CVPixelBufferRef buffer) {
             }
         }
     }
+    if (_motionStalls >= 2 && (decision == SP_AI_TARGET || decision == SP_AI_ATTACK) &&
+        [display isEqualToString:@"AI WAIT"]) display = @"NAV BLOCK";
+    if (patrol && _patrolSteps >= 12 && [display isEqualToString:@"AI WAIT"]) display = @"PATROL END";
     if (decision == SP_AI_ATTACK && !hasColumn && !combat && _directAttackAttempts >= 2 &&
         (!_p2pAvailable || [display isEqualToString:@"AI WAIT"])) display = @"NAV NO PLATE";
     if (decision == SP_AI_ATTACK && hasColumn && _visiblePulses >= 12 &&
@@ -727,7 +756,8 @@ static NSArray<NSNumber *> *sp_ai_luminance(CVPixelBufferRef buffer) {
     _directNextAction = _directLastActionAt = _p2pStatusAt = _p2pMetricsAt = 0;
     _directAttackAttempts = _visiblePulses = _lootAttempts = 0;
     _searchTabAttempts = _searchSteps = _searchVisionWaits = 0;
-    _lootBindSince = 0;
+    _patrolSteps = _motionStalls = 0;
+    _motionDeadline = 0;
     _lastTargetHP = 255;
     _lastDamageAt = 0;
     _directLastAction = _p2pLastStatus = nil;

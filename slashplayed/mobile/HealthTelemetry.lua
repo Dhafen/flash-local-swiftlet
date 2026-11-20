@@ -97,13 +97,86 @@ local function spAITargetIdentity()
     if ok and spAIReadable(value) and type(value) == "string" and value ~= "" then return value end
 end
 
-local spAICombatTarget
+local spAICombatTarget, spAILootedTarget
+local spAILootSlots = {}
+-- Track only a slot whose entire reported source is the selected corpse.
+-- A closed loot window by itself carries no success signal.
+local function spAILootEvent(_, event, slot)
+    if event == "LOOT_CLOSED" then spAILootSlots = {}; return end
+    if event == "LOOT_SLOT_CLEARED" then
+        if not spAIReadable(slot) or type(slot) ~= "number" then return end
+        local source = spAILootSlots[slot]
+        if source and source == spAICombatTarget then spAILootedTarget = source end
+        spAILootSlots[slot] = nil
+        return
+    end
+    spAILootSlots = {}
+    local target = spAITargetIdentity()
+    if not target or target ~= spAICombatTarget or type(GetNumLootItems) ~= "function"
+        or type(GetLootSourceInfo) ~= "function" then return end
+    local count = GetNumLootItems()
+    if not spAIReadable(count) or type(count) ~= "number" then return end
+    local function soleSource(guid, quantity, ...)
+        return select("#", ...) == 0 and spAIReadable(guid) and type(guid) == "string" and guid == target
+            and spAIReadable(quantity) and type(quantity) == "number" and quantity > 0
+    end
+    for i = 1, math.min(count, 100) do
+        if soleSource(GetLootSourceInfo(i)) then spAILootSlots[i] = target end
+    end
+end
+
+if type(CreateFrame) == "function" then
+    local frame = CreateFrame("Frame")
+    for _, event in ipairs({"LOOT_OPENED", "LOOT_SLOT_CLEARED", "LOOT_CLOSED"}) do
+        pcall(frame.RegisterEvent, frame, event)
+    end
+    frame:SetScript("OnEvent", function(...) pcall(spAILootEvent, ...) end)
+end
+
+local spAIMotionCounter, spAIMotionSource = 0, 0
+local spAIAnchorX, spAIAnchorY, spAIAnchorMap
+local function spAIMotion()
+    local function number(value)
+        return spAIReadable(value) and type(value) == "number" and value == value
+            and value ~= math.huge and value ~= -math.huge
+    end
+    local source = 0
+    if type(UnitPosition) == "function" then
+        local ok, x, y, _, map = pcall(UnitPosition, "player")
+        if ok and number(x) and number(y) and number(map) then
+            source = 1
+            if spAIAnchorMap == map then
+                local dx, dy = x-spAIAnchorX, y-spAIAnchorY
+                local displacement = dx*dx + dy*dy
+                if displacement >= 0.25 and displacement <= 900 then
+                    spAIMotionCounter = (spAIMotionCounter + 1) % 256
+                end
+                if displacement >= 0.25 then spAIAnchorX, spAIAnchorY = x, y end
+            else spAIAnchorX, spAIAnchorY, spAIAnchorMap = x, y, map end
+        end
+    end
+    if source == 0 then
+        spAIAnchorX, spAIAnchorY, spAIAnchorMap = nil, nil, nil
+        if type(GetUnitSpeed) == "function" then
+            local ok, speed = pcall(GetUnitSpeed, "player")
+            if ok and number(speed) then
+                source = 2
+                if spAIMotionSource == source and speed > 0.1 then
+                    spAIMotionCounter = (spAIMotionCounter + 1) % 256
+                end
+            end
+        end
+    end
+    spAIMotionSource = source
+    return source, spAIMotionCounter
+end
+
 -- Health is optional. All decision flags must be public and known.
 -- 255 is an explicit unknown sentinel, never a fabricated percentage.
 local function spAIState()
     if not SPPhoneTouchRects then return "" end
     local stage = 1
-    local function unavailable(code) return string.char(65, 73, 0, code, 0, 0, 75, 0) end
+    local function unavailable(code) return string.char(65, 73, 0, code, 0, 0, 75, 0, 70, 0, 0, 0) end
     local function boolValue(value)
         if type(issecretvalue) == "function" and issecretvalue(value) then error("restricted value") end
         if type(canaccessvalue) == "function" and not canaccessvalue(value) then error("restricted value") end
@@ -161,7 +234,11 @@ local function spAIState()
             meta = meta - (meta % 2) + (f and 5 or 4)
         end
         if hostile and not targetDead then meta = meta + 8 * spAITargetColumn() end
-        return string.char(65, 73, flags, hp, targetHP, meta, 75, spAIMovementBindings())
+        if not targetDead and foeID == spAILootedTarget then spAILootedTarget = nil end
+        local motionSource, motionCounter = spAIMotion()
+        local looted = targetDead and foeID and foeID == spAILootedTarget and 1 or 0
+        return string.char(65, 73, flags, hp, targetHP, meta, 75, spAIMovementBindings(),
+            70, motionSource, motionCounter, looted)
     end)
     if not ok then spAICombatTarget = nil; return unavailable(stage) end
     return state

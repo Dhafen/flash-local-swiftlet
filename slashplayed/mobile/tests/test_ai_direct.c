@@ -60,12 +60,12 @@ int main(void) {
     assert(sp_ai_decision(true,33,100,0,129)==SP_AI_WAIT);
     assert(sp_ai_decision(true,61,100,0,129)==SP_AI_WAIT);
     assert(sp_ai_decision(true,45,100,65,129)==SP_AI_ATTACK);
-    assert(sp_ai_farm_decision(SP_AI_TARGET, 149, 133, 0) == SP_AI_LOOT);
-    assert(sp_ai_farm_decision(SP_AI_TARGET, 149, 129, 0) == SP_AI_LOOT_BIND);
-    assert(sp_ai_farm_decision(SP_AI_TARGET, 149, 133, 2) == SP_AI_TARGET);
-    assert(sp_ai_farm_decision(SP_AI_TARGET, 21, 133, 0) == SP_AI_TARGET);
-    assert(sp_ai_farm_decision(SP_AI_WAIT, 181, 133, 0) == SP_AI_WAIT);
-    assert(sp_ai_farm_decision(SP_AI_REST, 149, 133, 0) == SP_AI_REST);
+    assert(sp_ai_farm_decision(SP_AI_TARGET, 149, 133, 0, false) == SP_AI_LOOT);
+    assert(sp_ai_farm_decision(SP_AI_TARGET, 149, 129, 0, false) == SP_AI_LOOT_BIND);
+    assert(sp_ai_farm_decision(SP_AI_TARGET, 149, 133, 2, false) == SP_AI_LOOT_WAIT);
+    assert(sp_ai_farm_decision(SP_AI_TARGET, 21, 133, 0, false) == SP_AI_TARGET);
+    assert(sp_ai_farm_decision(SP_AI_WAIT, 181, 133, 0, false) == SP_AI_WAIT);
+    assert(sp_ai_farm_decision(SP_AI_REST, 149, 133, 0, false) == SP_AI_REST);
     assert(sp_ai_visible_approach(129, 2, false, false) == SP_MOVE_NONE);
     assert(sp_ai_visible_approach(129 + 8 * 8, 1, false, false) == SP_MOVE_NONE);
     assert(sp_ai_visible_approach(129 + 8 * 5, 2, false, false) == SP_MOVE_LEFT);
@@ -120,6 +120,19 @@ int main(void) {
     assert(sp_ai_search_step(SP_AI_TARGET, 5, 5, 3, 0, true) == SP_MOVE_NONE);
     assert(sp_ai_search_step(SP_AI_TARGET, 33, 5, 3, 0, true) == SP_MOVE_NONE);
     assert(sp_ai_search_step(SP_AI_ATTACK, 13, 5, 3, 0, true) == SP_MOVE_NONE);
+    assert(sp_ai_farm_decision(SP_AI_TARGET, 149, 133, 1, true) == SP_AI_TARGET);
+    const uint8_t feedbackPacket[] = {'A','I',149,100,0,133,'K',1,'F',SP_MOTION_POSITION,7,1};
+    const SPAIFarmFeedback feedback = sp_ai_farm_feedback(feedbackPacket, sizeof feedbackPacket);
+    assert(feedback.lootConfirmed && feedback.source == SP_MOTION_POSITION);
+    assert(!sp_ai_farm_progress(feedback, feedback));
+    assert(sp_ai_farm_progress(feedback, (SPAIFarmFeedback){SP_MOTION_POSITION, 8, false}));
+    assert(!sp_ai_farm_progress(feedback, (SPAIFarmFeedback){SP_MOTION_SPEED, 8, false}));
+    assert(sp_ai_farm_feedback(feedbackPacket, 8).source == SP_MOTION_UNKNOWN);
+    assert(sp_ai_patrol_step(SP_AI_TARGET, 1, 0, 0) == SP_MOVE_FORWARD);
+    assert(sp_ai_patrol_step(SP_AI_TARGET, 1, 3, 0) == SP_MOVE_BACK);
+    assert(sp_ai_patrol_step(SP_AI_TARGET, 1, 12, 0) == SP_MOVE_NONE);
+    assert(sp_ai_patrol_step(SP_AI_TARGET, 1, 3, 2) == SP_MOVE_NONE);
+    assert(sp_ai_patrol_step(SP_AI_ATTACK, 13, 0, 0) == SP_MOVE_NONE);
     test_navigation();
     return 0;
 }

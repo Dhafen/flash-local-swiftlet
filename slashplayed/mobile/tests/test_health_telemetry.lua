@@ -44,7 +44,7 @@ IsMounted = function() return false end
 GetTime = function() return 2 end
 reset(val(secret), val(secret), val(secret))
 local packet = state()
-assert(#packet == 8 and packet:byte(3) == 45 and packet:byte(4) == 255 and packet:byte(5) == 255)
+assert(#packet == 12 and packet:byte(3) == 45 and packet:byte(4) == 255 and packet:byte(5) == 255)
 UnitCanAttack = val(secret)
 packet = state()
 assert(packet:byte(3) == 0 and packet:byte(4) == 6)
@@ -137,3 +137,43 @@ assert(bound:byte(7) == 75 and bound:byte(8) == 1 + 8 + 16)
 GetBindingAction = val(secret)
 assert(state():byte(8) == 0)
 print("public keyboard movement bindings passed")
+
+local motionX = 1
+UnitPosition = function() return motionX, 2, 3, 4 end
+local stationary = state()
+assert(stationary:byte(9) == 70 and stationary:byte(10) == 1)
+assert(state():byte(11) == stationary:byte(11))
+motionX = 2
+assert(state():byte(11) ~= stationary:byte(11))
+UnitPosition = val(secret)
+GetUnitSpeed = val(4)
+local moving = state()
+assert(moving:byte(10) == 2 and state():byte(11) ~= moving:byte(11))
+GetUnitSpeed = val(secret)
+assert(state():byte(10) == 0)
+
+local lootEvent, lootState = assert(loadstring(source .. "\nreturn spAILootEvent, spAIState"))()
+targetDead = false
+UnitAffectingCombat = val(true)
+UnitCanAttack = val(true)
+UnitGUID = val("test-foe-loot")
+lootState()
+targetDead = true
+UnitAffectingCombat = val(false)
+UnitCanAttack = val(false)
+assert(lootState():byte(12) == 0)
+GetNumLootItems = val(1)
+GetLootSourceInfo = function() return "another-foe", 1 end
+lootEvent(nil, "LOOT_OPENED")
+lootEvent(nil, "LOOT_SLOT_CLEARED", 1)
+assert(lootState():byte(12) == 0)
+GetLootSourceInfo = function() return "test-foe-loot", 1 end
+lootEvent(nil, "LOOT_OPENED")
+lootEvent(nil, "LOOT_CLOSED")
+assert(lootState():byte(12) == 0)
+lootEvent(nil, "LOOT_OPENED")
+lootEvent(nil, "LOOT_SLOT_CLEARED", 1)
+assert(lootState():byte(12) == 1)
+UnitGUID = val("another-foe")
+assert(lootState():byte(12) == 0)
+print("movement and matched corpse loot feedback passed")

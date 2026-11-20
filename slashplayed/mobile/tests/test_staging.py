@@ -19,7 +19,7 @@ assert '@interface SPGameAIController' in event
 assert 'sp_ai_game_update' in event and 'pollDirect:' in event
 assert 'decideGameState:candidate:completion:' in event
 assert 'sp_ai_game_update(sp_hover_asm.data + offset' in (root / "shims/appkit/sphover.m").read_text()
-assert 'SPH_MAX_RECTS * 6 + 8' in (root / "shims/appkit/sphoverstrip.h").read_text()
+assert 'SPH_MAX_RECTS * 6 + 12' in (root / "shims/appkit/sphoverstrip.h").read_text()
 assert '.. spAIState()' in (root / "addon/SPHover/SPHover.lua").read_text()
 assert 'local function aiHeartbeat()' in (root / "addon/SPHover/SPHover.lua").read_text()
 assert 'showChunk(aiFrame)' in (root / "addon/SPHover/SPHover.lua").read_text()

@@ -3,7 +3,7 @@
 #define SP_AI_DIRECT_H
 #include <stdbool.h>
 #include <stdint.h>
-typedef enum { SP_AI_WAIT, SP_AI_REST, SP_AI_TARGET, SP_AI_ATTACK, SP_AI_BIND, SP_AI_LOOT, SP_AI_LOOT_BIND } SPAIDecision;
+typedef enum { SP_AI_WAIT, SP_AI_REST, SP_AI_TARGET, SP_AI_ATTACK, SP_AI_BIND, SP_AI_LOOT, SP_AI_LOOT_BIND, SP_AI_LOOT_WAIT } SPAIDecision;
 static inline bool sp_ai_hp_known(uint8_t hp) { return hp <= 100; }
 static inline bool sp_ai_hostile(uint8_t flags, uint8_t hp) {
     return (flags & 4) && (flags & 8) && !(flags & 16) && (!sp_ai_hp_known(hp) || hp > 0);
@@ -73,9 +73,27 @@ static inline SPAIMove sp_ai_nav_proposal(SPAINavigation *nav, SPAIMove move) {
 }
 
 // Confirmed local encounter, selected NPC corpse and combat ended.
-static inline SPAIDecision sp_ai_farm_decision(SPAIDecision base, uint8_t flags, uint8_t meta, unsigned attempts) {
-    if (base != SP_AI_TARGET || (flags & (4|16|128)) != (4|16|128) || attempts >= 2) return base;
-    return (meta & (128|4)) == (128|4) ? SP_AI_LOOT : SP_AI_LOOT_BIND;
+static inline SPAIDecision sp_ai_farm_decision(SPAIDecision base, uint8_t flags, uint8_t meta,
+    unsigned attempts, bool lootConfirmed) {
+    if (base != SP_AI_TARGET || (flags & (4|16|128)) != (4|16|128) || lootConfirmed) return base;
+    if ((meta & (128|4)) != (128|4)) return SP_AI_LOOT_BIND;
+    return attempts < 2 ? SP_AI_LOOT : SP_AI_LOOT_WAIT;
+}
+
+typedef enum { SP_MOTION_UNKNOWN, SP_MOTION_POSITION, SP_MOTION_SPEED } SPAIMotionSource;
+typedef struct {
+    SPAIMotionSource source;
+    uint8_t counter;
+    bool lootConfirmed;
+} SPAIFarmFeedback;
+
+static inline SPAIFarmFeedback sp_ai_farm_feedback(const uint8_t *packet, unsigned length) {
+    if (length < 12 || packet[8] != 'F' || packet[9] > SP_MOTION_SPEED) return (SPAIFarmFeedback){0};
+    return (SPAIFarmFeedback){packet[9], packet[10], (packet[11] & 1) != 0};
+}
+
+static inline bool sp_ai_farm_progress(SPAIFarmFeedback start, SPAIFarmFeedback current) {
+    return start.source != SP_MOTION_UNKNOWN && current.source == start.source && current.counter != start.counter;
 }
 
 static inline SPAIMove sp_ai_visible_approach(uint8_t meta, unsigned attempts, bool combat, bool recentDamage) {
@@ -145,6 +163,14 @@ static inline SPAIMove sp_ai_search_step(SPAIDecision decision, uint8_t flags,
     if (!visionUnavailable && visionWaits < 3 && tabAttempts < 5) return SP_MOVE_NONE;
     static const SPAIMove moves[] = {SP_MOVE_LEFT, SP_MOVE_FORWARD, SP_MOVE_RIGHT};
     return moves[steps];
+}
+
+static inline SPAIMove sp_ai_patrol_step(SPAIDecision decision, uint8_t flags, unsigned steps, unsigned stalls) {
+    if (decision != SP_AI_TARGET || !(flags & 1) || (flags & (2|4|32|64)) || steps >= 12 || stalls >= 2)
+        return SP_MOVE_NONE;
+    static const SPAIMove loop[] = {SP_MOVE_FORWARD, SP_MOVE_FORWARD, SP_MOVE_RIGHT,
+        SP_MOVE_BACK, SP_MOVE_BACK, SP_MOVE_LEFT};
+    return loop[steps % 6];
 }
 
 static inline double sp_ai_visible_move_spacing(bool reducedWorkload) {
