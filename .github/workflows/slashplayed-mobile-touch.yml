@@ -36,6 +36,8 @@ jobs:
           lua5.1 slashplayed/mobile/tests/test_wolkara_setup.lua slashplayed/mobile/WolkaraSetup.lua
           cc -Wall -Wextra -Werror -o "$RUNNER_TEMP/touch-zone" slashplayed/mobile/tests/test_touch_zone.c
           "$RUNNER_TEMP/touch-zone"
+          cc -Wall -Wextra -Werror -o "$RUNNER_TEMP/ai-direct" slashplayed/mobile/tests/test_ai_direct.c
+          "$RUNNER_TEMP/ai-direct"
 
   keyboard-device-kit:
     runs-on: xcode-27

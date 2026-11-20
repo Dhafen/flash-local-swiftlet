@@ -56,3 +56,10 @@ reset(val(.2), nil, nil)
 packet = state()
 assert(packet:byte(4) == 20)
 print("partial public game-state tests passed")
+
+GetBindingAction = function(key,checkOverride) assert(key=="F12" and checkOverride); return "CLICK TactaraMainButton:LeftButton" end
+assert(state():byte(6)==129)
+GetBindingAction = val("JUMP"); assert(state():byte(6)==130)
+GetBindingAction = val(secret); assert(state():byte(6)==128)
+GetBindingAction = nil; assert(state():byte(6)==128)
+print("public F12 binding checks passed")

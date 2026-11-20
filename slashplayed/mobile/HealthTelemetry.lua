@@ -79,7 +79,18 @@ local function spAIState()
         stage = 11
         local hp = spReadHealthPercent("player") or 255
         local targetHP = hasTarget and (spReadHealthPercent("target") or 255) or 0
-        return string.char(65, 73, flags, hp, targetHP, math.floor(GetTime() / 2) % 256)
+        -- Optional public binding check. Never read protected binding strings.
+        local meta = 128
+        if type(GetBindingAction) == "function" then
+            local bindingOK, binding = pcall(GetBindingAction, "F12", true)
+            if bindingOK and not (type(issecretvalue) == "function" and issecretvalue(binding))
+                and not (type(canaccessvalue) == "function" and not canaccessvalue(binding))
+                and type(binding) == "string" then
+                if binding == "CLICK TactaraMainButton:LeftButton" then meta = 129
+                else meta = 130 end
+            end
+        end
+        return string.char(65, 73, flags, hp, targetHP, meta)
     end)
     if not ok then return unavailable(stage) end
     return state
