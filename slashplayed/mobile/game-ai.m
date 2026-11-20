@@ -115,6 +115,7 @@ static void sp_ai_heartbeat(uint8_t seq, const uint8_t *data, size_t length) {
     NSString *_directLastAction, *_p2pLastStatus;
     NSTimeInterval _p2pStatusAt;
     unsigned _directAttackAttempts, _visiblePulses, _lootAttempts;
+    unsigned _searchTabAttempts, _searchSteps, _searchVisionWaits;
     SPAIMove _visibleProposal;
     NSTimeInterval _visibleSeenAt, _lastDamageAt, _lootBindSince;
     uint8_t _lastTargetHP;
@@ -434,6 +435,8 @@ static NSArray<NSNumber *> *sp_ai_luminance(CVPixelBufferRef buffer) {
             SPAIMove proposed = sp_ai_move(answer);
             SPAIMove selected = sp_ai_nav_proposal(&strong->_navigation, proposed);
             if (selected == SP_MOVE_NONE) {
+                if (decision == SP_AI_TARGET && [answer isEqualToString:@"WAIT"] && strong->_searchVisionWaits < 3)
+                    ++strong->_searchVisionWaits;
                 NSString *status = proposed != SP_MOVE_NONE ? @"NAV CHECK" :
                     [answer isEqualToString:@"WARMUP"] ? @"P2P WARM" : @"P2P WAIT";
                 [strong setNavigationStatus:status at:now];
@@ -446,6 +449,8 @@ static NSArray<NSNumber *> *sp_ai_luminance(CVPixelBufferRef buffer) {
             if (strong.action && strong.action(move, CGPointZero, captured, duration)) {
                 sp_ai_nav_sent(&strong->_navigation, selected);
                 strong->_p2pLastMove = now;
+                strong->_searchVisionWaits = 0;
+                strong->_searchTabAttempts = 0;
                 strong->_sceneBeforeMove = frame;
                 strong->_moveEndsAt = now + duration;
                 SEL record = NSSelectorFromString(@"recordMove:");
@@ -574,6 +579,7 @@ static NSArray<NSNumber *> *sp_ai_luminance(CVPixelBufferRef buffer) {
         _directLastAction = nil;
         if (phaseChanged) {
             _directAttackAttempts = _visiblePulses = 0;
+            _searchTabAttempts = _searchSteps = _searchVisionWaits = 0;
             _lastTargetHP = 255;
             _lastDamageAt = 0;
             _directNextAction = 0;
@@ -624,6 +630,7 @@ static NSArray<NSNumber *> *sp_ai_luminance(CVPixelBufferRef buffer) {
             if (sent) {
                 if (decision == SP_AI_ATTACK && _directAttackAttempts < 2) ++_directAttackAttempts;
                 if (decision == SP_AI_LOOT) ++_lootAttempts;
+                if (decision == SP_AI_TARGET && _searchTabAttempts < 5) ++_searchTabAttempts;
                 BOOL approach = plan.phase == SP_FARM_APPROACH &&
                     (visibleMove != SP_MOVE_NONE || plan.usePixel2Play);
                 _directNextAction = now + sp_ai_direct_interval(decision, approach);
@@ -650,7 +657,31 @@ static NSArray<NSNumber *> *sp_ai_luminance(CVPixelBufferRef buffer) {
                 display = thermalPause ? @"HEAT WALK" : @"AI APPROACH";
             } else display = @"NAV INPUT";
         }
-        if (navigate) {
+        SPAIMove search = sp_ai_search_step(decision, sp_ai_game_flags, _searchTabAttempts,
+            _searchVisionWaits, _searchSteps, thermalPause || !_p2pAvailable);
+        BOOL searchSent = NO;
+        if (search != SP_MOVE_NONE && !keyDue && !combat && !_navigation.blocked &&
+            !_sceneBeforeMove && !_p2pPending && now-sp_ai_game_at < 0.85 && now-_p2pLastMove >= 1.4 &&
+            sp_ai_nav_has_slot(now, _directNextAction) && self.action) {
+            NSString *move = search == SP_MOVE_LEFT ? @"STRAFE_LEFT" :
+                search == SP_MOVE_RIGHT ? @"STRAFE_RIGHT" : @"FORWARD";
+            NSTimeInterval duration = thermalPause ? 0.22 : 0.32;
+            if (self.action(move, CGPointZero, sp_ai_game_at, duration)) {
+                ++_searchSteps;
+                _searchTabAttempts = 0;
+                _searchVisionWaits = 0;
+                _p2pLastMove = now;
+                if (sp_p2p_latest_frame && now-sp_p2p_latest_at < 1.5) {
+                    _sceneBeforeMove = sp_p2p_latest_frame;
+                    _moveEndsAt = now + duration;
+                }
+                sp_stub_log([[NSString stringWithFormat:@"AI search: bounded %@ (%u/3)",
+                    move, _searchSteps] UTF8String]);
+                display = @"AI SCOUT";
+                searchSent = YES;
+            } else display = @"NAV INPUT";
+        }
+        if (navigate && !searchSent && ![display isEqualToString:@"NAV INPUT"]) {
             if (thermalPause) display = decision == SP_AI_TARGET ? @"HEAT SEEK" : @"HEAT NO PLATE";
             else if (_navigation.blocked) display = @"NAV BLOCK";
             else {
@@ -695,6 +726,7 @@ static NSArray<NSNumber *> *sp_ai_luminance(CVPixelBufferRef buffer) {
     _directCandidate = nil;
     _directNextAction = _directLastActionAt = _p2pStatusAt = _p2pMetricsAt = 0;
     _directAttackAttempts = _visiblePulses = _lootAttempts = 0;
+    _searchTabAttempts = _searchSteps = _searchVisionWaits = 0;
     _lootBindSince = 0;
     _lastTargetHP = 255;
     _lastDamageAt = 0;

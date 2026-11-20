@@ -111,6 +111,15 @@ int main(void) {
     assert(sp_ai_visible_move_spacing(true) > sp_ai_visible_move_spacing(false));
     assert(sp_ai_visible_move_duration(SP_MOVE_FORWARD, true) < sp_ai_visible_move_duration(SP_MOVE_FORWARD, false));
     assert(sp_ai_visible_move_duration(SP_MOVE_LEFT, true) < sp_ai_visible_move_duration(SP_MOVE_LEFT, false));
+    assert(sp_ai_search_step(SP_AI_TARGET, 1, 2, 3, 0, true) == SP_MOVE_NONE);
+    assert(sp_ai_search_step(SP_AI_TARGET, 1, 3, 2, 0, false) == SP_MOVE_NONE);
+    assert(sp_ai_search_step(SP_AI_TARGET, 1, 3, 3, 0, false) == SP_MOVE_LEFT);
+    assert(sp_ai_search_step(SP_AI_TARGET, 1, 3, 0, 1, true) == SP_MOVE_FORWARD);
+    assert(sp_ai_search_step(SP_AI_TARGET, 1, 5, 0, 2, false) == SP_MOVE_RIGHT);
+    assert(sp_ai_search_step(SP_AI_TARGET, 1, 5, 3, 3, true) == SP_MOVE_NONE);
+    assert(sp_ai_search_step(SP_AI_TARGET, 5, 5, 3, 0, true) == SP_MOVE_NONE);
+    assert(sp_ai_search_step(SP_AI_TARGET, 33, 5, 3, 0, true) == SP_MOVE_NONE);
+    assert(sp_ai_search_step(SP_AI_ATTACK, 13, 5, 3, 0, true) == SP_MOVE_NONE);
     test_navigation();
     return 0;
 }

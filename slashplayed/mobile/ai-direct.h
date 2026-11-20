@@ -136,6 +136,17 @@ static inline SPAIFarmPlan sp_ai_plan_farm(SPAIDecision decision, uint8_t flags,
 }
 
 // Only telemetry-based steering is available in reduced-workload mode.
+// Seek a target with the old three-move pattern if Tab and vision have
+// produced no target. Fresh flags and the input window are checked outside.
+static inline SPAIMove sp_ai_search_step(SPAIDecision decision, uint8_t flags,
+    unsigned tabAttempts, unsigned visionWaits, unsigned steps, bool visionUnavailable) {
+    if (decision != SP_AI_TARGET || !(flags & 1) || (flags & (2|4|32|64)) ||
+        steps >= 3 || tabAttempts < 3) return SP_MOVE_NONE;
+    if (!visionUnavailable && visionWaits < 3 && tabAttempts < 5) return SP_MOVE_NONE;
+    static const SPAIMove moves[] = {SP_MOVE_LEFT, SP_MOVE_FORWARD, SP_MOVE_RIGHT};
+    return moves[steps];
+}
+
 static inline double sp_ai_visible_move_spacing(bool reducedWorkload) {
     return reducedWorkload ? 1.25 : 0.65;
 }
