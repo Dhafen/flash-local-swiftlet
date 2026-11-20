@@ -597,11 +597,11 @@ static NSArray<NSNumber *> *sp_ai_luminance(CVPixelBufferRef buffer) {
         _lastTargetHP = sp_ai_game_target_hp;
     }
     BOOL recentDamage = _lastDamageAt > 0 && now-_lastDamageAt < 3.0;
-    SPAIMove visibleMove = decision == SP_AI_ATTACK && !thermalPause && _visiblePulses < 12 ?
-        sp_ai_visible_approach(sp_ai_game_meta, _directAttackAttempts, combat, recentDamage) : SP_MOVE_NONE;
+    SPAIFarmPlan plan = sp_ai_plan_farm(decision, sp_ai_game_flags, sp_ai_game_meta, _directAttackAttempts,
+        recentDamage, &_approachExamples);
+    SPAIMove visibleMove = !thermalPause && _visiblePulses < 12 ? plan.movement : SP_MOVE_NONE;
     BOOL hasColumn = decision == SP_AI_ATTACK && (sp_ai_game_meta & 0x78);
-    visibleMove = sp_ai_apply_approach(&_approachExamples, visibleMove, combat);
-    BOOL navigate = !hasColumn && sp_ai_nav_allowed(decision, sp_ai_game_flags, _directAttackAttempts);
+    BOOL navigate = plan.usePixel2Play;
     sp_p2p_enable(_p2pAvailable && !thermalPause && (preview || (navigate && !_navigation.blocked)));
     if (preview) {
         if (thermalPause) display = @"VIS HEAT";
@@ -614,13 +614,14 @@ static NSArray<NSNumber *> *sp_ai_luminance(CVPixelBufferRef buffer) {
     } else if (candidate) {
         if (!thermalPause && decision != SP_AI_LOOT)
             [self evaluateLaya:candidate combat:combat run:run];
-        if (now >= _directNextAction && self.action) {
+        BOOL keyDue = now >= _directNextAction;
+        if (keyDue && self.action) {
             BOOL sent = self.action(candidate, CGPointZero, sp_ai_game_at, 0);
             if (sent) {
                 if (decision == SP_AI_ATTACK && _directAttackAttempts < 2) ++_directAttackAttempts;
                 if (decision == SP_AI_LOOT) ++_lootAttempts;
-                BOOL approach = decision == SP_AI_ATTACK && _directAttackAttempts >= 2 &&
-                    (visibleMove != SP_MOVE_NONE || !combat);
+                BOOL approach = plan.phase == SP_FARM_APPROACH &&
+                    (visibleMove != SP_MOVE_NONE || plan.usePixel2Play);
                 _directNextAction = now + (decision == SP_AI_TARGET || approach ? 3.2 :
                     decision == SP_AI_LOOT ? 1.4 : 0.85);
                 BOOL unknownHP = !sp_ai_health_known(sp_ai_game_hp);
@@ -635,7 +636,7 @@ static NSArray<NSNumber *> *sp_ai_luminance(CVPixelBufferRef buffer) {
         if (visibleMove != _visibleProposal) {
             _visibleProposal = visibleMove;
             _visibleSeenAt = sp_ai_game_at;
-        } else if (visibleMove != SP_MOVE_NONE && sp_ai_game_at - _visibleSeenAt >= 0.12 &&
+        } else if (!keyDue && visibleMove != SP_MOVE_NONE && sp_ai_game_at - _visibleSeenAt >= 0.12 &&
                    now-sp_ai_game_at < 0.85 && now-_p2pLastMove >= 0.65 &&
                    sp_ai_nav_has_slot(now, _directNextAction) && self.action) {
             NSString *move = visibleMove == SP_MOVE_LEFT ? @"STRAFE_LEFT" :

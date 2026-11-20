@@ -85,6 +85,16 @@ int main(void) {
     sp_ai_learn_approach(&examples, SP_MOVE_LEFT, SP_MOVE_LEFT);
     sp_ai_learn_approach(&examples, SP_MOVE_LEFT, SP_MOVE_LEFT);
     assert(sp_ai_apply_approach(&examples, SP_MOVE_LEFT, false) == SP_MOVE_LEFT);
+    SPAIFarmPlan plan = sp_ai_plan_farm(SP_AI_TARGET, 1, 129, 0, false, &examples);
+    assert(plan.phase == SP_FARM_SEARCH && plan.usePixel2Play);
+    plan = sp_ai_plan_farm(SP_AI_ATTACK, 13, 129, 1, false, &examples);
+    assert(plan.phase == SP_FARM_ENGAGE && !plan.usePixel2Play);
+    plan = sp_ai_plan_farm(SP_AI_ATTACK, 45, 129 + 8 * 8, 2, false, &examples);
+    assert(plan.phase == SP_FARM_APPROACH && plan.movement == SP_MOVE_FORWARD);
+    plan = sp_ai_plan_farm(SP_AI_ATTACK, 45, 129 + 8 * 11, 2, true, &examples);
+    assert(plan.phase == SP_FARM_COMBAT && plan.movement == SP_MOVE_NONE && !plan.usePixel2Play);
+    plan = sp_ai_plan_farm(SP_AI_LOOT, 149, 133, 0, false, &examples);
+    assert(plan.phase == SP_FARM_LOOT && !plan.usePixel2Play);
     test_navigation();
     return 0;
 }

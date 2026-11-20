@@ -91,6 +91,34 @@ static inline SPAIMove sp_ai_apply_approach(const SPAIApproachExamples *examples
         SP_MOVE_FORWARD : side;
 }
 
+typedef enum {
+    SP_FARM_PAUSE, SP_FARM_SEARCH, SP_FARM_ENGAGE, SP_FARM_APPROACH, SP_FARM_COMBAT, SP_FARM_LOOT
+} SPAIFarmPhase;
+
+typedef struct {
+    SPAIFarmPhase phase;
+    SPAIMove movement;
+    bool usePixel2Play;
+} SPAIFarmPlan;
+
+// The planner owns the current phase. The controller still owns key timing,
+// movement limits and cancellation, and executes at most one input per poll.
+static inline SPAIFarmPlan sp_ai_plan_farm(SPAIDecision decision, uint8_t flags, uint8_t meta,
+    unsigned attempts, bool recentDamage, const SPAIApproachExamples *examples) {
+    if (decision == SP_AI_LOOT) return (SPAIFarmPlan){SP_FARM_LOOT, SP_MOVE_NONE, false};
+    if (decision == SP_AI_TARGET)
+        return (SPAIFarmPlan){SP_FARM_SEARCH, SP_MOVE_NONE, sp_ai_nav_allowed(decision, flags, attempts)};
+    if (decision != SP_AI_ATTACK) return (SPAIFarmPlan){SP_FARM_PAUSE, SP_MOVE_NONE, false};
+    bool combat = (flags & 32) != 0;
+    if (combat && recentDamage) return (SPAIFarmPlan){SP_FARM_COMBAT, SP_MOVE_NONE, false};
+    if (attempts < 2) return (SPAIFarmPlan){SP_FARM_ENGAGE, SP_MOVE_NONE, false};
+    SPAIMove move = sp_ai_visible_approach(meta, attempts, combat, recentDamage);
+    if (move != SP_MOVE_NONE)
+        return (SPAIFarmPlan){SP_FARM_APPROACH, sp_ai_apply_approach(examples, move, combat), false};
+    if (combat) return (SPAIFarmPlan){SP_FARM_COMBAT, SP_MOVE_NONE, false};
+    return (SPAIFarmPlan){SP_FARM_APPROACH, SP_MOVE_NONE, sp_ai_nav_allowed(decision, flags, attempts)};
+}
+
 static inline double sp_ai_nav_duration(const SPAINavigation *nav, SPAIMove move) {
     if (nav->stalls > 0) return 0.42;
     return nav->last == move && nav->streak >= 2 ? 0.70 : 0.55;
