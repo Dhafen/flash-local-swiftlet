@@ -133,6 +133,9 @@ int main(void) {
     assert(sp_ai_patrol_step(SP_AI_TARGET, 1, 12, 0) == SP_MOVE_NONE);
     assert(sp_ai_patrol_step(SP_AI_TARGET, 1, 3, 2) == SP_MOVE_NONE);
     assert(sp_ai_patrol_step(SP_AI_ATTACK, 13, 0, 0) == SP_MOVE_NONE);
+    assert(!sp_ai_farm_progress(
+        (SPAIFarmFeedback){SP_MOTION_SPEED, 7, false},
+        (SPAIFarmFeedback){SP_MOTION_SPEED, 8, false}));
     test_navigation();
     return 0;
 }

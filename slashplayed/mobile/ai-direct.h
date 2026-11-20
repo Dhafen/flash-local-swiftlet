@@ -93,7 +93,7 @@ static inline SPAIFarmFeedback sp_ai_farm_feedback(const uint8_t *packet, unsign
 }
 
 static inline bool sp_ai_farm_progress(SPAIFarmFeedback start, SPAIFarmFeedback current) {
-    return start.source != SP_MOTION_UNKNOWN && current.source == start.source && current.counter != start.counter;
+    return start.source == SP_MOTION_POSITION && current.source == SP_MOTION_POSITION && current.counter != start.counter;
 }
 
 static inline SPAIMove sp_ai_visible_approach(uint8_t meta, unsigned attempts, bool combat, bool recentDamage) {
