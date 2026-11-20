@@ -601,7 +601,9 @@ static NSArray<NSNumber *> *sp_ai_luminance(CVPixelBufferRef buffer) {
     BOOL recentDamage = _lastDamageAt > 0 && now-_lastDamageAt < 3.0;
     SPAIFarmPlan plan = sp_ai_plan_farm(decision, sp_ai_game_flags, sp_ai_game_meta, _directAttackAttempts,
         recentDamage, &_approachExamples);
-    SPAIMove visibleMove = !thermalPause && _visiblePulses < 12 ? plan.movement : SP_MOVE_NONE;
+    // The expensive frame capture and both models pause, while the existing
+    // public target column can still guide short, infrequent movement pulses.
+    SPAIMove visibleMove = _visiblePulses < 12 ? plan.movement : SP_MOVE_NONE;
     BOOL hasColumn = decision == SP_AI_ATTACK && (sp_ai_game_meta & 0x78);
     BOOL navigate = plan.usePixel2Play;
     sp_p2p_enable(_p2pAvailable && !thermalPause && (preview || (navigate && !_navigation.blocked)));
@@ -638,18 +640,18 @@ static NSArray<NSNumber *> *sp_ai_luminance(CVPixelBufferRef buffer) {
             _visibleProposal = visibleMove;
             _visibleSeenAt = sp_ai_game_at;
         } else if (!keyDue && visibleMove != SP_MOVE_NONE && sp_ai_game_at - _visibleSeenAt >= 0.12 &&
-                   now-sp_ai_game_at < 0.85 && now-_p2pLastMove >= 0.65 &&
+                   now-sp_ai_game_at < 0.85 && now-_p2pLastMove >= sp_ai_visible_move_spacing(thermalPause) &&
                    sp_ai_nav_has_slot(now, _directNextAction) && self.action) {
             NSString *move = visibleMove == SP_MOVE_LEFT ? @"STRAFE_LEFT" :
                 visibleMove == SP_MOVE_RIGHT ? @"STRAFE_RIGHT" : @"FORWARD";
-            if (self.action(move, CGPointZero, sp_ai_game_at, visibleMove == SP_MOVE_FORWARD ? 0.42 : 0.24)) {
+            if (self.action(move, CGPointZero, sp_ai_game_at, sp_ai_visible_move_duration(visibleMove, thermalPause))) {
                 ++_visiblePulses;
                 _p2pLastMove = now;
-                display = @"AI APPROACH";
+                display = thermalPause ? @"HEAT WALK" : @"AI APPROACH";
             } else display = @"NAV INPUT";
         }
         if (navigate) {
-            if (thermalPause) display = @"NAV HEAT";
+            if (thermalPause) display = decision == SP_AI_TARGET ? @"HEAT SEEK" : @"HEAT NO PLATE";
             else if (_navigation.blocked) display = @"NAV BLOCK";
             else {
                 [self tryP2P:run];

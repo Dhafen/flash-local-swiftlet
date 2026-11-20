@@ -135,6 +135,16 @@ static inline SPAIFarmPlan sp_ai_plan_farm(SPAIDecision decision, uint8_t flags,
     return (SPAIFarmPlan){SP_FARM_APPROACH, SP_MOVE_NONE, sp_ai_nav_allowed(decision, flags, attempts)};
 }
 
+// Only telemetry-based steering is available in reduced-workload mode.
+static inline double sp_ai_visible_move_spacing(bool reducedWorkload) {
+    return reducedWorkload ? 1.25 : 0.65;
+}
+
+static inline double sp_ai_visible_move_duration(SPAIMove move, bool reducedWorkload) {
+    if (reducedWorkload) return move == SP_MOVE_FORWARD ? 0.25 : 0.16;
+    return move == SP_MOVE_FORWARD ? 0.42 : 0.24;
+}
+
 static inline double sp_ai_direct_interval(SPAIDecision decision, bool moving) {
     if (decision == SP_AI_TARGET || moving) return 3.2;
     if (decision == SP_AI_LOOT) return 1.4;

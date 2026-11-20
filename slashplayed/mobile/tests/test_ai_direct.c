@@ -108,6 +108,9 @@ int main(void) {
     assert(sp_ai_movement_key(SP_MOVE_RIGHT, 1|8|16) == 'e');
     assert(sp_ai_movement_key(SP_MOVE_LEFT, 4|8) == 'q');
     assert(sp_ai_movement_key(SP_MOVE_RIGHT, 32) == 'd');
+    assert(sp_ai_visible_move_spacing(true) > sp_ai_visible_move_spacing(false));
+    assert(sp_ai_visible_move_duration(SP_MOVE_FORWARD, true) < sp_ai_visible_move_duration(SP_MOVE_FORWARD, false));
+    assert(sp_ai_visible_move_duration(SP_MOVE_LEFT, true) < sp_ai_visible_move_duration(SP_MOVE_LEFT, false));
     test_navigation();
     return 0;
 }
