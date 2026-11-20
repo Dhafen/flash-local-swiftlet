@@ -38,7 +38,8 @@ final class SPP2PBridge: NSObject, @unchecked Sendable {
     private var models: (MLModel, MLModel)?
     private var frames: [Data] = []
     private var actions: [[Int32]] = []
-    private var pending: String?
+    private var awaitingFeedback = false
+    private var inputs: (image: MLMultiArray, history: MLMultiArray, prefix: MLMultiArray)?
     private let size = 3 * 192 * 192
     private let vocab = [20,20,20,20,4,4,23,17]
     private let noop: [Int32] = [0,0,0,0,0,0,11,8]
@@ -65,24 +66,16 @@ final class SPP2PBridge: NSObject, @unchecked Sendable {
         shared.queue.async {
             shared.frames.removeAll()
             shared.actions.removeAll()
-            shared.pending = nil
+            shared.awaitingFeedback = false
         }
     }
     @objc(recordMove:)
     class func recordMove(_ command: String) {
         shared.queue.async {
-            guard shared.pending == command, !shared.actions.isEmpty else { return }
-            if let id = SPP2PAction.executedIDs[command] { shared.actions[shared.actions.count - 1][0] = id }
-            shared.pending = nil
-        }
-    }
-    @objc(recordScoutMove:)
-    class func recordScoutMove(_ command: String) {
-        shared.queue.async {
-            guard shared.pending == "WAIT", !shared.actions.isEmpty,
+            guard shared.awaitingFeedback, !shared.actions.isEmpty,
                   let id = SPP2PAction.executedIDs[command] else { return }
             shared.actions[shared.actions.count - 1][0] = id
-            shared.pending = nil
+            shared.awaitingFeedback = false
         }
     }
     private func load() throws -> (MLModel, MLModel) {
@@ -118,12 +111,17 @@ final class SPP2PBridge: NSObject, @unchecked Sendable {
     private func predict(_ frame: Data) throws -> String {
         guard frame.count == size else { throw PortError.shape }
         let (policy, decoder) = try load()
+        awaitingFeedback = false
         frames.append(frame)
         actions.append(noop)
         if frames.count > 4 { frames.removeFirst(); actions.removeFirst() }
         guard frames.count == 4 else { return "WARMUP" }
-        let image = try MLMultiArray(shape: [4,3,192,192], dataType: .float32)
-        let history = try MLMultiArray(shape: [4,8], dataType: .int32)
+        if inputs == nil {
+            inputs = (try MLMultiArray(shape: [4,3,192,192], dataType: .float32),
+                      try MLMultiArray(shape: [4,8], dataType: .int32),
+                      try MLMultiArray(shape: [1,8], dataType: .int32))
+        }
+        guard let (image, history, prefix) = inputs else { throw PortError.shape }
         let dest = image.dataPointer.bindMemory(to: Float32.self, capacity: image.count)
         for i in 0..<4 {
             frames[i].withUnsafeBytes { (raw: UnsafeRawBufferPointer) in
@@ -134,7 +132,6 @@ final class SPP2PBridge: NSObject, @unchecked Sendable {
         let p = try MLDictionaryFeatureProvider(dictionary: ["frames":image,"action_history":history])
         guard let ctx = try policy.prediction(from: p).featureValue(for:"context")?.multiArrayValue,
               ctx.count == 1024 else { throw PortError.output }
-        let prefix = try MLMultiArray(shape: [1,8], dataType: .int32)
         for i in 0..<8 { prefix[i] = NSNumber(value: noop[i]) }
         // Decode in the checkpoint's autoregressive order; padded logits are never choices.
         var generated: [Int] = []
@@ -153,12 +150,8 @@ final class SPP2PBridge: NSObject, @unchecked Sendable {
             prefix[slot] = NSNumber(value:index)
             generated.append(index)
         }
-        // Report raw categorical IDs so genuine no-op can be distinguished from
-        // a prediction outside the movement adapter's supported action set.
-        let result = SPP2PAction.movement(generated)
-        NSLog("Pixel2Play: keyboard IDs %@ -> %@", generated.map(String.init).joined(separator: ","), result)
-        pending = result
-        return result
+        awaitingFeedback = true
+        return SPP2PAction.movement(generated)
     }
 }
 #endif

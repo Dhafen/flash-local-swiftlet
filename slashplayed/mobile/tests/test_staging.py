@@ -202,7 +202,7 @@ if len(sys.argv) > 2:
 
 assert 'SPLayaRuntime.shared.decide' in (root / 'apps/client/spgameai.swift').read_text()
 assert 'cpuAndNeuralEngine' in (root / 'apps/client/SPLayaRuntime.swift').read_text()
-assert 'LAYA FILE' in event and 'AI INPUT' in event
+assert 'AI Laya comparison:' in event and 'AI INPUT' in event
 
 assert 'SPP2PRuntime.swift' in (root / 'apps/client/build-launcher.sh').read_text()
 assert 'sp_p2p_capture(cb, tex)' in (root / 'shims/appkit/sphover.m').read_text()
@@ -213,16 +213,16 @@ assert 'local function unavailable(code)' in (root / "addon/SPHover/SPHover.lua"
 assert 'AI telemetry: state unavailable reason' in event
 
 assert 'local function spReadHealthPercent(unit)' in (root / "addon/SPHover/SPHover.lua").read_text()
-assert 'AI HP LOCK' in event and 'AI TGT LOCK' in event
+assert 'else if (sp_ai_state_reason > 0)' in event
 
 assert 'local function spDisplayHealth(bar, current, capacity)' in (wolkara / "Hud.lua").read_text()
 assert 'spDisplayHealth(frame.health, rawHealth, rawMaxHealth)' in (wolkara / "Hud.lua").read_text()
-preview_source = event.split('- (void)previewP2P:',1)[1].split('- (void)pollDirect:',1)[0]
+preview_source = event.split('- (void)previewP2P:',1)[1].split('- (void)evaluateLaya:',1)[0]
 assert 'predictFrame:completion:' in preview_source
 assert 'strong.action(' not in preview_source and 'recordMove:' not in preview_source
 assert 'sp_ai_nav_allowed(decision' in event and 'F12 BIND' in event
 assert '@"ATTACK"' not in preview_source and '@"CLICK"' not in preview_source
-assert 'health unknown; combat disabled' in event and 'VIS FILE' in event
+assert 'sp_ai_state_reason == 12 || sp_ai_state_reason == 13' in event and 'VIS FILE' in event
 assert 'now - captured > 3.0' in preview_source and 'P2P INPUT' in event
 assert 'STRAFE_LEFT' in event and 'STRAFE_RIGHT' in event
 if sys.platform == "darwin" and len(sys.argv) == 2:
@@ -235,6 +235,7 @@ if sys.platform == "darwin" and len(sys.argv) == 2:
         subprocess.run([binary], check=True)
 
 assert 'local hp = spReadHealthPercent("player") or 255' in (root / "addon/SPHover/SPHover.lua").read_text()
-assert 'sp_ai_health_known' in event and 'sp_ai_alive_hostile' in event
-assert 'BOOL authorized = partial || _directRulesOnly' in event
-assert 'partial ? @"HP?"' in event
+assert 'sp_ai_health_known' in event and '@"HP? F12"' in event
+assert 'sp_ai_nav_feedback' in event and 'sp_ai_nav_has_slot' in event
+assert 'sp_mobile_ai_yield:' in event and 'UIControlEventTouchDown' in event
+assert 'NSProcessInfoThermalStateCritical' in event
