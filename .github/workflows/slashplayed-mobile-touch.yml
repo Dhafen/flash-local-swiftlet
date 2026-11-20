@@ -148,6 +148,7 @@ jobs:
           mkdir -p "$delivery"
           cp "$output" "$delivery/"
           cp .edits/slashplayed/mobile/INSTALL.md "$delivery/Installera.md"
+          cp .edits/docs/AI_DEVICE_VALIDATION.md "$delivery/"
           (cd "$delivery" && shasum -a 256 slashplayed-wolkara-device-kit.zip > SHA256SUMS.txt)
 
       - name: Upload Windows Companion device kit

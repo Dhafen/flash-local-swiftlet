@@ -1,15 +1,16 @@
-# Pixel2Play 150M – porting notes (not a shipped inference engine)
+# Pixel2Play på iPhone
 
-Pinned upstream: https://github.com/elefant-ai/open-p2p/tree/a329d98cbe62119679a254d71bea6446773541bc
-Weights: https://huggingface.co/elefantai/open-p2p/tree/main/150M (MIT)
+Pixel2Play körs i valfri diagnostik i observationsläget. Förslagen visas som VIS-status. Regelmotorn äger styrningen i det autonoma testläget.
 
-The upstream 150M policy consumes 192x192 RGB uint8 frames, uses a convolutional image tokenizer, a 10-layer 1024-wide causal transformer with 200-frame history, a separate autoregressive action decoder, and Gemma-derived optional text embeddings. Upstream inference.py has both KV-cache and full-history modes. Its desktop Linux/Windows runner is not an iOS runtime. Do not rename a Torch checkpoint to .mlpackage or claim a stub is the model.
+Den lyckade [exportkörningen](https://github.com/Dhafen/flash-local-swiftlet/actions/runs/44592686942) byggde policy och decoder för fyra RGB-bildrutor från den [pinnade checkpointen](https://huggingface.co/elefantai/open-p2p/tree/5c52dce4aefbd4f50d24caccc2dcfda7bbd59719). En lokal kopia innehöll båda Core ML-paketen och ett schema 1-manifest med 182 433 505 använda parametrar. Policy-NRMSE var 0,0054–0,0065 och decoder-NRMSE 0,0034–0,0049 för två syntetiska seeds. Referensen i exporten är repots egna PyTorch-implementation med explicit attention. End-to-end-paritet med upstream-inferens och WoW-kvalitet återstår.
 
-Port gates:
-1. Reproduce upstream random-weight inference, then load the real 150M checkpoint using the pinned source configuration (not the deprecated checkpoint YAML). No-text inference first.
-2. Export image encoder, causal policy and action decoder as fixed-shape Core ML or implement equivalent MLX; replace unsupported flex attention / dynamic cache operations and sampling. Keep image normalization, action vocabulary and autoregressive ordering identical.
-3. Compare raw logits and reconstructed actions with the reference on fixed frames and RNG seeds. Validate cache reset and 200-step rolling window.
-4. On-device Metal capture uses the existing presented-drawable hook in sphover.m. Only add a throttled readback after valid exports exist; no desktop streaming. Respect orientation and prevent overlap with manual input. Route actions through existing manual input abstraction and preserve explicit stop/cancellation.
-5. Benchmark game FPS, peak RAM, inference latency and thermal behavior on the actual phone; only then enable Pixel2Play policy by default. WoW is not an upstream validated game.
+| Del | Lokal implementation | Verifieringsgap |
+| --- | --- | --- |
+| Bild | Metal kopierar hela renderingsytan högst en gång per sekund, tar bort bildremsan och area-medelvärdesbildar till RGB CHW 192 × 192. Swift skalar byte till 0–1. Exporten tillämpar EfficientNet-normalisering. | Referensens resize och färgkedja behöver jämföras pixel för pixel på fasta bildrutor. |
+| Handling | Swift samplar kategoriskt från de fyra första logits-slotarna. De första fyra är tangentbord. I diagnos reduceras de till ett riktningstecken eller WAIT. | Kör samma logit- och RNG-fixtures mot referensen. Manifestets etikett om greedy sampling beskriver en äldre artefakt och speglar inte Swift-koden. |
+| Historik | Fyra rutor, neutral action history i diagnostik, generation säkrar reset och ignorerar gamla resultat. | Referensen kör med längre kontext och faktisk exekverad åtgärd. Den lokala diagnosen har ingen återkoppling från styrningen. |
+| Körning | Runtime kontrollerar form och manifest före Core ML. Exporten testades på CPU. iOS begär CPU och Neural Engine. | Modellkompilering, ANE-delegering, första/kontinuerlig inferenstid, RAM och effekt saknar enhetsdata. |
 
-Current experiment ships Laya only. No claim of working Pixel2Play integration, independent navigation, quest completion or on-device benchmarks yet.
+Teknisk referens för handlingstokens, historik och sampling. [Upstream action mapping](https://github.com/elefant-ai/open-p2p/blob/main/elefant/data/action_mapping.py) · [Upstream inference](https://github.com/elefant-ai/open-p2p/blob/main/elefant/policy_model/inference.py)
+
+För paritet krävs samma riktiga bildrutor, normalisering och resize, tidsordnad historik inklusive icke-neutrala tangentbords- och mustokens, samt jämförelse av logits och beslut med fixerade seeds. Testa en omslagspunkt för historiken och återställning. Kontrollera enhetens kompilerade modell separat.
