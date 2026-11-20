@@ -98,6 +98,8 @@ static void sp_ai_heartbeat(uint8_t seq, const uint8_t *data, size_t length) {
 - (void)start;
 - (void)stop;
 - (void)invalidateDecision;
+- (void)toggleTeaching;
+- (void)recordManualSteering:(CGPoint)delta;
 @end
 
 @implementation SPGameAIController {
@@ -114,6 +116,10 @@ static void sp_ai_heartbeat(uint8_t seq, const uint8_t *data, size_t length) {
     SPAIMove _visibleProposal;
     NSTimeInterval _visibleSeenAt, _lastDamageAt, _lootBindSince;
     uint8_t _lastTargetHP;
+    SPAIApproachExamples _approachExamples;
+    BOOL _teaching;
+    NSTimeInterval _lastTeachingPacket;
+    unsigned _teachingSamples;
     SPAINavigation _navigation;
     NSData *_sceneBeforeMove;
     NSTimeInterval _moveEndsAt;
@@ -128,6 +134,48 @@ static void sp_ai_heartbeat(uint8_t seq, const uint8_t *data, size_t length) {
 }
 - (BOOL)active { return _active; }
 - (BOOL)starting { return _starting && _active; }
+
+- (void)toggleTeaching {
+    if (_teaching) {
+        _teaching = NO;
+        if (!_teachingSamples) {
+            if (self.status) self.status(@"TEACH NO DATA");
+            return;
+        }
+        [NSUserDefaults.standardUserDefaults setObject:@[@(_approachExamples.forward[0]),
+            @(_approachExamples.lateral[0]), @(_approachExamples.forward[1]), @(_approachExamples.lateral[1])]
+            forKey:@"sp_wolkara_approach_examples_v1"];
+        if (self.status) self.status(@"TEACH SAVED");
+        return;
+    }
+    if (_active) [self stop];
+    _approachExamples = (SPAIApproachExamples){0};
+    _lastTeachingPacket = 0;
+    _teachingSamples = 0;
+    _teaching = YES;
+    if (self.status) self.status(@"TEACH 0");
+}
+
+- (void)recordManualSteering:(CGPoint)delta {
+    if (!_teaching || _active || _teachingSamples >= 60) return;
+    NSTimeInterval now = NSProcessInfo.processInfo.systemUptime;
+    if (now-sp_ai_game_at >= 0.85 || sp_ai_game_at <= _lastTeachingPacket ||
+        sp_ai_current_decision(now) != SP_AI_ATTACK || (sp_ai_game_flags & 32)) return;
+    SPAIMove side = sp_ai_visible_approach(sp_ai_game_meta, 2, false, false);
+    if (side != SP_MOVE_LEFT && side != SP_MOVE_RIGHT) {
+        if (self.status && side == SP_MOVE_NONE) self.status(@"TEACH NO PLATE");
+        return;
+    }
+    SPAIMove demonstrated = SP_MOVE_NONE;
+    if (-delta.y >= 12 && -delta.y > fabs(delta.x)) demonstrated = SP_MOVE_FORWARD;
+    else if (fabs(delta.x) >= 12 && fabs(delta.x) > fabs(delta.y))
+        demonstrated = delta.x < 0 ? SP_MOVE_LEFT : SP_MOVE_RIGHT;
+    if (demonstrated != SP_MOVE_FORWARD && demonstrated != side) return;
+    sp_ai_learn_approach(&_approachExamples, side, demonstrated);
+    _lastTeachingPacket = sp_ai_game_at;
+    ++_teachingSamples;
+    if (self.status) self.status([NSString stringWithFormat:@"TEACH %u", _teachingSamples]);
+}
 
 - (void)invalidateDecision {
     Class bridge = NSClassFromString(@"SPGameAIModel");
@@ -549,9 +597,10 @@ static NSArray<NSNumber *> *sp_ai_luminance(CVPixelBufferRef buffer) {
         _lastTargetHP = sp_ai_game_target_hp;
     }
     BOOL recentDamage = _lastDamageAt > 0 && now-_lastDamageAt < 3.0;
-    SPAIMove visibleMove = decision == SP_AI_ATTACK && !thermalPause && _visiblePulses < 6 ?
+    SPAIMove visibleMove = decision == SP_AI_ATTACK && !thermalPause && _visiblePulses < 12 ?
         sp_ai_visible_approach(sp_ai_game_meta, _directAttackAttempts, combat, recentDamage) : SP_MOVE_NONE;
     BOOL hasColumn = decision == SP_AI_ATTACK && (sp_ai_game_meta & 0x78);
+    visibleMove = sp_ai_apply_approach(&_approachExamples, visibleMove, combat);
     BOOL navigate = !hasColumn && sp_ai_nav_allowed(decision, sp_ai_game_flags, _directAttackAttempts);
     sp_p2p_enable(_p2pAvailable && !thermalPause && (preview || (navigate && !_navigation.blocked)));
     if (preview) {
@@ -595,7 +644,7 @@ static NSArray<NSNumber *> *sp_ai_luminance(CVPixelBufferRef buffer) {
                 ++_visiblePulses;
                 _p2pLastMove = now;
                 display = @"AI APPROACH";
-            }
+            } else display = @"NAV INPUT";
         }
         if (navigate) {
             if (thermalPause) display = @"NAV HEAT";
@@ -607,6 +656,10 @@ static NSArray<NSNumber *> *sp_ai_luminance(CVPixelBufferRef buffer) {
             }
         }
     }
+    if (decision == SP_AI_ATTACK && !hasColumn && _directAttackAttempts >= 2 &&
+        [display isEqualToString:@"AI WAIT"]) display = @"NAV NO PLATE";
+    if (decision == SP_AI_ATTACK && hasColumn && _visiblePulses >= 12 &&
+        [display isEqualToString:@"AI WAIT"]) display = @"NAV LIMIT";
     if (self.status) self.status(display);
     __weak SPGameAIController *weak = self;
     dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.4 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
@@ -615,6 +668,18 @@ static NSArray<NSNumber *> *sp_ai_luminance(CVPixelBufferRef buffer) {
 }
 - (void)start {
     if (_active || _starting || _stopping) return;
+    if (_teaching) [self toggleTeaching];
+    NSArray *examples = [NSUserDefaults.standardUserDefaults arrayForKey:@"sp_wolkara_approach_examples_v1"];
+    _approachExamples = (SPAIApproachExamples){0};
+    if (examples.count == 4) {
+        for (NSUInteger i=0; i<4; ++i) {
+            if (![examples[i] isKindOfClass:NSNumber.class]) continue;
+            NSInteger count = [examples[i] integerValue];
+            if (count < 0 || count > 100) continue;
+            if (i % 2) _approachExamples.lateral[i/2] = (uint16_t)count;
+            else _approachExamples.forward[i/2] = (uint16_t)count;
+        }
+    }
     Class bridge = NSClassFromString(@"SPGameAIModel");
     SEL ready = NSSelectorFromString(@"layaReady");
     _layaEnabled = [bridge respondsToSelector:ready] && ((BOOL (*)(id, SEL))objc_msgSend)(bridge, ready);

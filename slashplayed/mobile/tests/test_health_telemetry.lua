@@ -109,3 +109,19 @@ assert(state():byte(3) == 21)
 UnitGUID = val(secret)
 assert(state():byte(3) == 21)
 print("public target columns and same-corpse checks passed")
+
+targetDead = false
+UnitCanAttack = val(true)
+UnitGUID = val("test-foe-C")
+C_NamePlate.GetNamePlateForUnit = function(unit)
+    if unit == "nameplate7" then return p end
+end
+UnitIsUnit = function(unit, target)
+    assert(target == "target")
+    if unit == "nameplate1" then return secret end
+    return unit == "nameplate7"
+end
+assert(state():byte(6) > 132)
+UnitIsUnit = val(secret)
+assert(state():byte(6) == 132)
+print("nameplate unit token fallback passed")

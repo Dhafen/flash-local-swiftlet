@@ -72,6 +72,19 @@ int main(void) {
     assert(sp_ai_visible_approach(129 + 8 * 11, 2, true, true) == SP_MOVE_RIGHT);
     assert(sp_ai_visible_approach(129 + 8 * 8, 2, true, false) == SP_MOVE_FORWARD);
     assert(sp_ai_visible_approach(129 + 8 * 8, 2, true, true) == SP_MOVE_NONE);
+    SPAIApproachExamples examples = {0};
+    for (unsigned i = 0; i < 3; ++i) sp_ai_learn_approach(&examples, SP_MOVE_LEFT, SP_MOVE_FORWARD);
+    assert(sp_ai_apply_approach(&examples, SP_MOVE_LEFT, false) == SP_MOVE_LEFT);
+    sp_ai_learn_approach(&examples, SP_MOVE_LEFT, SP_MOVE_FORWARD);
+    assert(sp_ai_apply_approach(&examples, SP_MOVE_LEFT, false) == SP_MOVE_FORWARD);
+    assert(sp_ai_apply_approach(&examples, SP_MOVE_RIGHT, false) == SP_MOVE_RIGHT);
+    assert(sp_ai_apply_approach(&examples, SP_MOVE_LEFT, true) == SP_MOVE_LEFT);
+    assert(sp_ai_apply_approach(&examples, SP_MOVE_NONE, false) == SP_MOVE_NONE);
+    sp_ai_learn_approach(&examples, SP_MOVE_LEFT, SP_MOVE_RIGHT);
+    assert(examples.lateral[0] == 0);
+    sp_ai_learn_approach(&examples, SP_MOVE_LEFT, SP_MOVE_LEFT);
+    sp_ai_learn_approach(&examples, SP_MOVE_LEFT, SP_MOVE_LEFT);
+    assert(sp_ai_apply_approach(&examples, SP_MOVE_LEFT, false) == SP_MOVE_LEFT);
     test_navigation();
     return 0;
 }

@@ -73,6 +73,24 @@ static inline SPAIMove sp_ai_visible_approach(uint8_t meta, unsigned attempts, b
     return SP_MOVE_FORWARD;
 }
 
+// Fit a small on-device steering table from manual samples. Learning can
+// choose forward or toward the observed side, never reverse or steer away.
+typedef struct { uint16_t forward[2], lateral[2]; } SPAIApproachExamples;
+static inline void sp_ai_learn_approach(SPAIApproachExamples *examples, SPAIMove side, SPAIMove demonstrated) {
+    if (side != SP_MOVE_LEFT && side != SP_MOVE_RIGHT) return;
+    if (demonstrated != SP_MOVE_FORWARD && demonstrated != side) return;
+    unsigned index = side == SP_MOVE_RIGHT;
+    uint16_t *count = demonstrated == SP_MOVE_FORWARD ? &examples->forward[index] : &examples->lateral[index];
+    if (*count < 100) ++*count;
+}
+
+static inline SPAIMove sp_ai_apply_approach(const SPAIApproachExamples *examples, SPAIMove side, bool combat) {
+    if (combat || (side != SP_MOVE_LEFT && side != SP_MOVE_RIGHT)) return side;
+    unsigned index = side == SP_MOVE_RIGHT;
+    return examples->forward[index] >= 4 && examples->forward[index] >= 2 * examples->lateral[index] + 2 ?
+        SP_MOVE_FORWARD : side;
+}
+
 static inline double sp_ai_nav_duration(const SPAINavigation *nav, SPAIMove move) {
     if (nav->stalls > 0) return 0.42;
     return nav->last == move && nav->streak >= 2 ? 0.70 : 0.55;

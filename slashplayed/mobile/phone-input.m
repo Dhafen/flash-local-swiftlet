@@ -454,7 +454,11 @@ static UIButton *sp_mobile_button(NSString *title, NSString *label, id owner, SE
         SPInputView *input = weakSelf;
         if (input) [input sp_mobile_ai_test];
     }];
-    return [UIMenu menuWithTitle:@"Game controls" children:@[escape, jump, showJump, rotation, showRotation, resetRotation, play, mode, aiTest, legacy]];
+    UIAction *aiTeach = [UIAction actionWithTitle:@"Teach AI approach (start / save)" image:nil identifier:nil handler:^(__kindof UIAction *action) {
+        SPInputView *input = weakSelf;
+        if (input) [input->_mobileAI toggleTeaching];
+    }];
+    return [UIMenu menuWithTitle:@"Game controls" children:@[escape, jump, showJump, rotation, showRotation, resetRotation, play, mode, aiTest, aiTeach, legacy]];
 }
 
 - (void)sp_mobile_layout:(CGRect)game top:(CGFloat)top {
@@ -770,8 +774,10 @@ static UIButton *sp_mobile_button(NSString *title, NSString *label, id owner, SE
         if (!_mobileMoving && hypot(delta.x, delta.y) >= SP_MOBILE_DRAG_DISTANCE) {
             _mobileMoving = YES;
             [_mobileStick setOrigin:_mobileLeftStart displacement:delta];
+            [_mobileAI recordManualSteering:delta];
         } else if (_mobileMoving && !_mobileStick.hidden) {
             [_mobileStick setOrigin:_mobileLeftStart displacement:delta];
+            [_mobileAI recordManualSteering:delta];
         }
     }
     if (_mobileInterface && [touches containsObject:_mobileInterface]) {

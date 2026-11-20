@@ -51,7 +51,21 @@ local function spAITargetColumn()
     local ok, column = pcall(function()
         if not C_NamePlate or not C_NamePlate.GetNamePlateForUnit then return end
         local plate = C_NamePlate.GetNamePlateForUnit("target")
-        if not spAIReadable(plate) or not plate or not plate.IsForbidden or plate:IsForbidden() then return end
+        if not spAIReadable(plate) then return end
+        -- Some clients only return a frame for its nameplate unit token.
+        if not plate and type(UnitIsUnit) == "function" then
+            for i = 1, 40 do
+                local token = "nameplate" .. i
+                local match = UnitIsUnit(token, "target")
+                if spAIReadable(match) and match == true then
+                    plate = C_NamePlate.GetNamePlateForUnit(token)
+                    break
+                end
+            end
+        end
+        if not spAIReadable(plate) or not plate or not plate.IsForbidden then return end
+        local forbidden = plate:IsForbidden()
+        if not spAIReadable(forbidden) or forbidden then return end
         local visible = plate:IsVisible()
         if not spAIReadable(visible) or not visible then return end
         local x = plate:GetCenter()
