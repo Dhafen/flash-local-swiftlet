@@ -114,6 +114,7 @@ targetDead = false
 UnitCanAttack = val(true)
 UnitGUID = val("test-foe-C")
 C_NamePlate.GetNamePlateForUnit = function(unit)
+    if unit == "target" then error("client requires a nameplate unit token") end
     if unit == "nameplate7" then return p end
 end
 UnitIsUnit = function(unit, target)
