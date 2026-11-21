@@ -563,7 +563,7 @@ static NSArray<NSNumber *> *sp_ai_luminance(CVPixelBufferRef buffer) {
             (_visualPreviewStatus && now-_visualPreviewAt < 5.0 ? _visualPreviewStatus : @"VIS LOAD");
         [self showPhase:status];
     } else {
-        [self showPhase:fresh ? @"OBSERVING" : @"AI STALE"];
+        [self showPhase:fresh ? @"OBS ONLY" : @"AI STALE"];
     }
 
     __weak SPGameAIController *weak = self;

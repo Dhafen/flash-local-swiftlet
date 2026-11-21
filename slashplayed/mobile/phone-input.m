@@ -300,6 +300,9 @@ static UIButton *sp_mobile_button(NSString *title, NSString *label, id owner, SE
     _mobileAIButton.titleLabel.minimumScaleFactor = 0.7;
     _mobileAIButton.layer.cornerRadius = 22;
     _mobileAIButton.hidden = YES;
+    _mobileAIButton.menu = [self sp_mobile_ai_menu];
+    _mobileAIButton.showsMenuAsPrimaryAction = NO;
+    _mobileAIButton.accessibilityHint = @"Tap to start. Hold for AI options.";
     // The AI toggle is an explicit request to start or stop automation.
     // TouchDown on the other controls still yields to manual input.
     for (UIButton *button in @[_mobileRotation, _mobileUI, _mobileEdit, _mobileSpeed, _mobileReset, _softToggle])
@@ -356,10 +359,11 @@ static UIButton *sp_mobile_button(NSString *title, NSString *label, id owner, SE
         SPInputView *input = weakSelf;
         if (!input) return;
         [input->_mobileAIButton setTitle:status forState:UIControlStateNormal];
+        input->_mobileAIButton.menu = input->_mobileAI.active ? nil : [input sp_mobile_ai_menu];
         input->_mobileAIButton.backgroundColor = input->_mobileAI.active
             ? [UIColor colorWithRed:0.10 green:0.39 blue:0.22 alpha:0.92] : [UIColor colorWithWhite:0 alpha:0.55];
         input->_mobileAIButton.accessibilityHint = input->_mobileAI.active
-            ? @"Tap to stop AI" : @"Tap to start AI; the title shows the last status";
+            ? @"Tap to stop AI" : @"Tap to start. Hold for AI options.";
     };
     _mobileReset.hidden = _mobileSpeed.hidden = YES;
     for (UIButton *button in @[_mobileJump, _mobileUI, _mobileEdit, _mobileSpeed, _mobileReset, _mobileRotation, _mobileAIButton]) {
@@ -455,6 +459,15 @@ static UIButton *sp_mobile_button(NSString *title, NSString *label, id owner, SE
         [prefs setBool:![prefs boolForKey:@"sp_wolkara_extra_controls"] forKey:@"sp_wolkara_extra_controls"];
         [input setNeedsLayout];
     }];
+    NSArray<UIMenuElement *> *controls = @[
+        escape, jump, showJump, rotation, showRotation, resetRotation, play, mode
+    ];
+    controls = [controls arrayByAddingObjectsFromArray:[self sp_mobile_ai_menu].children];
+    return [UIMenu menuWithTitle:@"Game controls" children:[controls arrayByAddingObject:legacy]];
+}
+
+- (UIMenu *)sp_mobile_ai_menu {
+    __weak SPInputView *weakSelf = self;
     UIAction *aiTest = [UIAction actionWithTitle:@"Test AI movement (forward)" image:nil identifier:nil handler:^(__kindof UIAction *action) {
         SPInputView *input = weakSelf;
         if (input) [input sp_mobile_ai_test];
@@ -479,8 +492,7 @@ static UIButton *sp_mobile_button(NSString *title, NSString *label, id owner, SE
         [input->_mobileAIButton setTitle:input->_mobileAI.modelDiagnostics ? @"MODEL ON" : @"MODEL OFF"
             forState:UIControlStateNormal];
     }];
-    return [UIMenu menuWithTitle:@"Game controls" children:@[escape, jump, showJump, rotation, showRotation, resetRotation,
-        play, mode, aiTest, aiTestMode, aiModels, aiTeach, legacy]];
+    return [UIMenu menuWithTitle:@"AI options" children:@[aiTest, aiTestMode, aiModels, aiTeach]];
 }
 
 - (void)sp_mobile_layout:(CGRect)game top:(CGFloat)top {

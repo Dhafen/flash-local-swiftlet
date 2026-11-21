@@ -85,6 +85,13 @@ assert '_mobileUI.hidden = _mobileEdit.hidden = compact;' in event
 assert '_mobileSpeed.hidden = _mobileReset.hidden = compact || !_mobileEditing;' in event
 assert '_mobileJump.hidden = compact && ![prefs boolForKey:@"sp_wolkara_show_jump"];' in event
 assert '_softToggle.menu = [self sp_mobile_compact_menu];' in event
+assert '_mobileAIButton.menu = [self sp_mobile_ai_menu];' in event
+assert '_mobileAIButton.showsMenuAsPrimaryAction = NO;' in event
+assert 'input->_mobileAIButton.menu = input->_mobileAI.active ? nil : [input sp_mobile_ai_menu];' in event
+ai_menu = event.split('- (UIMenu *)sp_mobile_ai_menu {', 1)[1].split('\n}', 1)[0]
+assert 'Test AI movement (forward)' in ai_menu
+assert 'Toggle automation on authorized test realm' in ai_menu
+assert '[input->_mobileAI start]' not in ai_menu
 assert '_softToggle.showsMenuAsPrimaryAction = NO;' in event
 assert 'CGRectGetMidX(game) - 22' in event
 assert 'Show / hide Jump button' in event and 'Show / hide extra controls' in event
@@ -250,7 +257,7 @@ assert 'diagnosticsRequested && thermal == NSProcessInfoThermalStateNominal' in 
 assert 'if (thermal == NSProcessInfoThermalStateCritical) { [self fail:@"AI HEAT"]; return; }' in poll
 assert 'interval = reduced ? 0.8 : 0.4' in poll
 assert 'sp_p2p_enable(preview &&' in poll and '[self previewP2P:run]' in poll.split('} else if (preview) {', 1)[1]
-assert '[self showPhase:fresh ? @"OBSERVING" : @"AI STALE"]' in poll
+assert '[self showPhase:fresh ? @"OBS ONLY" : @"AI STALE"]' in poll
 assert not any(status in event for status in ('"HEAT PAUSE"', '"HEAT WALK"', '"HEAT SEEK"'))
 assert 'input->_mobileAI.autonomousTest' in event and '_mobileAI.autonomousTest = NO' in event
 

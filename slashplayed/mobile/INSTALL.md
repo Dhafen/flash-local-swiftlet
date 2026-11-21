@@ -16,9 +16,9 @@ Tactara 0.19.0 ingår som ett separat, oförändrat GPL-addon. Befintlig install
 
 ## AI-knappen och rörelsediagnostik
 
-AI-knappen startar och stoppar en lokal session. Standardläget visar OBSERVING när aktuell SPHover-telemetri tas emot. Du kan spela som vanligt med touchkontrollerna och den manuella F12-knappen.
+AI-knappen startar och stoppar en lokal session. Standardläget visar OBS ONLY när aktuell SPHover-telemetri tas emot. I det läget styr du själv med touchkontrollerna och F12. Håll inne AI-knappen när den är avstängd för att öppna AI-menyn.
 
-- **En rörelsepuls.** Stå stilla på plan, fri mark och välj **Test AI movement (forward)** i tangentbordets långtrycksmeny. TEST ACCEPT betyder att inputlagret tog emot pulsen. TEST MOVED betyder att en senare positionsobservation visade förflyttning. TEST STALL betyder att positionsräknaren stod stilla under mätfönstret. TEST NO DATA betyder att positionsutfallet saknade tillräcklig telemetri. TEST INPUT betyder att inputlagret avvisade pulsen.
+- **En rörelsepuls.** Stå stilla på plan, fri mark och välj **Test AI movement (forward)** i AI-menyn. TEST ACCEPT betyder att inputlagret tog emot pulsen. TEST MOVED betyder att en senare positionsobservation visade förflyttning. TEST STALL betyder att positionsräknaren stod stilla under mätfönstret. TEST NO DATA betyder att positionsutfallet saknade tillräcklig telemetri. TEST INPUT betyder att inputlagret avvisade pulsen.
 - **Autonomt test.** Välj **Toggle automation on authorized test realm** endast i en miljö med uttryckligt tillstånd. När knappen visar TEST READY startar samma AI-knapp hela testloopen. Touch eller ett fysiskt tangentbord stoppar loopen direkt. Bakgrundsläge stoppar den och återställer observationsläget.
 - **Aktiv styrning.** SEARCH provar verifierad Tab. ENGAGE provar Tactara F12. APPROACH följer ett synligt valt mål med korta pulser. IN COMBAT, LOOT CHECK och RECOVER följer offentlig spelstatus. NAV POSITION, MOVE BIND, NAV BLOCK, NO DAMAGE och LOOT UNCONF visar varför loopen håller position eller väntar. Vid kritiskt värmeläge visas AI HEAT och sessionen stoppas.
 - **Bindningar.** Tab måste vara bundet till närmaste fiende och F12 till Tactaras huvudrotation. W måste betyda framåt. För sidsteg krävs Q/A respektive E/D bundna till strafe. För loot krävs Interact With Target på F eller F10.

@@ -19,7 +19,7 @@ SPHover läser offentlig spelstatus ungefär två gånger per sekund. ObjC tidss
 | RECOVER | Låg hälsa under 35 % pausar input tills minst 50 % observeras. Monterad eller död spelare pausar. Återhämtning och återupplivning sker manuellt. |
 | BLOCKED / STOPPED | Saknade bindningar, okänd hälsa, stale data eller slut på budget blockerar respektive handling. Ett manuellt övertagande, stopp eller appdeaktivering släpper input och ogiltigförklarar väntande arbete. Kritisk temperatur stoppar loopen. |
 
-Vid APPROACH är adapteracceptans, förflyttning, minskat målavstånd och centrerad nameplate separata signaler. Två misslyckade eller två omätbara pulser blockerar upprepning. En andra sidovändning blockeras även med framåtpulser emellan. Totalgränsen är tolv pulser per valt mål. OBSERVING och loggen kan användas för manuell felsökning.
+Vid APPROACH är adapteracceptans, förflyttning, minskat målavstånd och centrerad nameplate separata signaler. Två misslyckade eller två omätbara pulser blockerar upprepning. En andra sidovändning blockeras även med framåtpulser emellan. Totalgränsen är tolv pulser per valt mål. OBS ONLY och loggen kan användas för manuell felsökning.
 
 Native-exekveraren äger UIKit-fokus, modalgränser, tangent ner/upp, deadlines och kontext. Lyckad input innebär accepterad handling. Mål-HP kan falla på grund av andra källor, och en tömd matchad loot-slot behöver kopplas till ett inventarieresultat i fysisk test. Mätning med kvantiserat avstånd visar observerat framsteg över ett intervall. En spellträff eller faktisk nådd punkt kräver ytterligare bevis.
 
