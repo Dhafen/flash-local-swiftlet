@@ -152,7 +152,18 @@ local function spAICombatLog(_, kind, _, source, _, _, _, destination, _, _, _, 
     spAIHitTarget, spAIHitCount, spAIHitAt = destination, (spAIHitCount + 1) % 4, now
 end
 
+local spAILastBlockedAction
 local function spAILootEvent(_, event, first, second)
+    if event == "ADDON_ACTION_FORBIDDEN" or event == "ADDON_ACTION_BLOCKED" then
+        if spAIReadable(first) and first == "SPHover" and spAIReadable(second) and type(second) == "string" then
+            local action = second:match("^[%w_:.() ]+$") and second:sub(1, 96) or "unknown"
+            if action ~= spAILastBlockedAction then
+                spAILastBlockedAction = action
+                print("SPHover blocked action: " .. action)
+            end
+        end
+        return
+    end
     if event == "PLAYER_TARGET_CHANGED" then
         spAICombatTarget, spAIPlayerKill, spAIPlayerKillAt = nil, nil, nil
         spAIPreviousTarget = nil
@@ -205,7 +216,7 @@ end
 if type(CreateFrame) == "function" then
     local frame = CreateFrame("Frame")
     for _, event in ipairs({"LOOT_OPENED", "LOOT_SLOT_CLEARED", "LOOT_CLOSED", "PARTY_KILL",
-        "PLAYER_TARGET_CHANGED", "COMBAT_LOG_EVENT_UNFILTERED"}) do
+        "PLAYER_TARGET_CHANGED", "COMBAT_LOG_EVENT_UNFILTERED", "ADDON_ACTION_FORBIDDEN", "ADDON_ACTION_BLOCKED"}) do
         pcall(frame.RegisterEvent, frame, event)
     end
     frame:SetScript("OnEvent", function(...) pcall(spAILootEvent, ...) end)

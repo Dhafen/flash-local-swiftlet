@@ -120,9 +120,13 @@ hover.with_name("SPHover.vision.lua").write_bytes(hover.read_bytes())
 hover.write_text("SPPhoneTouchRects = true\n" + hover.read_text())
 replace_once(hover, "    local f = EnumerateFrames()",
              """    local function addPanel(frame)
-        if not frame or isForbidden(frame) or not frame:IsVisible() then return end
-        local l, b, r, t = screenRect(frame)
-        if not l then return end
+        if not frame or isForbidden(frame) or not frame.IsProtected or frame:IsProtected()
+            or not frame:IsVisible() then return end
+        local left, bottom, width, height = frame:GetRect()
+        local scale = frame:GetEffectiveScale()
+        if not spAIFinite(left) or not spAIFinite(bottom) or not spAIFinite(width) or not spAIFinite(height)
+            or not spAIFinite(scale) or scale <= 0 then return end
+        local l, b, r, t = left * scale, bottom * scale, (left + width) * scale, (bottom + height) * scale
         l, b, r, t = max(l, 0), max(b, 0), min(r, sw), min(t, sh)
         if r - l < 4 or t - b < 4 then return end
         local x, y = quantize(l / sw), quantize(b / sh)
@@ -134,14 +138,10 @@ replace_once(hover, "    local f = EnumerateFrames()",
     if SPMobileCombatHint then
         for _, name in ipairs({
             "SPMobileMenu", "SPMobileCombatPanel", "SPTouchBarsEditor",
-            "WorldMapFrame", "ContainerFrameCombinedBags", "CharacterFrame",
-            "PlayerSpellsFrame", "QuestFrame", "QuestLogFrame", "GossipFrame",
-            "LootFrame", "SettingsPanel", "GameMenuFrame", "ItemRefTooltip",
-            "CommunitiesFrame", "MerchantFrame", "PVEFrame", "BankFrame",
         }) do pcall(addPanel, _G[name]) end
-        for index = 1, 13 do pcall(addPanel, _G["ContainerFrame" .. index]) end
     end
-    local f = EnumerateFrames()""")
+    local f
+    if not SPPhoneTouchRects then f = EnumerateFrames() end""")
 
 # Bundled addon files, copied from pinned standalone Touchbars project in CI.
 addon = ROOT / "addon/SPTouchBars"
