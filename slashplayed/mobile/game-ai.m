@@ -115,7 +115,9 @@ static void sp_ai_heartbeat(uint8_t seq, const uint8_t *data, size_t length, NST
 @interface SPGameAIController : NSObject
 @property(nonatomic, readonly) BOOL active;
 @property(nonatomic, readonly) BOOL starting;
+@property(nonatomic, readonly) BOOL manualPaused;
 @property(nonatomic) BOOL autonomousTest;
+@property(nonatomic) BOOL observationSelected;
 @property(nonatomic) BOOL modelDiagnostics;
 @property(nonatomic, copy) BOOL (^action)(NSString *, CGPoint, NSTimeInterval, NSTimeInterval);
 @property(nonatomic, copy) void (^releaseInput)(void);
@@ -123,6 +125,7 @@ static void sp_ai_heartbeat(uint8_t seq, const uint8_t *data, size_t length, NST
 - (void)start;
 - (void)stop;
 - (void)yieldToManualInput;
+- (void)resumeFromManualInput;
 - (void)invalidateDecision;
 - (void)toggleTeaching;
 - (void)recordManualSteering:(CGPoint)delta;
@@ -155,6 +158,8 @@ static void sp_ai_note_event(void *context, const char *message) {
 
 @implementation SPGameAIController {
     BOOL _active, _starting, _stopping, _ownsCapture;
+    BOOL _manualPaused;
+    NSTimeInterval _manualResumeAt;
     NSUInteger _run, _captureRun;
     BOOL _busy;
     NSTimeInterval _nextFrame, _lastFrame;
@@ -177,9 +182,25 @@ static void sp_ai_note_event(void *context, const char *message) {
 }
 - (BOOL)active { return _active; }
 - (BOOL)starting { return _starting && _active; }
+- (BOOL)manualPaused { return _manualPaused; }
 
 - (void)yieldToManualInput {
-    if (self.autonomousTest || self.modelDiagnostics || _starting || _ownsCapture) [self stop];
+    if (!_active) return;
+    if (_starting || _ownsCapture) { [self stop]; return; }
+    if (_manualPaused || (!self.autonomousTest && !self.modelDiagnostics)) return;
+    _manualPaused = YES;
+    SPAIEncounterAdapter adapter = {(__bridge void *)self, sp_ai_submit_input, sp_ai_release_input,
+        sp_ai_navigation_outcome, sp_ai_note_event};
+    sp_ai_suspend_encounter(&_encounter, adapter);
+    sp_p2p_enable(NO);
+    [self invalidateDecision];
+    [self showPhase:@"AI PAUSED"];
+}
+
+- (void)resumeFromManualInput {
+    if (!_active || !_manualPaused) return;
+    _manualResumeAt = NSProcessInfo.processInfo.systemUptime + 1.0;
+    _manualPaused = NO;
 }
 
 - (void)toggleTeaching {
@@ -276,6 +297,8 @@ static NSArray<NSNumber *> *sp_ai_luminance(CVPixelBufferRef buffer) {
 - (void)stop {
     if (!_active) return;
     _active = NO;
+    _manualPaused = NO;
+    _manualResumeAt = 0;
     _visualPreviewMode = NO;
     _visualPreviewStatus = nil;
     _visualPreviewAt = 0;
@@ -485,7 +508,7 @@ static NSArray<NSNumber *> *sp_ai_luminance(CVPixelBufferRef buffer) {
 }
 
 - (BOOL)submit:(NSString *)action forSample:(SPAINavSample)sample hold:(NSTimeInterval)hold {
-    BOOL accepted = self.autonomousTest && self.action && self.action(action, CGPointZero, sample.at, hold);
+    BOOL accepted = self.autonomousTest && !_manualPaused && self.action && self.action(action, CGPointZero, sample.at, hold);
     sp_stub_log([[NSString stringWithFormat:@"AI action: rules %@ observation %.3f adapter %@",
         action, sample.at, accepted ? @"accepted" : @"rejected"] UTF8String]);
     return accepted;
@@ -528,7 +551,11 @@ static NSArray<NSNumber *> *sp_ai_luminance(CVPixelBufferRef buffer) {
     NSProcessInfoThermalState thermal = process.thermalState;
     BOOL reduced = thermal >= NSProcessInfoThermalStateSerious;
     BOOL diagnosticsRequested = self.modelDiagnostics && !self.autonomousTest;
-    BOOL preview = diagnosticsRequested && thermal == NSProcessInfoThermalStateNominal;
+    SPAINavSample sample = sp_ai_game_sample();
+    BOOL fresh = sp_ai_sample_fresh(sample.at, now);
+    BOOL paused = _manualPaused || (_manualResumeAt > 0 && (!fresh || sample.at <= _manualResumeAt));
+    if (!paused) _manualResumeAt = 0;
+    BOOL preview = diagnosticsRequested && !paused && thermal == NSProcessInfoThermalStateNominal;
     NSTimeInterval interval = reduced ? 0.8 : 0.4;
     if (thermal != _lastThermal || !_lastPhase) {
         _lastThermal = thermal;
@@ -541,8 +568,6 @@ static NSArray<NSNumber *> *sp_ai_luminance(CVPixelBufferRef buffer) {
         }
     }
     if (thermal == NSProcessInfoThermalStateCritical) { [self fail:@"AI HEAT"]; return; }
-    SPAINavSample sample = sp_ai_game_sample();
-    BOOL fresh = sp_ai_sample_fresh(sample.at, now);
     if (fresh) [self observeWorld:sample];
 
     if (preview != _visualPreviewMode) {
@@ -550,7 +575,9 @@ static NSArray<NSNumber *> *sp_ai_luminance(CVPixelBufferRef buffer) {
         _visualPreviewMode = preview;
     }
     sp_p2p_enable(preview && _p2pAvailable && !_visualPreviewError);
-    if (self.autonomousTest) {
+    if (paused) {
+        [self showPhase:@"AI PAUSED"];
+    } else if (self.autonomousTest) {
         [self showPhase:[self advance:sample now:now reduced:reduced]];
     } else if (preview) {
         if (fresh) {
@@ -592,6 +619,8 @@ static NSArray<NSNumber *> *sp_ai_luminance(CVPixelBufferRef buffer) {
     _visualPreviewStatus = nil;
     _visualPreviewAt = 0;
     _lastPhase = nil;
+    _manualPaused = NO;
+    _manualResumeAt = 0;
     _lastWorldSummary = nil;
     _encounter = (SPAIEncounter){.combatEvidence.lastHP = 255};
     Class p2p = NSClassFromString(@"SPP2PBridge");

@@ -37,6 +37,14 @@ static inline void sp_ai_cancel_steering(SPAIEncounter *encounter) {
     encounter->pulse = (SPAINavPulse){0};
 }
 
+static inline void sp_ai_suspend_encounter(SPAIEncounter *encounter, SPAIEncounterAdapter adapter) {
+    adapter.release(adapter.context);
+    sp_ai_cancel_steering(encounter);
+    encounter->probeAfterMove = false;
+    encounter->combatEvidence = (SPAICombatEvidence){.lastHP = 255};
+    encounter->lastDamageAt = 0;
+}
+
 static inline void sp_ai_report_navigation(SPAIEncounter *encounter, SPAINavOutcome outcome,
     SPAINavSample sample, SPAIEncounterAdapter adapter) {
     sp_ai_nav_resolve(&encounter->navBudget, outcome);

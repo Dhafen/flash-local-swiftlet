@@ -285,7 +285,21 @@ static void test_forward_probe(void) {
     assert(!sp_ai_forward_probe_ready(sample, 13, 1, 10.1));
 }
 
+static void test_manual_takeover_preserves_encounter(void) {
+    SPAIEncounter planner = {.target = 9, .searchAttempts = 2, .lootAttempts = 1,
+        .combatEvidence.lastHP = 43, .pulse.deadline = 12, .nextAction = 11,
+        .lastDamageAt = 9.5, .navBudget.pulses = 4};
+    SPTestAdapter mock = {0};
+    SPAIEncounterAdapter adapter = {&mock, test_submit, test_release, test_outcome, NULL};
+    sp_ai_suspend_encounter(&planner, adapter);
+    assert(mock.releases == 1 && mock.submissions == 0);
+    assert(!planner.pulse.deadline && !planner.lastDamageAt && planner.combatEvidence.lastHP == 255);
+    assert(planner.target == 9 && planner.searchAttempts == 2 && planner.lootAttempts == 1);
+    assert(planner.navBudget.pulses == 4);
+}
+
 int main(void) {
+    test_manual_takeover_preserves_encounter();
     test_forward_probe();
     test_encounter_adapter();
     test_encounter_stops();

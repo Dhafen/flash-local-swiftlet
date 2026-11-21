@@ -294,15 +294,15 @@ static UIButton *sp_mobile_button(NSString *title, NSString *label, id owner, SE
     [_mobileRotation addGestureRecognizer:_mobileRotationPan];
     _mobileRotation.hidden = YES;
     _mobileAI = [SPGameAIController new];
-    _mobileAIButton = sp_mobile_button(@"AI OFF", @"Experimental local AI on/off", self, @selector(sp_mobile_ai_toggle:));
+    _mobileAIButton = sp_mobile_button(@"AI MODE", @"Local AI", self, @selector(sp_mobile_ai_toggle:));
     _mobileAIButton.titleLabel.font = [UIFont systemFontOfSize:10 weight:UIFontWeightSemibold];
     _mobileAIButton.titleLabel.adjustsFontSizeToFitWidth = YES;
     _mobileAIButton.titleLabel.minimumScaleFactor = 0.7;
     _mobileAIButton.layer.cornerRadius = 22;
     _mobileAIButton.hidden = YES;
     _mobileAIButton.menu = [self sp_mobile_ai_menu];
-    _mobileAIButton.showsMenuAsPrimaryAction = NO;
-    _mobileAIButton.accessibilityHint = @"Tap to start. Hold for AI options.";
+    _mobileAIButton.showsMenuAsPrimaryAction = YES;
+    _mobileAIButton.accessibilityHint = @"Choose an AI mode.";
     // The AI toggle is an explicit request to start or stop automation.
     // TouchDown on the other controls still yields to manual input.
     for (UIButton *button in @[_mobileRotation, _mobileUI, _mobileEdit, _mobileSpeed, _mobileReset, _softToggle])
@@ -359,10 +359,13 @@ static UIButton *sp_mobile_button(NSString *title, NSString *label, id owner, SE
         SPInputView *input = weakSelf;
         if (!input) return;
         [input->_mobileAIButton setTitle:status forState:UIControlStateNormal];
-        input->_mobileAIButton.menu = input->_mobileAI.active ? nil : [input sp_mobile_ai_menu];
+        input->_mobileAIButton.menu = input->_mobileAI.active && !input->_mobileAI.manualPaused ? nil : [input sp_mobile_ai_menu];
         input->_mobileAIButton.backgroundColor = input->_mobileAI.active
+            && !input->_mobileAI.manualPaused && input->_mobileAI.autonomousTest
             ? [UIColor colorWithRed:0.10 green:0.39 blue:0.22 alpha:0.92] : [UIColor colorWithWhite:0 alpha:0.55];
-        input->_mobileAIButton.accessibilityHint = input->_mobileAI.active
+        input->_mobileAIButton.accessibilityHint = input->_mobileAI.manualPaused
+            ? @"Tap to stop. Hold to resume."
+            : input->_mobileAI.active
             ? @"Tap to stop AI" : @"Tap to start. Hold for AI options.";
     };
     _mobileReset.hidden = _mobileSpeed.hidden = YES;
@@ -388,7 +391,6 @@ static UIButton *sp_mobile_button(NSString *title, NSString *label, id owner, SE
 - (void)sp_mobile_background:(NSNotification *)notification {
     if (notification.object == self.window.windowScene) {
         [_mobileAI stop];
-        _mobileAI.autonomousTest = NO;
         [self sp_mobile_cancel];
     }
 }
@@ -462,12 +464,32 @@ static UIButton *sp_mobile_button(NSString *title, NSString *label, id owner, SE
     NSArray<UIMenuElement *> *controls = @[
         escape, jump, showJump, rotation, showRotation, resetRotation, play, mode
     ];
-    controls = [controls arrayByAddingObjectsFromArray:[self sp_mobile_ai_menu].children];
+    controls = [controls arrayByAddingObjectsFromArray:[self sp_mobile_ai_options].children];
     return [UIMenu menuWithTitle:@"Game controls" children:[controls arrayByAddingObject:legacy]];
 }
 
 - (UIMenu *)sp_mobile_ai_menu {
+    if (!_mobileAI.manualPaused) return [self sp_mobile_ai_options];
     __weak SPInputView *weakSelf = self;
+    UIAction *resume = [UIAction actionWithTitle:@"Resume after manual control" image:nil identifier:nil handler:^(__kindof UIAction *action) {
+        SPInputView *input = weakSelf;
+        if (input) [input->_mobileAI resumeFromManualInput];
+    }];
+    return [UIMenu menuWithTitle:@"AI paused" children:@[resume]];
+}
+
+- (UIMenu *)sp_mobile_ai_options {
+    __weak SPInputView *weakSelf = self;
+    UIAction *observe = [UIAction actionWithTitle:@"Observe only" image:nil identifier:nil handler:^(__kindof UIAction *action) {
+        SPInputView *input = weakSelf;
+        if (!input) return;
+        [input->_mobileAI stop];
+        input->_mobileAI.autonomousTest = NO;
+        input->_mobileAI.observationSelected = YES;
+        input->_mobileAI.modelDiagnostics = NO;
+        input->_mobileAIButton.showsMenuAsPrimaryAction = NO;
+        [input->_mobileAIButton setTitle:@"OBS READY" forState:UIControlStateNormal];
+    }];
     UIAction *aiTest = [UIAction actionWithTitle:@"Test AI movement (forward)" image:nil identifier:nil handler:^(__kindof UIAction *action) {
         SPInputView *input = weakSelf;
         if (input) [input sp_mobile_ai_test:0];
@@ -486,6 +508,8 @@ static UIButton *sp_mobile_button(NSString *title, NSString *label, id owner, SE
         if (!input) return;
         [input->_mobileAI stop];
         input->_mobileAI.autonomousTest = !input->_mobileAI.autonomousTest;
+        input->_mobileAI.observationSelected = !input->_mobileAI.autonomousTest;
+        input->_mobileAIButton.showsMenuAsPrimaryAction = NO;
         [input->_mobileAIButton setTitle:input->_mobileAI.autonomousTest ? @"TEST READY" : @"OBS READY"
             forState:UIControlStateNormal];
     }];
@@ -494,10 +518,13 @@ static UIButton *sp_mobile_button(NSString *title, NSString *label, id owner, SE
         if (!input) return;
         [input->_mobileAI stop];
         input->_mobileAI.modelDiagnostics = !input->_mobileAI.modelDiagnostics;
+        input->_mobileAI.autonomousTest = NO;
+        input->_mobileAI.observationSelected = YES;
+        input->_mobileAIButton.showsMenuAsPrimaryAction = NO;
         [input->_mobileAIButton setTitle:input->_mobileAI.modelDiagnostics ? @"MODEL ON" : @"MODEL OFF"
             forState:UIControlStateNormal];
     }];
-    return [UIMenu menuWithTitle:@"AI options" children:@[aiTest, approachTest, aiTestMode, aiModels, aiTeach]];
+    return [UIMenu menuWithTitle:@"AI options" children:@[observe, aiTest, approachTest, aiTestMode, aiModels, aiTeach]];
 }
 
 - (void)sp_mobile_layout:(CGRect)game top:(CGFloat)top {
@@ -758,6 +785,7 @@ static void sp_mobile_ai_movement_key(unsigned char key, BOOL pressed) {
 }
 - (void)sp_mobile_ai_toggle:(UIButton *)button {
     if (_mobileAI.active) { [_mobileAI stop]; return; }
+    if (!_mobileAI.autonomousTest && !_mobileAI.observationSelected) return;
     if (!sp_client_window || _softField.isFirstResponder || _mobileEditing ||
         _mobileLeft || _mobileRight || _mobileInterface || _touches.count || sp_mouse_buttons) return;
     ++_mobileAIKeyGeneration;

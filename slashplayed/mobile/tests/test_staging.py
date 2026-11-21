@@ -86,9 +86,10 @@ assert '_mobileSpeed.hidden = _mobileReset.hidden = compact || !_mobileEditing;'
 assert '_mobileJump.hidden = compact && ![prefs boolForKey:@"sp_wolkara_show_jump"];' in event
 assert '_softToggle.menu = [self sp_mobile_compact_menu];' in event
 assert '_mobileAIButton.menu = [self sp_mobile_ai_menu];' in event
-assert '_mobileAIButton.showsMenuAsPrimaryAction = NO;' in event
-assert 'input->_mobileAIButton.menu = input->_mobileAI.active ? nil : [input sp_mobile_ai_menu];' in event
-ai_menu = event.split('- (UIMenu *)sp_mobile_ai_menu {', 1)[1].split('\n}', 1)[0]
+assert '_mobileAIButton.showsMenuAsPrimaryAction = YES;' in event
+assert 'input->_mobileAIButton.showsMenuAsPrimaryAction = NO;' in event
+assert 'input->_mobileAIButton.menu = input->_mobileAI.active && !input->_mobileAI.manualPaused ? nil : [input sp_mobile_ai_menu];' in event
+ai_menu = event.split('- (UIMenu *)sp_mobile_ai_options {', 1)[1].split('\n}', 1)[0]
 assert 'Test AI movement (forward)' in ai_menu
 assert 'Test approach (authorized realm, face selected target)' in ai_menu
 assert '[input sp_mobile_ai_test:3]' in ai_menu
@@ -256,10 +257,12 @@ assert 'sp_mobile_ai_yield:' in event and 'UIControlEventTouchDown' in event
 yield_method = event.split('- (void)sp_mobile_ai_yield:(id)sender {', 1)[1].split('\n}', 1)[0]
 assert '[self sp_mobile_ai_release_key]' in yield_method and '[_mobileAI yieldToManualInput]' in yield_method
 manual_takeover = event.split('- (void)yieldToManualInput {', 1)[1].split('\n}', 1)[0]
-assert 'if (self.autonomousTest || self.modelDiagnostics || _starting || _ownsCapture) [self stop]' in manual_takeover
+assert 'sp_ai_suspend_encounter(&_encounter, adapter)' in manual_takeover
+assert '_manualPaused = YES' in manual_takeover and '[self showPhase:@"AI PAUSED"]' in manual_takeover
 poll = event.split('- (void)pollDirect:(NSUInteger)run {', 1)[1].split('\n}', 1)[0]
 assert 'self.modelDiagnostics && !self.autonomousTest' in poll
-assert 'diagnosticsRequested && thermal == NSProcessInfoThermalStateNominal' in poll
+assert 'diagnosticsRequested && !paused && thermal == NSProcessInfoThermalStateNominal' in poll
+assert 'sample.at <= _manualResumeAt' in poll and 'if (paused)' in poll
 assert 'if (thermal == NSProcessInfoThermalStateCritical) { [self fail:@"AI HEAT"]; return; }' in poll
 assert 'interval = reduced ? 0.8 : 0.4' in poll
 assert 'sp_p2p_enable(preview &&' in poll and '[self previewP2P:run]' in poll.split('} else if (preview) {', 1)[1]
