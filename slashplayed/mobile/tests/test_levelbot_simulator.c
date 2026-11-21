@@ -11,6 +11,9 @@ typedef struct {
     bool selected, inCombat, looted, blockAllMovement, suppressDamage, rejectAttack;
     SPAIRoute route;
     int32_t routePositionQ4;
+    SPAIApproachModel model;
+    unsigned modelMoves;
+    bool lateralBlocked, lateralPulse;
 } GameSimulator;
 
 static bool submit(void *context, const char *action, SPAINavSample sample, double hold) {
@@ -20,9 +23,10 @@ static bool submit(void *context, const char *action, SPAINavSample sample, doub
         ++game->targetCommands;
         bool atSpawn = game->route.count ? game->routePositionQ4 >= 32 : game->now >= 2;
         game->selected = !game->looted && atSpawn;
-    } else if (!strcmp(action, "FORWARD")) {
+    } else if (!strcmp(action, "FORWARD") || !strcmp(action, "STRAFE_LEFT")) {
         assert((game->route.count || game->selected) && game->targetHP > 0 && hold == 0.60);
         ++game->movementCommands;
+        game->lateralPulse = !strcmp(action, "STRAFE_LEFT");
         game->movementEndsAt = game->now + hold;
     } else if (!strcmp(action, "ATTACK")) {
         assert(game->selected && game->targetHP > 0);
@@ -58,20 +62,26 @@ static void observe_navigation(void *context, SPAINavOutcome result, SPAINavSamp
     }
 }
 
+static void note(void *context, const char *message) {
+    GameSimulator *game = context;
+    if (!strcmp(message, "AI policy: measured approach model selected forward")) ++game->modelMoves;
+}
+
 static SPAIEncounterObservation sample(GameSimulator *game) {
     if (game->movementEndsAt && game->now >= game->movementEndsAt) {
         game->movementEndsAt = 0;
-        if (!game->blockAllMovement && game->movementCommands > 1) {
+        if (!game->blockAllMovement && !(game->lateralPulse && game->lateralBlocked) && game->movementCommands > 1) {
             if (game->selected) game->distance -= game->distance > 44 ? 28 : game->distance - 16;
             else game->routePositionQ4 += 16;
             ++game->positionCounter;
         }
     }
     uint8_t flags = 1, meta = 129, corpse = 0;
+    uint8_t column = game->lateralBlocked && game->distance > 16 ? 6 : 8;
     if (game->selected) {
         if (game->targetHP) {
             flags |= 4 | 8;
-            meta = 193;
+            meta = 129 + 8 * column;
         } else {
             flags |= 4 | 16 | 128;
             meta = 133;
@@ -82,18 +92,18 @@ static SPAIEncounterObservation sample(GameSimulator *game) {
     SPAINavSample nav = {game->now, {SP_MOTION_POSITION, game->positionCounter, game->looted},
         {game->selected ? 1 : 0, 1, SP_AI_TAB_BOUND | SP_AI_ROTATION_BOUND,
             game->selected ? game->distance : SP_AI_DISTANCE_UNKNOWN},
-        game->selected && game->targetHP ? 8 : 0};
+        game->selected && game->targetHP ? column : 0};
     SPAIWorldPose pose = {.map = 0, .secondQ4 = game->routePositionQ4, .heading = 64, .epoch = 1,
         .valid = game->route.count > 0, .headingKnown = true, .observedAt = game->now};
-    return (SPAIEncounterObservation){nav, flags, game->playerHP, game->targetHP, meta, 1, corpse,
+    return (SPAIEncounterObservation){nav, flags, game->playerHP, game->targetHP, meta, 1 | 4, corpse,
         sp_ai_hp_known(game->playerHP) ? SP_HEALTH_PUBLIC : SP_HEALTH_RESTRICTED, pose,
         {game->hits % 4, game->selected && game->hits > 0}};
 }
 
 static void run(GameSimulator *game, const char *finish, bool requireLoot) {
-    SPAIEncounter planner = {.combatEvidence.lastHP = 255, .route = game->route};
+    SPAIEncounter planner = {.combatEvidence.lastHP = 255, .route = game->route, .approachModel = game->model};
     SPAIApproachExamples examples = {0};
-    SPAIEncounterAdapter adapter = {game, submit, release, observe_navigation, NULL};
+    SPAIEncounterAdapter adapter = {game, submit, release, observe_navigation, note};
     bool lootConfirmed = false;
     for (game->now = 1; game->now < 35; game->now += 0.5) {
         SPAIEncounterObservation observed = sample(game);
@@ -147,6 +157,19 @@ int main(void) {
     run(&waypointWall, "ROUTE BLOCK", false);
     assert(waypointWall.movementCommands == 2 && waypointWall.routePositionQ4 == 0 && !waypointWall.selected);
 
+    GameSimulator rules = {.distance = 44, .playerHP = 100, .targetHP = 100, .lateralBlocked = true};
+    GameSimulator learned = rules;
+    SPAINavSample measured = {1, {SP_MOTION_POSITION, 1, false}, {1, 1, 0, 44}, 6};
+    for (unsigned i = 0; i < 6; ++i) {
+        assert(sp_ai_train_approach(&learned.model, measured, SP_MOVE_LEFT, SP_NAV_STALLED));
+        assert(sp_ai_train_approach(&learned.model, measured, SP_MOVE_FORWARD, SP_NAV_CLOSER));
+    }
+    run(&rules, "NAV BLOCK", false);
+    run(&learned, "SEARCH", true);
+    assert(rules.modelMoves == 0 && rules.stalls == 2 && rules.hits == 0);
+    assert(learned.modelMoves >= 1 && learned.hits == 2 && learned.lootCommands == 1);
+
     puts("Production planner simulator passed farming, wall, no damage, rejected attack and protected health");
     puts("Recorded route simulator passed waypoint, resumed mob search, farm and route blockage");
+    puts("Controlled comparison: rules stopped at the lateral obstruction, trained policy completed farming");
 }

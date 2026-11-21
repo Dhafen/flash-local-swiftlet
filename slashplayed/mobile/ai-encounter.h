@@ -30,6 +30,8 @@ typedef struct {
     SPAINavBudget navBudget;
     SPAICombatEvidence combatEvidence;
     bool recovering, probeAfterMove;
+    bool approachModelDirty, pulseTrainingEligible;
+    SPAIApproachModel approachModel;
     SPAIRoute route;
     double routeDeadline, routeProgress, routeStartedAt;
     unsigned routeFailures, routeMoves;
@@ -44,6 +46,7 @@ static inline void sp_ai_cancel_steering(SPAIEncounter *encounter) {
     encounter->steering = (SPAISteering){0};
     encounter->pulse = (SPAINavPulse){0};
     encounter->lastPulseSample = (SPAINavSample){0};
+    encounter->pulseTrainingEligible = false;
     encounter->routeDeadline = 0;
 }
 
@@ -58,6 +61,9 @@ static inline void sp_ai_suspend_encounter(SPAIEncounter *encounter, SPAIEncount
 static inline void sp_ai_report_navigation(SPAIEncounter *encounter, SPAINavOutcome outcome,
     SPAINavSample sample, SPAIEncounterAdapter adapter) {
     sp_ai_nav_resolve(&encounter->navBudget, outcome);
+    if (encounter->pulseTrainingEligible &&
+        sp_ai_train_approach(&encounter->approachModel, encounter->pulse.before, encounter->pulse.move, outcome))
+        encounter->approachModelDirty = true;
     if (adapter.outcome) adapter.outcome(adapter.context, outcome, encounter->pulse.before, sample);
 }
 
@@ -175,6 +181,7 @@ static inline const char *sp_ai_advance(SPAIEncounter *encounter, SPAIEncounterO
         encounter->probeAfterMove = encounter->pulse.move == SP_MOVE_FORWARD && outcome == SP_NAV_DISPLACED;
         encounter->pulse = (SPAINavPulse){0};
         encounter->lastPulseSample = (SPAINavSample){0};
+        encounter->pulseTrainingEligible = false;
         encounter->nextAction = now + 0.4;
     }
 
@@ -227,9 +234,12 @@ static inline const char *sp_ai_advance(SPAIEncounter *encounter, SPAIEncounterO
         sp_ai_note(adapter, "AI combat: matched local damage on selected target");
     }
     bool recentDamage = encounter->lastDamageAt > 0 && now - encounter->lastDamageAt < 3.0;
-    SPAIMove move = sp_ai_visible_approach(meta, 2, false, false);
-    if (sample.evidence.distance != SP_AI_DISTANCE_UNKNOWN)
-        move = sp_ai_apply_approach(examples, move, combat);
+    SPAIMove ruleMove = sp_ai_visible_approach(meta, 2, false, false);
+    SPAIMove move = sp_ai_predict_approach(&encounter->approachModel, sample, ruleMove, combat);
+    // Demonstrations can opt out of model changes where the player taught lateral movement.
+    unsigned side = ruleMove == SP_MOVE_RIGHT;
+    if (move != ruleMove && examples->lateral[side] > examples->forward[side] && examples->lateral[side] >= 4)
+        move = ruleMove;
     if (encounter->steeringPosition != sample.evidence.position) {
         encounter->steering = (SPAISteering){0};
         encounter->steeringPosition = sample.evidence.position;
@@ -253,10 +263,13 @@ static inline const char *sp_ai_advance(SPAIEncounter *encounter, SPAIEncounterO
             encounter->nextAction = now + 0.8;
             return "NAV INPUT";
         }
+        sp_ai_note(adapter, move == ruleMove ? "AI policy: rules selected approach" :
+            "AI policy: measured approach model selected forward");
         sp_ai_nav_accept(&encounter->navBudget, move);
         encounter->steering = (SPAISteering){0};
         encounter->lastMoveAt = now;
         encounter->pulse = (SPAINavPulse){sample, move, now + hold, now + 1.8};
+        encounter->pulseTrainingEligible = !combat;
         return approach;
     }
 

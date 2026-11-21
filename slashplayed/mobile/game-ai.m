@@ -46,6 +46,23 @@ static const char *sp_ai_nav_outcome_name(SPAINavOutcome outcome) {
         "displacement-only", "target-closer", "plate-centered", "no-target-progress"};
     return names[outcome];
 }
+
+static NSString *const sp_ai_approach_model_key = @"sp_wolkara_approach_feedback_v1";
+static SPAIApproachModel sp_ai_load_approach_model(void) {
+    SPAIApproachModel model = {0};
+    NSData *data = [NSUserDefaults.standardUserDefaults dataForKey:sp_ai_approach_model_key];
+    if (data.length != sizeof model) return model;
+    [data getBytes:&model length:sizeof model];
+    for (unsigned side = 0; side < 2; ++side)
+        for (unsigned move = 0; move < 2; ++move)
+            if (model.trials[side][move] > 100 || model.progress[side][move] > model.trials[side][move])
+                return (SPAIApproachModel){0};
+    return model;
+}
+static void sp_ai_save_approach_model(SPAIApproachModel model) {
+    NSData *data = [NSData dataWithBytes:&model length:sizeof model];
+    [NSUserDefaults.standardUserDefaults setObject:data forKey:sp_ai_approach_model_key];
+}
 static BOOL sp_ai_heartbeat_seen;
 static BOOL sp_ai_health_known(uint8_t value) { return sp_ai_hp_known(value); }
 static SPAIDecision sp_ai_current_decision(NSTimeInterval now) {
@@ -148,6 +165,7 @@ static void sp_ai_heartbeat(uint8_t seq, const uint8_t *data, size_t length, NST
 - (void)resumeFromManualInput;
 - (void)recordRouteMark;
 - (void)clearGrindRoute;
+- (void)recordManualProbe:(SPAINavPulse)pulse outcome:(SPAINavOutcome)outcome;
 - (void)invalidateDecision;
 - (void)toggleTeaching;
 - (void)recordManualSteering:(CGPoint)delta;
@@ -250,6 +268,12 @@ static void sp_ai_note_event(void *context, const char *message) {
     _grindRoute = (SPAIRoute){0};
     _recordedLegStart = (SPAIWorldPose){0};
     if (self.status) self.status(@"ROUTE EMPTY");
+}
+
+- (void)recordManualProbe:(SPAINavPulse)pulse outcome:(SPAINavOutcome)outcome {
+    if (_active || (sp_ai_game_flags & (2|32|64))) return;
+    SPAIApproachModel model = sp_ai_load_approach_model();
+    if (sp_ai_train_approach(&model, pulse.before, pulse.move, outcome)) sp_ai_save_approach_model(model);
 }
 
 - (void)toggleTeaching {
@@ -566,6 +590,10 @@ static NSArray<NSNumber *> *sp_ai_luminance(CVPixelBufferRef buffer) {
 }
 
 - (void)recordNavigation:(SPAINavOutcome)outcome before:(SPAINavSample)before after:(SPAINavSample)after {
+    if (_encounter.approachModelDirty) {
+        sp_ai_save_approach_model(_encounter.approachModel);
+        _encounter.approachModelDirty = NO;
+    }
     const char *name = sp_ai_nav_outcome_name(outcome);
     sp_stub_log([[NSString stringWithFormat:
         @"AI navigation: %s target %u/%u position %u/%u counter %u/%u column %u/%u distance-q4 %u/%u",
@@ -675,6 +703,7 @@ static NSArray<NSNumber *> *sp_ai_luminance(CVPixelBufferRef buffer) {
     _lastWorldSummary = nil;
     _encounter = (SPAIEncounter){.combatEvidence.lastHP = 255};
     _encounter.route = _grindRoute;
+    _encounter.approachModel = sp_ai_load_approach_model();
     Class p2p = NSClassFromString(@"SPP2PBridge");
     SEL available = NSSelectorFromString(@"available");
     _p2pAvailable = [p2p respondsToSelector:available] && ((BOOL (*)(id,SEL))objc_msgSend)(p2p,available);

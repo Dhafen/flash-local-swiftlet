@@ -739,6 +739,7 @@ static void sp_mobile_ai_movement_key(unsigned char key, BOOL pressed) {
     [_mobileAIButton setTitle:status forState:UIControlStateNormal];
     sp_stub_log([[NSString stringWithFormat:@"AI movement diagnostic: %s distance-q4=%u->%u",
         sp_ai_nav_outcome_name(outcome), (unsigned)pulse.before.evidence.distance, (unsigned)after.evidence.distance] UTF8String]);
+    [_mobileAI recordManualProbe:pulse outcome:outcome];
     if (sp_ai_forward_probe_repeat(outcome, remaining)) {
         [self sp_mobile_ai_release_key];
         [self sp_mobile_ai_schedule_test:remaining - 1 after:after];

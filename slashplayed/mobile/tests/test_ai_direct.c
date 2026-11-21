@@ -302,7 +302,24 @@ static void test_manual_takeover_preserves_encounter(void) {
     assert(planner.navBudget.pulses == 4);
 }
 
+static void test_approach_model_requires_measured_benefit(void) {
+    SPAIApproachModel model = {0};
+    SPAINavSample sample = {1, {SP_MOTION_POSITION, 2, false}, {9, 7, 0, 60}, 6};
+    assert(sp_ai_predict_approach(&model, sample, SP_MOVE_LEFT, false) == SP_MOVE_LEFT);
+    for (int i = 0; i < 6; ++i) {
+        assert(sp_ai_train_approach(&model, sample, SP_MOVE_FORWARD, SP_NAV_CLOSER));
+        assert(sp_ai_train_approach(&model, sample, SP_MOVE_LEFT, SP_NAV_STALLED));
+    }
+    assert(sp_ai_predict_approach(&model, sample, SP_MOVE_LEFT, false) == SP_MOVE_FORWARD);
+    assert(sp_ai_predict_approach(&model, sample, SP_MOVE_LEFT, true) == SP_MOVE_LEFT);
+    assert(!sp_ai_train_approach(&model, sample, SP_MOVE_FORWARD, SP_NAV_NO_SAMPLE));
+    sample.evidence.distance = SP_AI_DISTANCE_UNKNOWN;
+    assert(sp_ai_predict_approach(&model, sample, SP_MOVE_LEFT, false) == SP_MOVE_LEFT);
+    assert(!sp_ai_train_approach(&model, sample, SP_MOVE_FORWARD, SP_NAV_CLOSER));
+}
+
 int main(void) {
+    test_approach_model_requires_measured_benefit();
     uint8_t posePacket[] = {65, 80, 1, 3, 0, 0, 0, 0, 255, 255, 255, 251, 0, 0, 0, 8, 64, 7};
     SPAIWorldPose pose = sp_ai_world_pose(posePacket, sizeof posePacket);
     assert(pose.valid && pose.headingKnown && pose.map == 0 && pose.firstQ4 == -5 && pose.secondQ4 == 8);
@@ -371,17 +388,12 @@ int main(void) {
     assert(sp_ai_visible_approach(129 + 8 * 8, 2, true, true) == SP_MOVE_NONE);
     SPAIApproachExamples examples = {0};
     for (unsigned i = 0; i < 3; ++i) sp_ai_learn_approach(&examples, SP_MOVE_LEFT, SP_MOVE_FORWARD);
-    assert(sp_ai_apply_approach(&examples, SP_MOVE_LEFT, false) == SP_MOVE_LEFT);
     sp_ai_learn_approach(&examples, SP_MOVE_LEFT, SP_MOVE_FORWARD);
-    assert(sp_ai_apply_approach(&examples, SP_MOVE_LEFT, false) == SP_MOVE_FORWARD);
-    assert(sp_ai_apply_approach(&examples, SP_MOVE_RIGHT, false) == SP_MOVE_RIGHT);
-    assert(sp_ai_apply_approach(&examples, SP_MOVE_LEFT, true) == SP_MOVE_LEFT);
-    assert(sp_ai_apply_approach(&examples, SP_MOVE_NONE, false) == SP_MOVE_NONE);
     sp_ai_learn_approach(&examples, SP_MOVE_LEFT, SP_MOVE_RIGHT);
     assert(examples.lateral[0] == 0);
     sp_ai_learn_approach(&examples, SP_MOVE_LEFT, SP_MOVE_LEFT);
     sp_ai_learn_approach(&examples, SP_MOVE_LEFT, SP_MOVE_LEFT);
-    assert(sp_ai_apply_approach(&examples, SP_MOVE_LEFT, false) == SP_MOVE_LEFT);
+    assert(examples.forward[0] == 4 && examples.lateral[0] == 2);
     const uint8_t packet[] = {'A', 'I', 1, 100, 0, 128, 'K', 1|8|16};
     assert(sp_ai_movement_bindings(packet, 6) == 0);
     assert(sp_ai_movement_bindings(packet, 8) == (1|8|16));

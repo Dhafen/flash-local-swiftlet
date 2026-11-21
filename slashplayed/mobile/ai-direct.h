@@ -312,11 +312,46 @@ static inline void sp_ai_learn_approach(SPAIApproachExamples *examples, SPAIMove
     if (*count < 100) ++*count;
 }
 
-static inline SPAIMove sp_ai_apply_approach(const SPAIApproachExamples *examples, SPAIMove side, bool combat) {
-    if (combat || (side != SP_MOVE_LEFT && side != SP_MOVE_RIGHT)) return side;
-    unsigned index = side == SP_MOVE_RIGHT;
-    return examples->forward[index] >= 4 && examples->forward[index] >= 2 * examples->lateral[index] + 2 ?
-        SP_MOVE_FORWARD : side;
+// Two contexts, two candidate moves. Counts represent only measured outcomes.
+typedef struct {
+    uint16_t trials[2][2], progress[2][2];
+} SPAIApproachModel;
+
+static inline bool sp_ai_approach_model_context(SPAINavSample sample) {
+    return sample.evidence.target && sample.evidence.position && sample.motion.source == SP_MOTION_POSITION &&
+           sample.evidence.distance >= 32 && sample.evidence.distance <= 200 &&
+           (sample.column == 6 || sample.column == 10);
+}
+
+static inline bool sp_ai_train_approach(SPAIApproachModel *model, SPAINavSample before,
+    SPAIMove move, SPAINavOutcome outcome) {
+    if (!sp_ai_approach_model_context(before)) return false;
+    bool progress = outcome == SP_NAV_CLOSER || outcome == SP_NAV_ALIGNED;
+    if (!progress && outcome != SP_NAV_STALLED && outcome != SP_NAV_NO_PROGRESS) return false;
+    unsigned side = before.column == 10;
+    if (move != SP_MOVE_FORWARD && move != (side ? SP_MOVE_RIGHT : SP_MOVE_LEFT)) return false;
+    unsigned choice = move != SP_MOVE_FORWARD;
+    uint16_t *trials = &model->trials[side][choice], *wins = &model->progress[side][choice];
+    if (*trials >= 100) {
+        *trials /= 2;
+        *wins /= 2;
+    }
+    ++*trials;
+    if (progress) ++*wins;
+    return true;
+}
+
+static inline SPAIMove sp_ai_predict_approach(const SPAIApproachModel *model, SPAINavSample sample,
+    SPAIMove proposed, bool combat) {
+    if (combat || !sp_ai_approach_model_context(sample)) return proposed;
+    unsigned side = sample.column == 10;
+    if (proposed != (side ? SP_MOVE_RIGHT : SP_MOVE_LEFT)) return proposed;
+    unsigned forward = model->trials[side][0], lateral = model->trials[side][1];
+    if (forward < 6 || lateral < 6) return proposed;
+    unsigned forwardWeight = (model->progress[side][0] + 1) * (lateral + 2);
+    unsigned lateralWeight = (model->progress[side][1] + 1) * (forward + 2);
+    return 4 * forwardWeight >= 4 * lateralWeight + (forward + 2) * (lateral + 2)
+        ? SP_MOVE_FORWARD : proposed;
 }
 
 #endif
