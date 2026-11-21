@@ -66,6 +66,14 @@ static inline uint8_t sp_ai_corpse_evidence(const uint8_t *packet, unsigned leng
     return packet[11] & 62;
 }
 
+typedef struct { uint8_t count; bool known; } SPAIOwnHit;
+
+static inline SPAIOwnHit sp_ai_own_hit(const uint8_t *packet, unsigned length) {
+    if (length < 18 || packet[8] != 'F' || packet[12] != 'N' || !packet[13] ||
+        (packet[17] & 192) != 192) return (SPAIOwnHit){0};
+    return (SPAIOwnHit){packet[11] >> 6, true};
+}
+
 static inline bool sp_ai_farm_progress(SPAIFarmFeedback start, SPAIFarmFeedback current) {
     return start.source == SP_MOTION_POSITION && current.source == SP_MOTION_POSITION && current.counter != start.counter;
 }
@@ -238,6 +246,7 @@ typedef struct {
     uint8_t lastHP, probeHP;
     double observedAt, probedAt;
     bool measured;
+    SPAIOwnHit lastOwnHit;
 } SPAICombatEvidence;
 
 static inline void sp_ai_accept_probe(SPAICombatEvidence *combat, double at) {
@@ -256,8 +265,16 @@ static inline bool sp_ai_observe_damage(SPAICombatEvidence *combat, uint8_t hp, 
         if (!sp_ai_hp_known(hp)) combat->probeHP = 255;
         combat->measured = sp_ai_hp_known(combat->probeHP) && sp_ai_hp_known(hp);
     }
-    if (decreased) combat->attacks = 0;
     return decreased;
+}
+
+static inline bool sp_ai_observe_own_damage(SPAICombatEvidence *combat, SPAIOwnHit hit, double at) {
+    if (!hit.known) return false;
+    bool changed = !combat->lastOwnHit.known || hit.count != combat->lastOwnHit.count;
+    combat->lastOwnHit = hit;
+    if (!changed || !combat->attacks || at <= combat->probedAt) return false;
+    combat->attacks = 0;
+    return true;
 }
 
 static inline bool sp_ai_combat_budget_open(SPAICombatEvidence combat) {

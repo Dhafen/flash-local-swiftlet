@@ -22,6 +22,7 @@ Verifierat den 21 november 2026 på iPhone 17 Pro Max med iOS 27.3 och device-ki
 3. För farmingmilstolpen ska samma mål ge en faktisk spelträff med egen källa, död, matchad loot och inventarieändring, följt av SEARCH. Spara logg och tidsstämplar. F12, mål-HP och indikatorer ensamma räcker inte för bekräftelse av egen träff.
 4. Prova utebliven skada, fel bindning, inget mål och stängt lootfönster utan loot. Notera status, väntetid och antal accepterade försök.
 5. Kontrollera `kill=player-or-pet` efter ett manuellt dödsfall där rätt mål är valt. Den signalen bygger på offentlig angripar- och målidentitet i `PARTY_KILL`. `interact-range=out` ska ge `LOOT RANGE` och spara försöksbudgeten tills målet går att nå. `loot=available` anger möjlighet att interagera och den senare matchade slotkvittensen anger att en slot tömdes.
+6. Kör en manuell F12-attack och sedan motsvarande agentattack i den tillåtna testmiljön. Jämför `AI input: Tactara F12 rotation`, `AI combat: selected target health decreased` och `AI combat: matched local damage on selected target`. Den sista signalen förutsätter att klienten exponerar ett läsbart publikt stridsevent med den egna spelaren som källa. Kontrollera separat att en annan spelares attack och en otillgänglig stridslogg inte kvitterar agentens attack. Forever-stödet för denna källa återstår att verifiera.
 
 ## Loggar och resursprov
 

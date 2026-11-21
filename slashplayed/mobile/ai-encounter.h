@@ -9,6 +9,7 @@ typedef struct {
     uint8_t flags, hp, targetHP, meta, movementKeys, corpseEvidence;
     SPAIHealthStatus playerHealth;
     SPAIWorldPose pose;
+    SPAIOwnHit ownHit;
 } SPAIEncounterObservation;
 
 typedef struct {
@@ -219,8 +220,11 @@ static inline const char *sp_ai_advance(SPAIEncounter *encounter, SPAIEncounterO
     if (!target) return "TARGET UNKNOWN";
 
     if (sp_ai_observe_damage(&encounter->combatEvidence, observation.targetHP, sample.at)) {
-        encounter->lastDamageAt = now;
         sp_ai_note(adapter, "AI combat: selected target health decreased");
+    }
+    if (sp_ai_observe_own_damage(&encounter->combatEvidence, observation.ownHit, sample.at)) {
+        encounter->lastDamageAt = now;
+        sp_ai_note(adapter, "AI combat: matched local damage on selected target");
     }
     bool recentDamage = encounter->lastDamageAt > 0 && now - encounter->lastDamageAt < 3.0;
     SPAIMove move = sp_ai_visible_approach(meta, 2, false, false);

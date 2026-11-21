@@ -86,7 +86,8 @@ static SPAIEncounterObservation sample(GameSimulator *game) {
     SPAIWorldPose pose = {.map = 0, .secondQ4 = game->routePositionQ4, .heading = 64, .epoch = 1,
         .valid = game->route.count > 0, .headingKnown = true, .observedAt = game->now};
     return (SPAIEncounterObservation){nav, flags, game->playerHP, game->targetHP, meta, 1, corpse,
-        sp_ai_hp_known(game->playerHP) ? SP_HEALTH_PUBLIC : SP_HEALTH_RESTRICTED, pose};
+        sp_ai_hp_known(game->playerHP) ? SP_HEALTH_PUBLIC : SP_HEALTH_RESTRICTED, pose,
+        {game->hits % 4, game->selected && game->hits > 0}};
 }
 
 static void run(GameSimulator *game, const char *finish, bool requireLoot) {

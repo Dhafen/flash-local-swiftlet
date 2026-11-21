@@ -103,6 +103,7 @@ local function spAIIdentity(unit)
 end
 
 local spAICombatTarget, spAILootedTarget
+local spAIHitTarget, spAIHitCount = nil, 0
 local spAIPlayerKill, spAIPlayerKillAt
 local spAIPreviousTarget, spAITargetEpoch = nil, 0
 local spAILootSlots = {}
@@ -134,11 +135,32 @@ end
 
 -- Track only a slot whose entire reported source is the selected corpse.
 -- A closed loot window by itself carries no success signal.
+local function spAICombatLog(_, kind, _, source, _, _, _, destination, _, _, _, ...)
+    if not spAIReadable(kind) or not spAIReadable(source) or not spAIReadable(destination)
+        or type(kind) ~= "string" or type(source) ~= "string" or type(destination) ~= "string" then return end
+    local amount
+    if kind == "SWING_DAMAGE" then amount = ...
+    elseif kind == "SPELL_DAMAGE" or kind == "RANGE_DAMAGE" or kind == "SPELL_PERIODIC_DAMAGE" then
+        amount = select(4, ...)
+    else return end
+    if not spAIReadable(amount) or type(amount) ~= "number" or not (amount > 0 and amount < math.huge) then return end
+    if source ~= spAIIdentity("player") or destination ~= spAIIdentity("target") then return end
+    if spAIHitTarget ~= destination then spAIHitCount = 0 end
+    spAIHitTarget, spAIHitCount = destination, (spAIHitCount + 1) % 4
+end
+
 local function spAILootEvent(_, event, first, second)
     if event == "PLAYER_TARGET_CHANGED" then
         spAICombatTarget, spAIPlayerKill, spAIPlayerKillAt = nil, nil, nil
         spAIPreviousTarget = nil
+        spAIHitTarget, spAIHitCount = nil, 0
         spAILootSlots = {}
+        return
+    end
+    if event == "COMBAT_LOG_EVENT_UNFILTERED" then
+        if type(CombatLogGetCurrentEventInfo) == "function" then
+            pcall(function() spAICombatLog(CombatLogGetCurrentEventInfo()) end)
+        end
         return
     end
     if event == "PARTY_KILL" then
@@ -179,7 +201,8 @@ end
 
 if type(CreateFrame) == "function" then
     local frame = CreateFrame("Frame")
-    for _, event in ipairs({"LOOT_OPENED", "LOOT_SLOT_CLEARED", "LOOT_CLOSED", "PARTY_KILL", "PLAYER_TARGET_CHANGED"}) do
+    for _, event in ipairs({"LOOT_OPENED", "LOOT_SLOT_CLEARED", "LOOT_CLOSED", "PARTY_KILL",
+        "PLAYER_TARGET_CHANGED", "COMBAT_LOG_EVENT_UNFILTERED"}) do
         pcall(frame.RegisterEvent, frame, event)
     end
     frame:SetScript("OnEvent", function(...) pcall(spAILootEvent, ...) end)
@@ -351,6 +374,10 @@ local function spAIState()
                 + 4 * spAICorpseQuery(UnitHasLootInteraction) + 16 * spAICorpseQuery(UnitIsInInteractRange)
         end
         local healthStatus = 64 + spAIHealthStatus(hp, hpReason) * 4 + targetHealth * 16
+        if foeID and spAIHitTarget == foeID then
+            corpseEvidence = corpseEvidence + 64 * spAIHitCount
+            healthStatus = healthStatus + 128
+        end
         return string.char(65, 73, flags, hp or 255, targetHP, meta, 75, spAIMovementBindings(),
             70, motionSource, motionCounter, corpseEvidence, 78, foeID and spAITargetEpoch or 0, positionEpoch,
             math.floor(distance / 256), distance % 256, bindings + healthStatus), worldPose

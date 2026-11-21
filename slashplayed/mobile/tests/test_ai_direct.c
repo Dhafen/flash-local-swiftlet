@@ -68,6 +68,7 @@ static void test_encounter_adapter(void) {
     observation.sample.at = 5.5;
     observation.flags = 45;
     observation.targetHP = 50;
+    observation.ownHit = (SPAIOwnHit){1, true};
     assert(strcmp(sp_ai_advance(&planner, observation, 5.5, false, &examples, adapter), "IN COMBAT") == 0);
     assert(strcmp(mock.lastAction, "ATTACK") == 0);
     observation.flags = 149;
@@ -225,6 +226,8 @@ static void test_combat_feedback(void) {
     assert(!sp_ai_combat_budget_open(combat));
     assert(!sp_ai_observe_damage(&combat, 89, 8));
     assert(sp_ai_observe_damage(&combat, 89, 9));
+    assert(!sp_ai_combat_budget_open(combat));
+    assert(sp_ai_observe_own_damage(&combat, (SPAIOwnHit){1, true}, 9));
     assert(sp_ai_combat_budget_open(combat));
 }
 
