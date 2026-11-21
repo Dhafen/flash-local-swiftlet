@@ -8,6 +8,8 @@
 
 ## Manuell diagnostik före autonomi
 
+Verifierat den 21 november 2026 på iPhone 17 Pro Max med iOS 27.3 och device-kitet från `d692e5b`. Forever startade och publicerade en fristående SPHover-heartbeat. Det manuella provet loggade verifierad W-bindning, adapteracceptans och sedan `displacement-only`. Skärmen visade `TEST MOVED`. Prov mot hinder, närmande till valt mål och hela farmingcykeln återstår.
+
 1. Ställ spelaren på plan, fri mark där testet är tillåtet. Vänta stilla tills SPHover-telemetri är färsk. Låt modeller vara avstängda.
 2. Håll inne tangentbordsknappen och välj **Test AI movement (forward)**. Anteckna först TEST ACCEPT eller TEST INPUT och sedan TEST MOVED, TEST STALL eller TEST NO DATA. Bekräfta med synlig position före och efter pulsen.
 3. Upprepa mot ett ofarligt hinder. TEST STALL förutsätter en fungerande positionskälla och oförändrad räknare. Prova också att avbryta med touch och att bakgrundslägga appen under pulsen. Lyft alla manuella kontroller och kontrollera att ingen kvarhängande rörelse finns.
@@ -21,6 +23,8 @@
 
 ## Loggar och resursprov
 
-Hämta spconsole.log från Slashplayeds dokumentmapp under **På min iPhone** via Filer eller Apple Devices fildelning. Hämta roterad logg från samma mapp om appen startats om. Kopiera gärna raderna med spelfel, **AI telemetry**, **AI phase**, **AI action**, **AI navigation**, **AI input**, **AI combat**, **AI loot**, **AI thermal**, **AI capture** och **AI Pixel2Play**. Loggraden distance-q4 mäts i kvartsenheter och värdet 65535 anger okänt. Ta även med eventuell Lua-feltext och det spelögonblick som raderna avser.
+Hämta spconsole.log från Slashplayeds dokumentmapp under **På min iPhone** via Filer eller Apple Devices fildelning. Hämta roterad logg från samma mapp om appen startats om. Kopiera relevanta rader med **AI telemetry**, **AI health evidence**, **AI world**, **AI phase**, **AI action**, **AI navigation**, **AI input**, **AI combat**, **AI loot**, **AI thermal**, **AI capture** och **AI Pixel2Play**. Loggraden distance-q4 mäts i kvartsenheter och värdet 65535 anger okänt. Ta även med eventuell Lua-feltext och det spelögonblick som raderna avser.
+
+För ett observationsprov, starta AI utan att slå på autonomt testläge. Stå först utan mål och välj sedan en synlig NPC manuellt. Jämför hur `AI health evidence` skiljer `public`, `restricted`, `unavailable` och `absent`. `AI world` visar om målets identitet, nameplate och avstånd kunde läsas. Skyddad spelarhälsa ger `HP SECRET` i det autonoma testläget och blockerar input.
 
 Kör jämförbara pass med samma kameravinkel, upplösning/FPS-gräns, laddstatus och starttemperatur. Börja med normal WoW-rendering och AI av. Jämför observation utan modeller, regler i tillåtet testläge och observation med modelldiagnostik. Anteckna FPS, sessionstid och temperaturstatus. Vid tillgång till Xcode Instruments, mät renderings- och CPU-tid, Core ML, GPU, minne och energi per pass. AI capture rapporterar readbackens väntan och CPU-resize och AI Pixel2Play rapporterar prediktionstid. SERIOUS ska pausa modelldiagnostik samt glesa regelpoll och rörelse. Vid CRITICAL visas AI HEAT och sessionen stoppas. Avsluta värmeprovet om telefonen signalerar överhettning.

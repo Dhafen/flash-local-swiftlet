@@ -19,6 +19,7 @@ cc -std=c11 -Wall -Wextra -Werror slashplayed/mobile/tests/test_touch_zone.c -o 
 | Instabil styrning | C provar två misslyckade utfall, upprepad sidoreversering med framåtrörelse mellan bytena och tolv-pulsgräns. |
 | Bindningar | Lua testar rätt W, Q/A, E/D, Tab, F12 och interact. C kontrollerar gamla packets och verifierad rörelsetangent. |
 | Combat och loot | C verifierar att accepterad F12 utan HP-minskning når försöksgränsen. Lua kräver en matchad loot-slot. Samma test provar fel källa, rätt källa och fönster som öppnas och stängs utan kvittens. |
+| Encounter med simulerad spelstatus | C använder produktionsfunktionerna för målsökning, attackprob, närmande, minskad mål-HP, strid som avslutats före loot, matchad loot och återhämtning med 35/50-procents hysteresis. Testet täcker även saknad hälsa mitt i återhämtning. |
 | Värme och livscykel | Staging verifierar kopplingen i genererad kod för stopp, opt-in-reset och långsammare poll. Faktiska UIKit-händelser och resursmätningar finns i enhetsprotokollet. |
 
 Den första regressionen gick röd på e2683f0 när två speed-samplingar med olika räknare gav positivt rörelseutfall. Korrigeringen kräver positionskälla vid båda observationerna.

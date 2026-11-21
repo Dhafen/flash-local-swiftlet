@@ -296,6 +296,8 @@ static UIButton *sp_mobile_button(NSString *title, NSString *label, id owner, SE
     _mobileAI = [SPGameAIController new];
     _mobileAIButton = sp_mobile_button(@"AI OFF", @"Experimental local AI on/off", self, @selector(sp_mobile_ai_toggle:));
     _mobileAIButton.titleLabel.font = [UIFont systemFontOfSize:10 weight:UIFontWeightSemibold];
+    _mobileAIButton.titleLabel.adjustsFontSizeToFitWidth = YES;
+    _mobileAIButton.titleLabel.minimumScaleFactor = 0.7;
     _mobileAIButton.layer.cornerRadius = 22;
     _mobileAIButton.hidden = YES;
     // The AI toggle is an explicit request to start or stop automation.

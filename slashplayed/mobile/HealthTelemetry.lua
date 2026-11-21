@@ -36,6 +36,11 @@ local function spReadHealthPercent(unit)
     return nil, "unavailable"
 end
 
+local function spAIHealthStatus(hp, reason)
+    if hp ~= nil then return 0 end
+    return reason == "restricted" and 2 or 1
+end
+
 local function spAIReadable(value)
     return not (type(issecretvalue) == "function" and issecretvalue(value))
         and not (type(canaccessvalue) == "function" and not canaccessvalue(value))
@@ -242,8 +247,13 @@ local function spAIState()
         if type(IsMounted) ~= "function" then return unavailable(10) end
         if boolValue(IsMounted()) then flags = flags + 64 end
         stage = 11
-        local hp = spReadHealthPercent("player") or 255
-        local targetHP = hasTarget and (spReadHealthPercent("target") or 255) or 0
+        local hp, hpReason = spReadHealthPercent("player")
+        local targetHP, targetHealth = 0, 3
+        if hasTarget then
+            local value, reason = spReadHealthPercent("target")
+            targetHealth = spAIHealthStatus(value, reason)
+            targetHP = value or 255
+        end
         local meta = 128
         local rotation = spAIBinding("F12")
         if rotation then meta = meta + (rotation == "CLICK TactaraMainButton:LeftButton" and 1 or 2) end
@@ -262,9 +272,10 @@ local function spAIState()
         local bindings = (spAIBinding("TAB") == "TARGETNEARESTENEMY" and 1 or 0)
             + (rotation == "CLICK TactaraMainButton:LeftButton" and 2 or 0)
         local looted = targetDead and foeID and foeID == spAILootedTarget and 1 or 0
-        return string.char(65, 73, flags, hp, targetHP, meta, 75, spAIMovementBindings(),
+        local healthStatus = 64 + spAIHealthStatus(hp, hpReason) * 4 + targetHealth * 16
+        return string.char(65, 73, flags, hp or 255, targetHP, meta, 75, spAIMovementBindings(),
             70, motionSource, motionCounter, looted, 78, foeID and spAITargetEpoch or 0, positionEpoch,
-            math.floor(distance / 256), distance % 256, bindings)
+            math.floor(distance / 256), distance % 256, bindings + healthStatus)
     end)
     if not ok then spAICombatTarget = nil; spAIPreviousTarget = nil; return unavailable(stage) end
     return state

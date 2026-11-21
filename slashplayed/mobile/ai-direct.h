@@ -72,6 +72,34 @@ static inline SPAINavEvidence sp_ai_nav_evidence(const uint8_t *packet, unsigned
         (uint16_t)(packet[15] * 256 + packet[16])};
 }
 
+typedef enum {
+    SP_HEALTH_PUBLIC, SP_HEALTH_UNAVAILABLE, SP_HEALTH_RESTRICTED, SP_HEALTH_ABSENT, SP_HEALTH_UNSPECIFIED
+} SPAIHealthStatus;
+
+static inline SPAIHealthStatus sp_ai_health_status(const uint8_t *packet, unsigned length, bool target) {
+    if (length < 18 || packet[12] != 'N' || !(packet[17] & 64)) return SP_HEALTH_UNSPECIFIED;
+    SPAIHealthStatus status = (packet[17] >> (target ? 4 : 2)) & 3;
+    uint8_t hp = packet[target ? 4 : 3];
+    if (target && !(packet[2] & 4))
+        return status == SP_HEALTH_ABSENT && hp == 0 ? status : SP_HEALTH_UNSPECIFIED;
+    if (status == SP_HEALTH_ABSENT || ((status == SP_HEALTH_PUBLIC) != sp_ai_hp_known(hp)))
+        return SP_HEALTH_UNSPECIFIED;
+    return status;
+}
+
+typedef enum { SP_AI_READY, SP_AI_HEALTH_HOLD, SP_AI_RECOVER, SP_AI_MOUNTED, SP_AI_DEAD } SPAIReadiness;
+
+static inline SPAIReadiness sp_ai_readiness(uint8_t flags, uint8_t hp, bool *recovering) {
+    if (sp_ai_hp_known(hp)) {
+        if (hp < 35) *recovering = true;
+        if (hp >= 50) *recovering = false;
+    }
+    if (flags & 2) return SP_AI_DEAD;
+    if (flags & 64) return SP_AI_MOUNTED;
+    if (!sp_ai_hp_known(hp)) return SP_AI_HEALTH_HOLD;
+    return *recovering ? SP_AI_RECOVER : SP_AI_READY;
+}
+
 typedef struct {
     double at;
     SPAIFarmFeedback motion;
@@ -152,18 +180,44 @@ static inline void sp_ai_nav_resolve(SPAINavBudget *budget, SPAINavOutcome outco
 
 typedef struct {
     unsigned attacks;
-    uint8_t lastHP;
+    uint8_t lastHP, probeHP;
+    double observedAt, probedAt;
+    bool measured;
 } SPAICombatEvidence;
 
-static inline bool sp_ai_observe_damage(SPAICombatEvidence *combat, uint8_t hp) {
+static inline void sp_ai_accept_probe(SPAICombatEvidence *combat, double at) {
+    ++combat->attacks;
+    combat->probedAt = at;
+    combat->probeHP = combat->lastHP;
+    combat->measured = false;
+}
+
+static inline bool sp_ai_observe_damage(SPAICombatEvidence *combat, uint8_t hp, double observedAt) {
+    if (observedAt <= combat->observedAt) return false;
+    combat->observedAt = observedAt;
     bool decreased = sp_ai_hp_known(combat->lastHP) && sp_ai_hp_known(hp) && hp < combat->lastHP;
     combat->lastHP = hp;
+    if (combat->attacks && observedAt > combat->probedAt) {
+        if (!sp_ai_hp_known(hp)) combat->probeHP = 255;
+        combat->measured = sp_ai_hp_known(combat->probeHP) && sp_ai_hp_known(hp);
+    }
     if (decreased) combat->attacks = 0;
     return decreased;
 }
 
 static inline bool sp_ai_combat_budget_open(SPAICombatEvidence combat) {
     return combat.attacks < 4;
+}
+
+typedef enum { SP_ENGAGE_PROBE, SP_ENGAGE_APPROACH, SP_ENGAGE_NO_DAMAGE, SP_ENGAGE_DAMAGE_UNKNOWN } SPAIEngagement;
+
+static inline SPAIEngagement sp_ai_engagement(SPAICombatEvidence combat, SPAIMove move, uint16_t distance,
+    bool observedDamage, bool probeAfterMove) {
+    if (!sp_ai_combat_budget_open(combat))
+        return combat.measured ? SP_ENGAGE_NO_DAMAGE : SP_ENGAGE_DAMAGE_UNKNOWN;
+    if (combat.attacks && !probeAfterMove && distance > 16 && !observedDamage && move != SP_MOVE_NONE)
+        return SP_ENGAGE_APPROACH;
+    return SP_ENGAGE_PROBE;
 }
 
 static inline SPAIMove sp_ai_visible_approach(uint8_t meta, unsigned attempts, bool combat, bool recentDamage) {

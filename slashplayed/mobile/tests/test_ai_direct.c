@@ -70,22 +70,71 @@ static void test_bounded_retries(void) {
 }
 
 static void test_combat_feedback(void) {
-    SPAICombatEvidence combat = {0, 255};
-    assert(!sp_ai_observe_damage(&combat, 100));
-    while (sp_ai_combat_budget_open(combat)) ++combat.attacks;
+    SPAICombatEvidence combat = {.lastHP = 255};
+    assert(!sp_ai_observe_damage(&combat, 100, 1));
+    for (unsigned i = 0; sp_ai_combat_budget_open(combat); ++i) sp_ai_accept_probe(&combat, 2+i);
     assert(combat.attacks == 4);
-    assert(!sp_ai_observe_damage(&combat, 100));
-    assert(!sp_ai_observe_damage(&combat, 255));
-    assert(!sp_ai_observe_damage(&combat, 90));
+    assert(!sp_ai_observe_damage(&combat, 100, 5));
+    assert(!combat.measured);
+    assert(!sp_ai_observe_damage(&combat, 100, 6));
+    assert(combat.measured);
+    assert(!sp_ai_observe_damage(&combat, 255, 7));
+    assert(!sp_ai_observe_damage(&combat, 90, 8));
+    assert(sp_ai_engagement(combat, SP_MOVE_NONE, 16, false, false) == SP_ENGAGE_DAMAGE_UNKNOWN);
     assert(!sp_ai_combat_budget_open(combat));
-    assert(sp_ai_observe_damage(&combat, 89));
+    assert(!sp_ai_observe_damage(&combat, 89, 8));
+    assert(sp_ai_observe_damage(&combat, 89, 9));
     assert(sp_ai_combat_budget_open(combat));
+}
+
+static void test_health_status(void) {
+    uint8_t packet[] = {'A','I',13,255,255,193,'K',1,'F',1,7,0,'N',1,1,255,255,64+16+8+3};
+    assert(sp_ai_health_status(packet, sizeof packet, false) == SP_HEALTH_RESTRICTED);
+    assert(sp_ai_health_status(packet, sizeof packet, true) == SP_HEALTH_UNAVAILABLE);
+    assert(sp_ai_nav_evidence(packet, sizeof packet).bindings == 3);
+    packet[3] = 70;
+    assert(sp_ai_health_status(packet, sizeof packet, false) == SP_HEALTH_UNSPECIFIED);
+    packet[2] = 1;
+    packet[4] = 0;
+    packet[17] = 64+48+3;
+    assert(sp_ai_health_status(packet, sizeof packet, true) == SP_HEALTH_ABSENT);
+    assert(sp_ai_health_status(packet, sizeof packet, false) == SP_HEALTH_PUBLIC);
+    packet[17] = 3;
+    assert(sp_ai_health_status(packet, sizeof packet, false) == SP_HEALTH_UNSPECIFIED);
+}
+
+static void test_simulated_encounter(void) {
+    bool recovering = false;
+    assert(sp_ai_readiness(1, 80, &recovering) == SP_AI_READY);
+    assert(sp_ai_decision(true, 1, 80, 0, 129) == SP_AI_TARGET);
+    assert(sp_ai_decision(true, 13, 80, 100, 193) == SP_AI_ATTACK);
+    SPAICombatEvidence combat = {.lastHP = 100};
+    assert(sp_ai_engagement(combat, SP_MOVE_FORWARD, 80, false, false) == SP_ENGAGE_PROBE);
+    sp_ai_accept_probe(&combat, 1);
+    assert(sp_ai_engagement(combat, SP_MOVE_FORWARD, 80, false, false) == SP_ENGAGE_APPROACH);
+    assert(sp_ai_engagement(combat, SP_MOVE_FORWARD, 16, false, false) == SP_ENGAGE_PROBE);
+    assert(sp_ai_engagement(combat, SP_MOVE_FORWARD, SP_AI_DISTANCE_UNKNOWN, false, true) == SP_ENGAGE_PROBE);
+    assert(sp_ai_observe_damage(&combat, 52, 2));
+    assert(sp_ai_engagement(combat, SP_MOVE_LEFT, 80, true, false) == SP_ENGAGE_PROBE);
+    assert(sp_ai_engagement((SPAICombatEvidence){.attacks = 4}, SP_MOVE_NONE, 16, false, false) == SP_ENGAGE_DAMAGE_UNKNOWN);
+    assert(sp_ai_engagement((SPAICombatEvidence){.attacks = 4, .measured = true}, SP_MOVE_NONE, 16, false, false) == SP_ENGAGE_NO_DAMAGE);
+    assert(sp_ai_decision(true, 181, 80, 0, 133) == SP_AI_WAIT);
+    assert(sp_ai_farm_decision(sp_ai_decision(true, 149, 80, 0, 133), 149, 133, 1, false) == SP_AI_LOOT);
+    assert(sp_ai_farm_decision(SP_AI_TARGET, 149, 133, 1, true) == SP_AI_TARGET);
+    assert(sp_ai_readiness(1, 34, &recovering) == SP_AI_RECOVER);
+    assert(sp_ai_readiness(1, 255, &recovering) == SP_AI_HEALTH_HOLD);
+    assert(sp_ai_readiness(1, 49, &recovering) == SP_AI_RECOVER);
+    assert(sp_ai_readiness(3, 255, &recovering) == SP_AI_DEAD);
+    assert(sp_ai_readiness(65, 80, &recovering) == SP_AI_MOUNTED);
+    assert(sp_ai_readiness(1, 50, &recovering) == SP_AI_READY);
 }
 
 int main(void) {
     test_pulse_outcomes();
     test_bounded_retries();
     test_combat_feedback();
+    test_health_status();
+    test_simulated_encounter();
     assert(sp_ai_decision(false,45,100,100,129)==SP_AI_WAIT);
     assert(sp_ai_decision(true,1,255,0,128)==SP_AI_TARGET);
     assert(sp_ai_decision(true,13,255,255,129)==SP_AI_ATTACK);

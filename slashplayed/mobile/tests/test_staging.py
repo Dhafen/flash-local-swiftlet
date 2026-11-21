@@ -234,8 +234,8 @@ if sys.platform == "darwin" and len(sys.argv) == 2:
                         str(Path(__file__).with_name("test_p2p_actions.swift")), "-o", binary], check=True)
         subprocess.run([binary], check=True)
 
-assert 'local hp = spReadHealthPercent("player") or 255' in (root / "addon/SPHover/SPHover.lua").read_text()
-assert 'sp_ai_health_known' in event and '@"HP UNKNOWN"' in event
+assert 'local hp, hpReason = spReadHealthPercent("player")' in (root / "addon/SPHover/SPHover.lua").read_text()
+assert 'sp_ai_health_status(data' in event and '@"HP UNKNOWN"' in event and '@"HP SECRET"' in event
 assert 'sp_ai_nav_outcome(_pulse, sample, now)' in event and 'sp_ai_nav_budget_open(_navBudget, move)' in event
 assert 'sp_mobile_ai_yield:' in event and 'UIControlEventTouchDown' in event
 yield_method = event.split('- (void)sp_mobile_ai_yield:(id)sender {', 1)[1].split('\n}', 1)[0]

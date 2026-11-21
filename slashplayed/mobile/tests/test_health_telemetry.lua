@@ -45,6 +45,7 @@ GetTime = function() return 2 end
 reset(val(secret), val(secret), val(secret))
 local packet = state()
 assert(#packet == 18 and packet:byte(3) == 45 and packet:byte(4) == 255 and packet:byte(5) == 255)
+assert(packet:byte(18) == 64 + 2 * 4 + 2 * 16, "report restricted player and target independently")
 UnitCanAttack = val(secret)
 packet = state()
 assert(packet:byte(3) == 0 and packet:byte(4) == 6)
@@ -52,9 +53,13 @@ UnitCanAttack = val(true)
 UnitExists = function(unit) return unit == "player" end
 packet = state()
 assert(packet:byte(3) == 33 and packet:byte(4) == 255 and packet:byte(5) == 0)
+assert(packet:byte(18) == 64 + 2 * 4 + 3 * 16, "target absent is distinct from restricted")
 reset(val(.2), nil, nil)
 packet = state()
 assert(packet:byte(4) == 20)
+assert(packet:byte(18) == 64 + 3 * 16)
+reset(nil, nil, nil)
+assert(state():byte(18) == 64 + 1 * 4 + 3 * 16, "missing and restricted are distinct")
 print("partial public game-state tests passed")
 
 GetBindingAction = function(key, checkOverride)
@@ -164,7 +169,7 @@ GetBindingAction = function(key)
 end
 local nav = state()
 assert(nav:byte(13) == 78 and nav:byte(14) ~= 0 and nav:byte(15) ~= 0)
-assert(nav:byte(16) == 0 and nav:byte(17) == 36 and nav:byte(18) == 3)
+assert(nav:byte(16) == 0 and nav:byte(17) == 36 and nav:byte(18) % 4 == 3)
 targetX = secret
 assert(state():byte(17) == 255)
 targetX, targetMap = 11, 5
