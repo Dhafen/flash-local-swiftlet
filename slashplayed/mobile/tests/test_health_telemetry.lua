@@ -44,7 +44,8 @@ IsMounted = function() return false end
 GetTime = function() return 2 end
 reset(val(secret), val(secret), val(secret))
 local packet = state()
-assert(#packet == 12 and packet:byte(3) == 45 and packet:byte(4) == 255 and packet:byte(5) == 255)
+assert(#packet == 18 and packet:byte(3) == 45 and packet:byte(4) == 255 and packet:byte(5) == 255)
+assert(packet:byte(18) == 64 + 2 * 4 + 2 * 16, "report restricted player and target independently")
 UnitCanAttack = val(secret)
 packet = state()
 assert(packet:byte(3) == 0 and packet:byte(4) == 6)
@@ -52,9 +53,13 @@ UnitCanAttack = val(true)
 UnitExists = function(unit) return unit == "player" end
 packet = state()
 assert(packet:byte(3) == 33 and packet:byte(4) == 255 and packet:byte(5) == 0)
+assert(packet:byte(18) == 64 + 2 * 4 + 3 * 16, "target absent is distinct from restricted")
 reset(val(.2), nil, nil)
 packet = state()
 assert(packet:byte(4) == 20)
+assert(packet:byte(18) == 64 + 3 * 16)
+reset(nil, nil, nil)
+assert(state():byte(18) == 64 + 1 * 4 + 3 * 16, "missing and restricted are distinct")
 print("partial public game-state tests passed")
 
 GetBindingAction = function(key, checkOverride)
@@ -152,6 +157,33 @@ assert(moving:byte(10) == 2 and state():byte(11) ~= moving:byte(11))
 GetUnitSpeed = val(secret)
 assert(state():byte(10) == 0)
 
+local map, targetX, targetMap = 4, 11, 4
+UnitPosition = function(unit)
+    if unit == "target" then return targetX, 2, 3, targetMap end
+    return motionX, 2, 3, map
+end
+GetBindingAction = function(key)
+    if key == "TAB" then return "TARGETNEARESTENEMY" end
+    if key == "F12" then return "CLICK TactaraMainButton:LeftButton" end
+    if key == "F" then return "INTERACTTARGET" end
+end
+local nav = state()
+assert(nav:byte(13) == 78 and nav:byte(14) ~= 0 and nav:byte(15) ~= 0)
+assert(nav:byte(16) == 0 and nav:byte(17) == 36 and nav:byte(18) % 4 == 3)
+targetX = secret
+assert(state():byte(17) == 255)
+targetX, targetMap = 11, 5
+assert(state():byte(17) == 255)
+map = 5
+assert(state():byte(15) ~= nav:byte(15))
+nav = state()
+motionX = 80
+assert(state():byte(15) ~= nav:byte(15))
+UnitGUID = val("new-selected-target")
+assert(state():byte(14) ~= nav:byte(14))
+UnitGUID = val(secret)
+assert(state():byte(14) == 0 and state():byte(17) == 255)
+
 local lootEvent, lootState = assert(loadstring(source .. "\nreturn spAILootEvent, spAIState"))()
 targetDead = false
 UnitAffectingCombat = val(true)
@@ -177,3 +209,43 @@ assert(lootState():byte(12) == 1)
 UnitGUID = val("another-foe")
 assert(lootState():byte(12) == 0)
 print("movement and matched corpse loot feedback passed")
+
+local corpseEvent, corpseState = assert(loadstring(source .. "\nreturn spAILootEvent, spAIState"))()
+local selected = "test-corpse"
+UnitGUID = function(unit)
+    if unit == "player" then return "test-player" end
+    if unit == "pet" then return "test-pet" end
+    return selected
+end
+UnitIsInInteractRange = val(false)
+UnitHasLootInteraction = val(true)
+corpseEvent(nil, "PARTY_KILL", "other-player", selected)
+assert(corpseState():byte(3) == 21)
+corpseEvent(nil, "PARTY_KILL", secret, selected)
+assert(corpseState():byte(3) == 21)
+corpseEvent(nil, "PARTY_KILL", "test-player", "other-corpse")
+assert(corpseState():byte(3) == 21)
+corpseEvent(nil, "PARTY_KILL", "test-player", selected)
+local corpse = corpseState()
+assert(corpse:byte(3) == 149 and corpse:byte(12) == 2 + 8 + 16)
+UnitIsInInteractRange = val(secret)
+UnitHasLootInteraction = val(false)
+assert(corpseState():byte(12) == 2 + 4)
+GetLootSourceInfo = function() return selected, 1 end
+corpseEvent(nil, "LOOT_OPENED")
+corpseEvent(nil, "LOOT_SLOT_CLEARED", 1)
+assert(corpseState():byte(12) == 1 + 2 + 4)
+corpseEvent(nil, "PLAYER_TARGET_CHANGED")
+local reselected = corpseState()
+assert(reselected:byte(3) == 21 and reselected:byte(14) ~= corpse:byte(14))
+selected = "pet-corpse"
+corpseEvent(nil, "PARTY_KILL", "test-pet", selected)
+assert(corpseState():byte(3) == 149)
+GetTime = val(15)
+assert(corpseState():byte(3) == 149, "observed selected corpse remains eligible out of range")
+corpseEvent(nil, "PLAYER_TARGET_CHANGED")
+selected = "never-observed-corpse"
+corpseEvent(nil, "PARTY_KILL", "test-player", selected)
+GetTime = val(28)
+assert(corpseState():byte(3) == 21)
+print("public kill attribution and corpse interaction evidence passed")

@@ -16,14 +16,6 @@ static inline SPAIDecision sp_ai_decision(bool fresh, uint8_t flags, uint8_t hp,
     if ((meta & 128) && (meta & 2)) return SP_AI_BIND;
     return SP_AI_ATTACK;
 }
-static inline bool sp_ai_nav_allowed(SPAIDecision decision, uint8_t flags, unsigned attempts) {
-    if (flags & (2|32|64)) return false;
-    // A selected target with no combat after several F12 attempts may need movement.
-    // Only use model-proposed movement; never presume range or direction is known.
-    return decision == SP_AI_TARGET || (decision == SP_AI_ATTACK && attempts >= 2);
-}
-// A model proposal is advisory. Feedback is consumed once per completed input,
-// and scene change is only a proxy for progress.
 typedef enum { SP_MOVE_NONE, SP_MOVE_FORWARD, SP_MOVE_BACK, SP_MOVE_LEFT, SP_MOVE_RIGHT } SPAIMove;
 
 static inline uint8_t sp_ai_movement_bindings(const uint8_t *packet, unsigned length) {
@@ -39,37 +31,9 @@ static inline char sp_ai_movement_key(SPAIMove move, uint8_t bindings) {
         default: return 0;
     }
 }
-typedef struct {
-    SPAIMove last, proposed;
-    unsigned votes, stalls, streak;
-    bool recoveryUsed, blocked;
-} SPAINavigation;
-
 static inline bool sp_ai_move_opposes(SPAIMove a, SPAIMove b) {
     return (a == SP_MOVE_FORWARD && b == SP_MOVE_BACK) || (a == SP_MOVE_BACK && b == SP_MOVE_FORWARD) ||
            (a == SP_MOVE_LEFT && b == SP_MOVE_RIGHT) || (a == SP_MOVE_RIGHT && b == SP_MOVE_LEFT);
-}
-
-static inline void sp_ai_nav_feedback(SPAINavigation *nav, bool changed) {
-    if (changed) nav->stalls = 0;
-    else if (nav->stalls < 2) ++nav->stalls;
-    if (nav->stalls == 2 && nav->recoveryUsed) nav->blocked = true;
-}
-
-static inline SPAIMove sp_ai_nav_proposal(SPAINavigation *nav, SPAIMove move) {
-    if (nav->blocked) return SP_MOVE_NONE;
-    if (move != nav->proposed || move == SP_MOVE_NONE) {
-        nav->proposed = move;
-        nav->votes = 0;
-    }
-    if (move == SP_MOVE_NONE) return SP_MOVE_NONE;
-    if (nav->votes < 3) ++nav->votes;
-    if (nav->stalls == 2) {
-        if (nav->votes < 2) return SP_MOVE_NONE;
-        return nav->last == SP_MOVE_LEFT || nav->last == SP_MOVE_RIGHT ? SP_MOVE_FORWARD : SP_MOVE_LEFT;
-    }
-    unsigned required = move == nav->last ? 1 : sp_ai_move_opposes(nav->last, move) ? 3 : 2;
-    return nav->votes >= required ? move : SP_MOVE_NONE;
 }
 
 // Confirmed local encounter, selected NPC corpse and combat ended.
@@ -92,8 +56,210 @@ static inline SPAIFarmFeedback sp_ai_farm_feedback(const uint8_t *packet, unsign
     return (SPAIFarmFeedback){packet[9], packet[10], (packet[11] & 1) != 0};
 }
 
+enum {
+    SP_CORPSE_LOCAL_KILL = 2, SP_CORPSE_LOOT_NONE = 4, SP_CORPSE_LOOT_AVAILABLE = 8,
+    SP_CORPSE_RANGE_OUT = 16, SP_CORPSE_RANGE_IN = 32
+};
+
+static inline uint8_t sp_ai_corpse_evidence(const uint8_t *packet, unsigned length) {
+    if (length < 12 || packet[8] != 'F' || (packet[2] & (4|16)) != (4|16)) return 0;
+    return packet[11] & 62;
+}
+
 static inline bool sp_ai_farm_progress(SPAIFarmFeedback start, SPAIFarmFeedback current) {
-    return start.source != SP_MOTION_UNKNOWN && current.source == start.source && current.counter != start.counter;
+    return start.source == SP_MOTION_POSITION && current.source == SP_MOTION_POSITION && current.counter != start.counter;
+}
+
+enum { SP_AI_DISTANCE_UNKNOWN = UINT16_MAX, SP_AI_TAB_BOUND = 1, SP_AI_ROTATION_BOUND = 2 };
+typedef struct {
+    uint8_t target, position, bindings;
+    uint16_t distance;
+} SPAINavEvidence;
+
+static inline SPAINavEvidence sp_ai_nav_evidence(const uint8_t *packet, unsigned length) {
+    if (length < 18 || packet[12] != 'N') return (SPAINavEvidence){0, 0, 0, SP_AI_DISTANCE_UNKNOWN};
+    return (SPAINavEvidence){packet[13], packet[14], packet[17] & 3,
+        (uint16_t)(packet[15] * 256 + packet[16])};
+}
+
+typedef enum {
+    SP_HEALTH_PUBLIC, SP_HEALTH_UNAVAILABLE, SP_HEALTH_RESTRICTED, SP_HEALTH_ABSENT, SP_HEALTH_UNSPECIFIED
+} SPAIHealthStatus;
+
+static inline SPAIHealthStatus sp_ai_health_status(const uint8_t *packet, unsigned length, bool target) {
+    if (length < 18 || packet[12] != 'N' || !(packet[17] & 64)) return SP_HEALTH_UNSPECIFIED;
+    SPAIHealthStatus status = (packet[17] >> (target ? 4 : 2)) & 3;
+    uint8_t hp = packet[target ? 4 : 3];
+    if (target && !(packet[2] & 4))
+        return status == SP_HEALTH_ABSENT && hp == 0 ? status : SP_HEALTH_UNSPECIFIED;
+    if (status == SP_HEALTH_ABSENT || ((status == SP_HEALTH_PUBLIC) != sp_ai_hp_known(hp)))
+        return SP_HEALTH_UNSPECIFIED;
+    return status;
+}
+
+typedef enum { SP_AI_READY, SP_AI_HEALTH_HOLD, SP_AI_RECOVER, SP_AI_MOUNTED, SP_AI_DEAD } SPAIReadiness;
+
+static inline SPAIReadiness sp_ai_readiness(uint8_t flags, uint8_t hp, bool *recovering) {
+    if (sp_ai_hp_known(hp)) {
+        if (hp < 35) *recovering = true;
+        if (hp >= 50) *recovering = false;
+    }
+    if (flags & 2) return SP_AI_DEAD;
+    if (flags & 64) return SP_AI_MOUNTED;
+    if (!sp_ai_hp_known(hp)) return SP_AI_HEALTH_HOLD;
+    return *recovering ? SP_AI_RECOVER : SP_AI_READY;
+}
+
+typedef struct {
+    double at;
+    SPAIFarmFeedback motion;
+    SPAINavEvidence evidence;
+    unsigned column;
+} SPAINavSample;
+
+static inline bool sp_ai_sample_fresh(double sampledAt, double now) {
+    return sampledAt > 0 && now >= sampledAt && now - sampledAt < 0.85;
+}
+
+typedef struct {
+    SPAIMove move;
+    double observedAt;
+    bool confirmed;
+} SPAISteering;
+
+static inline bool sp_ai_confirm_steering(SPAISteering *steering, SPAIMove move, double at) {
+    if (move == SP_MOVE_NONE || at < steering->observedAt) {
+        *steering = (SPAISteering){0};
+        return false;
+    }
+    if (steering->move != move || !sp_ai_sample_fresh(steering->observedAt, at)) {
+        *steering = (SPAISteering){move, at, false};
+    } else if (at - steering->observedAt >= 0.12) {
+        steering->observedAt = at;
+        steering->confirmed = true;
+    }
+    return steering->confirmed;
+}
+
+typedef enum {
+    SP_NAV_PENDING, SP_NAV_NO_SAMPLE, SP_NAV_CONTEXT_CHANGED, SP_NAV_STALLED,
+    SP_NAV_DISPLACED, SP_NAV_CLOSER, SP_NAV_ALIGNED, SP_NAV_NO_PROGRESS
+} SPAINavOutcome;
+
+typedef struct {
+    SPAINavSample before;
+    SPAIMove move;
+    double endedAt, deadline;
+} SPAINavPulse;
+
+static inline unsigned sp_ai_column_error(unsigned column) {
+    return column > 8 ? column - 8 : 8 - column;
+}
+
+static inline SPAINavOutcome sp_ai_nav_outcome(SPAINavPulse pulse, SPAINavSample after, double now) {
+    if (!pulse.before.evidence.position || pulse.before.motion.source != SP_MOTION_POSITION)
+        return SP_NAV_NO_SAMPLE;
+    if (after.at <= pulse.before.at || after.at < pulse.endedAt || after.at > pulse.deadline ||
+        !sp_ai_sample_fresh(after.at, now))
+        return now >= pulse.deadline ? SP_NAV_NO_SAMPLE : SP_NAV_PENDING;
+    if (after.evidence.target != pulse.before.evidence.target ||
+        (after.evidence.position && after.evidence.position != pulse.before.evidence.position))
+        return SP_NAV_CONTEXT_CHANGED;
+    if (!after.evidence.position || after.motion.source != SP_MOTION_POSITION)
+        return now >= pulse.deadline ? SP_NAV_NO_SAMPLE : SP_NAV_PENDING;
+    if (!sp_ai_farm_progress(pulse.before.motion, after.motion))
+        return now >= pulse.deadline ? SP_NAV_STALLED : SP_NAV_PENDING;
+    bool knownDistance = pulse.before.evidence.distance != SP_AI_DISTANCE_UNKNOWN &&
+        after.evidence.distance != SP_AI_DISTANCE_UNKNOWN;
+    if (knownDistance && after.evidence.distance + 2 <= pulse.before.evidence.distance)
+        return SP_NAV_CLOSER;
+    if ((pulse.move == SP_MOVE_LEFT || pulse.move == SP_MOVE_RIGHT) && pulse.before.column && after.column &&
+        sp_ai_column_error(after.column) < sp_ai_column_error(pulse.before.column))
+        return SP_NAV_ALIGNED;
+    return knownDistance || ((pulse.move == SP_MOVE_LEFT || pulse.move == SP_MOVE_RIGHT) &&
+        pulse.before.column && after.column) ? SP_NAV_NO_PROGRESS : SP_NAV_DISPLACED;
+}
+
+static inline bool sp_ai_forward_probe_ready(SPAINavSample sample, uint8_t flags, uint8_t movementKeys, double now) {
+    // Leave an eight-yard margin in this test. Distance is in quarter yards.
+    return sp_ai_sample_fresh(sample.at, now) && (flags & (1|2|4|8|16|32|64)) == (1|4|8) &&
+           sample.evidence.target && sample.evidence.position && sample.motion.source == SP_MOTION_POSITION &&
+           sample.evidence.distance != SP_AI_DISTANCE_UNKNOWN && sample.evidence.distance > 32 &&
+           sp_ai_movement_key(SP_MOVE_FORWARD, movementKeys);
+}
+
+static inline bool sp_ai_forward_probe_repeat(SPAINavOutcome outcome, unsigned remaining) {
+    return outcome == SP_NAV_CLOSER && remaining > 1;
+}
+
+typedef struct {
+    unsigned pulses, failures, unmeasured, reversals;
+    SPAIMove lastLateral;
+} SPAINavBudget;
+
+static inline bool sp_ai_nav_budget_open(SPAINavBudget budget, SPAIMove next) {
+    return budget.pulses < 12 && budget.failures < 2 && budget.unmeasured < 2 &&
+        !(budget.reversals >= 1 && sp_ai_move_opposes(budget.lastLateral, next));
+}
+
+static inline void sp_ai_nav_accept(SPAINavBudget *budget, SPAIMove move) {
+    if (move == SP_MOVE_LEFT || move == SP_MOVE_RIGHT) {
+        if (sp_ai_move_opposes(budget->lastLateral, move)) ++budget->reversals;
+        budget->lastLateral = move;
+    }
+    ++budget->pulses;
+}
+
+static inline void sp_ai_nav_resolve(SPAINavBudget *budget, SPAINavOutcome outcome) {
+    if (outcome == SP_NAV_CLOSER || outcome == SP_NAV_ALIGNED) {
+        budget->failures = budget->unmeasured = 0;
+    } else if (outcome == SP_NAV_DISPLACED) {
+        ++budget->unmeasured;
+    } else {
+        ++budget->failures;
+    }
+}
+
+typedef struct {
+    unsigned attacks;
+    uint8_t lastHP, probeHP;
+    double observedAt, probedAt;
+    bool measured;
+} SPAICombatEvidence;
+
+static inline void sp_ai_accept_probe(SPAICombatEvidence *combat, double at) {
+    ++combat->attacks;
+    combat->probedAt = at;
+    combat->probeHP = combat->lastHP;
+    combat->measured = false;
+}
+
+static inline bool sp_ai_observe_damage(SPAICombatEvidence *combat, uint8_t hp, double observedAt) {
+    if (observedAt <= combat->observedAt) return false;
+    combat->observedAt = observedAt;
+    bool decreased = sp_ai_hp_known(combat->lastHP) && sp_ai_hp_known(hp) && hp < combat->lastHP;
+    combat->lastHP = hp;
+    if (combat->attacks && observedAt > combat->probedAt) {
+        if (!sp_ai_hp_known(hp)) combat->probeHP = 255;
+        combat->measured = sp_ai_hp_known(combat->probeHP) && sp_ai_hp_known(hp);
+    }
+    if (decreased) combat->attacks = 0;
+    return decreased;
+}
+
+static inline bool sp_ai_combat_budget_open(SPAICombatEvidence combat) {
+    return combat.attacks < 4;
+}
+
+typedef enum { SP_ENGAGE_PROBE, SP_ENGAGE_APPROACH, SP_ENGAGE_NO_DAMAGE, SP_ENGAGE_DAMAGE_UNKNOWN } SPAIEngagement;
+
+static inline SPAIEngagement sp_ai_engagement(SPAICombatEvidence combat, SPAIMove move, uint16_t distance,
+    bool observedDamage, bool probeAfterMove) {
+    if (!sp_ai_combat_budget_open(combat))
+        return combat.measured ? SP_ENGAGE_NO_DAMAGE : SP_ENGAGE_DAMAGE_UNKNOWN;
+    if (combat.attacks && !probeAfterMove && distance > 16 && !observedDamage && move != SP_MOVE_NONE)
+        return SP_ENGAGE_APPROACH;
+    return SP_ENGAGE_PROBE;
 }
 
 static inline SPAIMove sp_ai_visible_approach(uint8_t meta, unsigned attempts, bool combat, bool recentDamage) {
@@ -123,89 +289,4 @@ static inline SPAIMove sp_ai_apply_approach(const SPAIApproachExamples *examples
         SP_MOVE_FORWARD : side;
 }
 
-typedef enum {
-    SP_FARM_PAUSE, SP_FARM_SEARCH, SP_FARM_ENGAGE, SP_FARM_APPROACH, SP_FARM_COMBAT, SP_FARM_LOOT
-} SPAIFarmPhase;
-
-typedef struct {
-    SPAIFarmPhase phase;
-    SPAIMove movement;
-    bool usePixel2Play;
-} SPAIFarmPlan;
-
-// The planner owns the current phase. The controller still owns key timing,
-// movement limits and cancellation, and executes at most one input per poll.
-static inline SPAIFarmPlan sp_ai_plan_farm(SPAIDecision decision, uint8_t flags, uint8_t meta,
-    unsigned attempts, bool recentDamage, const SPAIApproachExamples *examples) {
-    if (decision == SP_AI_LOOT) return (SPAIFarmPlan){SP_FARM_LOOT, SP_MOVE_NONE, false};
-    if (decision == SP_AI_TARGET)
-        return (SPAIFarmPlan){SP_FARM_SEARCH, SP_MOVE_NONE, sp_ai_nav_allowed(decision, flags, attempts)};
-    if (decision != SP_AI_ATTACK) return (SPAIFarmPlan){SP_FARM_PAUSE, SP_MOVE_NONE, false};
-    bool combat = (flags & 32) != 0;
-    if (combat && recentDamage) return (SPAIFarmPlan){SP_FARM_COMBAT, SP_MOVE_NONE, false};
-    // An off-combat target with a visible nameplate can be approached from
-    // the first poll. Missing direction still needs the existing attack probes.
-    SPAIMove move = sp_ai_visible_approach(meta, combat ? attempts : 2, combat, recentDamage);
-    if (move != SP_MOVE_NONE)
-        return (SPAIFarmPlan){SP_FARM_APPROACH, sp_ai_apply_approach(examples, move, combat), false};
-    if (attempts < 2) return (SPAIFarmPlan){SP_FARM_ENGAGE, SP_MOVE_NONE, false};
-    if (combat) return (SPAIFarmPlan){SP_FARM_COMBAT, SP_MOVE_NONE, false};
-    return (SPAIFarmPlan){SP_FARM_APPROACH, SP_MOVE_NONE, sp_ai_nav_allowed(decision, flags, attempts)};
-}
-
-// Only telemetry-based steering is available in reduced-workload mode.
-// Seek a target with the old three-move pattern if Tab and vision have
-// produced no target. Fresh flags and the input window are checked outside.
-static inline SPAIMove sp_ai_search_step(SPAIDecision decision, uint8_t flags,
-    unsigned tabAttempts, unsigned visionWaits, unsigned steps, bool visionUnavailable) {
-    if (decision != SP_AI_TARGET || !(flags & 1) || (flags & (2|4|32|64)) ||
-        steps >= 3 || tabAttempts < 3) return SP_MOVE_NONE;
-    if (!visionUnavailable && visionWaits < 3 && tabAttempts < 5) return SP_MOVE_NONE;
-    static const SPAIMove moves[] = {SP_MOVE_LEFT, SP_MOVE_FORWARD, SP_MOVE_RIGHT};
-    return moves[steps];
-}
-
-static inline SPAIMove sp_ai_patrol_step(SPAIDecision decision, uint8_t flags, unsigned steps, unsigned stalls) {
-    if (decision != SP_AI_TARGET || !(flags & 1) || (flags & (2|4|32|64)) || steps >= 12 || stalls >= 2)
-        return SP_MOVE_NONE;
-    static const SPAIMove loop[] = {SP_MOVE_FORWARD, SP_MOVE_FORWARD, SP_MOVE_RIGHT,
-        SP_MOVE_BACK, SP_MOVE_BACK, SP_MOVE_LEFT};
-    return loop[steps % 6];
-}
-
-static inline double sp_ai_visible_move_spacing(bool reducedWorkload) {
-    return reducedWorkload ? 1.25 : 0.65;
-}
-
-static inline double sp_ai_visible_move_duration(SPAIMove move, bool reducedWorkload) {
-    if (reducedWorkload) return move == SP_MOVE_FORWARD ? 0.25 : 0.16;
-    return move == SP_MOVE_FORWARD ? 0.42 : 0.24;
-}
-
-static inline double sp_ai_direct_interval(SPAIDecision decision, bool moving) {
-    if (decision == SP_AI_TARGET || moving) return 3.2;
-    if (decision == SP_AI_LOOT) return 1.4;
-    return 0.85;
-}
-
-static inline double sp_ai_nav_duration(const SPAINavigation *nav, SPAIMove move) {
-    if (nav->stalls > 0) return 0.42;
-    return nav->last == move && nav->streak >= 2 ? 0.70 : 0.55;
-}
-
-static inline void sp_ai_nav_sent(SPAINavigation *nav, SPAIMove move) {
-    if (nav->stalls == 2) {
-        nav->recoveryUsed = true;
-        nav->stalls = 1; // Stop if the recovery pulse also fails.
-        nav->proposed = SP_MOVE_NONE;
-        nav->votes = 0;
-    }
-    if (nav->last != move) nav->streak = 1;
-    else if (nav->streak < 3) ++nav->streak;
-    nav->last = move;
-}
-
-static inline bool sp_ai_nav_has_slot(double now, double nextDirectAction) {
-    return nextDirectAction - now >= 1.0;
-}
 #endif

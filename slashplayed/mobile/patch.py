@@ -26,6 +26,7 @@ def patch_input():
     source = Path(__file__).with_name("phone-input.m").read_text()
     source = source.replace('#include "touch-zone.h"', Path(__file__).with_name("touch-zone.h").read_text())
     source = source.replace('#include "game-ai.m"', Path(__file__).with_name("game-ai.m").read_text())
+    source = source.replace('#include "ai-encounter.h"', Path(__file__).with_name("ai-encounter.h").read_text())
     source = source.replace('#include "ai-direct.h"', Path(__file__).with_name("ai-direct.h").read_text())
     declarations, methods = source.split("// SPInputView methods follow.\n")
     require(path, ["SPSoftKeyboardField", "sp_press_soft_escape:"])
@@ -69,6 +70,12 @@ def patch_input():
 #endif""")
     replace_once(path, "- (void)pressesBegan:(NSSet<UIPress *> *)presses",
                  methods + "- (void)pressesBegan:(NSSet<UIPress *> *)presses")
+    replace_once(path, "        if (p.key) sp_key(p.key, YES);", """        if (p.key) {
+#if !TARGET_OS_VISION
+            [self sp_mobile_ai_yield:nil];
+#endif
+            sp_key(p.key, YES);
+        }""")
 
 
 patch_input()
@@ -182,16 +189,21 @@ replace_once(shim_build, '$CC -fobjc-arc -dynamiclib -O1 -Wno-objc-root-class li
 hover_lua = ROOT / "addon/SPHover/SPHover.lua"
 replace_once(hover_lua, "local function scan()", "-- Read-only, compact game telemetry; appended to the existing SPHover message.\nlocal function spAIState()\n    if not SPPhoneTouchRects then return \"\" end\n    local ok, state = pcall(function()\n        if not UnitExists(\"player\") or UnitHealthMax(\"player\") <= 0 then return \"\" end\n        local flags = 1\n        if UnitIsDeadOrGhost(\"player\") then flags = flags + 2 end\n        if UnitExists(\"target\") then\n            flags = flags + 4\n            if UnitCanAttack(\"player\", \"target\") and not UnitIsPlayer(\"target\") then flags = flags + 8 end\n            if UnitIsDeadOrGhost(\"target\") then flags = flags + 16 end\n        end\n        if UnitAffectingCombat(\"player\") then flags = flags + 32 end\n        if IsMounted and IsMounted() then flags = flags + 64 end\n        local hp = floor(max(0, min(100, 100 * UnitHealth(\"player\") / UnitHealthMax(\"player\"))) + 0.5)\n        local targetHP = 0\n        if UnitExists(\"target\") and UnitHealthMax(\"target\") > 0 then\n            targetHP = floor(max(0, min(100, 100 * UnitHealth(\"target\") / UnitHealthMax(\"target\"))) + 0.5)\n        end\n        return string.char(65, 73, flags, hp, targetHP, floor(GetTime() / 2) % 256)\n    end)\n    return ok and state or \"\"\nend\n\nlocal function scan()")
 replace_once(hover_lua, "return string.char(floor(n / 256), n % 256) .. table.concat(out)",
-             "return string.char(floor(n / 256), n % 256) .. table.concat(out) .. spAIState()")
+             "return string.char(floor(n / 256), n % 256) .. table.concat(out) .. spLastAIState")
 strip_header = ROOT / "shims/appkit/sphoverstrip.h"
-replace_once(strip_header, "(2 + SPH_MAX_RECTS * 6)", "(2 + SPH_MAX_RECTS * 6 + 12)")
+replace_once(strip_header, "(2 + SPH_MAX_RECTS * 6)", "(2 + SPH_MAX_RECTS * 6 + 18)")
 hover_native = ROOT / "shims/appkit/sphover.m"
+replace_once(hover_native, "static void sp_hover_frame(const uint8_t *rows, CGFloat height) {",
+    "static void sp_hover_frame(const uint8_t *rows, CGFloat height, NSTimeInterval observedAt) {")
+replace_once(hover_native, "    [cb addCompletedHandler:",
+    "    NSTimeInterval observedAt = NSProcessInfo.processInfo.systemUptime;\n    [cb addCompletedHandler:")
+replace_once(hover_native, "sp_hover_frame(rows, height);", "sp_hover_frame(rows, height, observedAt);")
 replace_once(hover_native, "    sp_hover_set_rects(fractions, n);", """    sp_hover_set_rects(fractions, n);
 #if !TARGET_OS_VISION
     size_t offset = 2 + (size_t)n * 6;
     size_t bytes = sp_hover_asm.count * SPH_PAYLOAD_BYTES;
     if (getenv("SP_PHONE_UI_RECTS"))
-        sp_ai_game_update(sp_hover_asm.data + offset, bytes > offset ? bytes - offset : 0);
+        sp_ai_game_update(sp_hover_asm.data + offset, bytes > offset ? bytes - offset : 0, observedAt);
 #endif""")
 
 # Stage opt-in, low-rate direct Metal game-frame readback for validated P2P packages.
@@ -225,7 +237,7 @@ replace_once(hover_lua, "        local ok, msg = pcall(scan)\n        if ok and 
                     spLastScanError = tostring(msg)
                     print("SPHover scan error: " .. spLastScanError)
                 end
-                msg = spLastRects .. spAIState()
+                msg = spLastRects .. spLastAIState
                 ok = true
             end
         end
@@ -266,7 +278,8 @@ replace_once(hover_lua, "local sinceScan = SCAN_INTERVAL",
 local aiElapsed, aiBeat, aiFrame, aiTick = 1, 0, nil, 0
 local function aiHeartbeat()
     local state = spAIState()
-    if #state ~= 12 then state = string.char(65, 73, 0, 0, 0, 0, 75, 0, 70, 0, 0, 0) end
+    if #state ~= 18 then state = string.char(65, 73, 0, 0, 0, 0, 75, 0, 70, 0, 0, 0, 78, 0, 0, 255, 255, 0) end
+    spLastAIState = state
     aiBeat = (aiBeat + 1) % 256
     local b = {65, 73, aiBeat, 0, 1}
     for i = 1, PAYLOAD_BYTES do b[5+i] = state:byte(i) or 0 end
@@ -296,7 +309,7 @@ replace_once(hover_native, "    static sph_rect rects[SPH_MAX_RECTS];",
     """    if (frame[0] == 'A' && frame[1] == 'I') {
 #if !TARGET_OS_VISION
         if (getenv("SP_PHONE_UI_RECTS") && frame[3] == 0 && frame[4] == 1)
-            sp_ai_heartbeat(frame[2], frame + 5, SPH_PAYLOAD_BYTES);
+            sp_ai_heartbeat(frame[2], frame + 5, SPH_PAYLOAD_BYTES, observedAt);
 #endif
         return;
     }
@@ -310,5 +323,5 @@ replace_once(hover_native, '    if (getenv("SP_PHONE_UI_RECTS"))\n        sp_ai_
 hover_text = hover_lua.read_text()
 state_start = hover_text.index("local function spAIState()")
 state_end = hover_text.index("\nlocal function scan()", state_start)
-hover_text = hover_text[:state_start] + Path(__file__).with_name("HealthTelemetry.lua").read_text() + "\n" + hover_text[state_end:]
+hover_text = hover_text[:state_start] + 'local spLastAIState = ""\n' + Path(__file__).with_name("HealthTelemetry.lua").read_text() + "\n" + hover_text[state_end:]
 hover_lua.write_text(hover_text)
