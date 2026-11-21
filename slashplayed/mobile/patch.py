@@ -304,7 +304,7 @@ local function aiHeartbeat()
     local progression = aiBeat % 2 == 0 and spAIProgression() or nil
     local healthBounds
     if aiBeat % 2 == 0 then
-        healthBounds = spAIVisibleHealthBounds() or string.char(65, 72, 1, 0) .. string.rep("\0", 14)
+        healthBounds = spAIVisibleHealthBounds() or string.char(65, 72, 1, 0) .. string.rep(string.char(0), 14)
     end
     return aiPacket(73, state), pose and aiPacket(80, pose) or nil, progression and aiPacket(88, progression) or nil,
         healthBounds and aiPacket(72, healthBounds) or nil

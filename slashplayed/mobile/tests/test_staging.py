@@ -23,6 +23,7 @@ assert 'SPH_MAX_RECTS * 6 + 18' in (root / "shims/appkit/sphoverstrip.h").read_t
 assert '.. spLastAIState' in (root / "addon/SPHover/SPHover.lua").read_text()
 assert 'local function aiHeartbeat()' in (root / "addon/SPHover/SPHover.lua").read_text()
 assert 'showChunk(aiFrame)' in (root / "addon/SPHover/SPHover.lua").read_text()
+assert b"\x00" not in (root / "addon/SPHover/SPHover.lua").read_bytes()
 assert 'sp_ai_heartbeat(frame[2], frame + 5, SPH_PAYLOAD_BYTES, observedAt)' in (root / "shims/appkit/sphover.m").read_text()
 assert 'sp_ai_pose_heartbeat(frame[2], frame + 5, SPH_PAYLOAD_BYTES, observedAt)' in (root / "shims/appkit/sphover.m").read_text()
 assert 'sp_ai_xp_heartbeat(frame[2], frame + 5, SPH_PAYLOAD_BYTES, observedAt)' in (root / "shims/appkit/sphover.m").read_text()
