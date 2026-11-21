@@ -241,7 +241,9 @@ assert 'sp_ai_confirm_steering(&encounter->steering, move, sample.at)' in event
 assert 'sp_ai_advance(&_encounter, observation, now, reduced, &_approachExamples, adapter)' in event
 assert 'sp_mobile_ai_yield:' in event and 'UIControlEventTouchDown' in event
 yield_method = event.split('- (void)sp_mobile_ai_yield:(id)sender {', 1)[1].split('\n}', 1)[0]
-assert '[self sp_mobile_ai_release_key]' in yield_method and '[_mobileAI stop]' in yield_method
+assert '[self sp_mobile_ai_release_key]' in yield_method and '[_mobileAI yieldToManualInput]' in yield_method
+manual_takeover = event.split('- (void)yieldToManualInput {', 1)[1].split('\n}', 1)[0]
+assert 'if (self.autonomousTest || self.modelDiagnostics || _starting || _ownsCapture) [self stop]' in manual_takeover
 assert 'NSProcessInfoThermalStateCritical' in event and 'reduced ? 0.8 : 0.4' in event
 assert 'input->_mobileAI.autonomousTest' in event and '_mobileAI.autonomousTest = NO' in event
 

@@ -216,7 +216,7 @@ static UIButton *sp_mobile_button(NSString *title, NSString *label, id owner, SE
 - (void)sp_mobile_ai_yield:(id)sender {
     ++_mobileAIKeyGeneration;
     [self sp_mobile_ai_release_key];
-    if (_mobileAI.active) [_mobileAI stop];
+    [_mobileAI yieldToManualInput];
     _mobileAIManualUntil = NSProcessInfo.processInfo.systemUptime + 1.0;
 }
 - (void)sp_mobile_jump:(BOOL)down {

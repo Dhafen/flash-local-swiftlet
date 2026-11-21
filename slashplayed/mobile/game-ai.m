@@ -122,6 +122,7 @@ static void sp_ai_heartbeat(uint8_t seq, const uint8_t *data, size_t length, NST
 @property(nonatomic, copy) void (^status)(NSString *);
 - (void)start;
 - (void)stop;
+- (void)yieldToManualInput;
 - (void)invalidateDecision;
 - (void)toggleTeaching;
 - (void)recordManualSteering:(CGPoint)delta;
@@ -176,6 +177,10 @@ static void sp_ai_note_event(void *context, const char *message) {
 }
 - (BOOL)active { return _active; }
 - (BOOL)starting { return _starting && _active; }
+
+- (void)yieldToManualInput {
+    if (self.autonomousTest || self.modelDiagnostics || _starting || _ownsCapture) [self stop];
+}
 
 - (void)toggleTeaching {
     if (_teaching) {
