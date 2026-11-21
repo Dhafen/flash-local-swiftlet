@@ -503,6 +503,14 @@ static UIButton *sp_mobile_button(NSString *title, NSString *label, id owner, SE
         SPInputView *input = weakSelf;
         if (input) [input->_mobileAI toggleTeaching];
     }];
+    UIAction *markRoute = [UIAction actionWithTitle:@"Mark straight route leg (start or end)" image:nil identifier:nil handler:^(__kindof UIAction *action) {
+        SPInputView *input = weakSelf;
+        if (input) [input->_mobileAI recordRouteMark];
+    }];
+    UIAction *clearRoute = [UIAction actionWithTitle:@"Clear recorded grind route" image:nil identifier:nil handler:^(__kindof UIAction *action) {
+        SPInputView *input = weakSelf;
+        if (input) [input->_mobileAI clearGrindRoute];
+    }];
     UIAction *aiTestMode = [UIAction actionWithTitle:@"Toggle automation on authorized test realm" image:nil identifier:nil handler:^(__kindof UIAction *action) {
         SPInputView *input = weakSelf;
         if (!input) return;
@@ -524,7 +532,8 @@ static UIButton *sp_mobile_button(NSString *title, NSString *label, id owner, SE
         [input->_mobileAIButton setTitle:input->_mobileAI.modelDiagnostics ? @"MODEL ON" : @"MODEL OFF"
             forState:UIControlStateNormal];
     }];
-    return [UIMenu menuWithTitle:@"AI options" children:@[observe, aiTest, approachTest, aiTestMode, aiModels, aiTeach]];
+    UIMenu *route = [UIMenu menuWithTitle:@"Grind route" children:@[markRoute, clearRoute]];
+    return [UIMenu menuWithTitle:@"AI options" children:@[observe, aiTest, approachTest, aiTestMode, route, aiModels, aiTeach]];
 }
 
 - (void)sp_mobile_layout:(CGRect)game top:(CGFloat)top {

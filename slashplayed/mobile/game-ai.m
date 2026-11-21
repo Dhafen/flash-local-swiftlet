@@ -7,7 +7,6 @@
 #include <stdatomic.h>
 #include <stdbool.h>
 #include "ai-encounter.h"
-#include "ai-navigation.h"
 
 static atomic_bool sp_p2p_capture_enabled;
 static atomic_uint sp_p2p_capture_epoch;
@@ -59,8 +58,15 @@ static NSTimeInterval sp_ai_pose_at;
 static void sp_ai_pose_heartbeat(uint8_t seq, const uint8_t *data, unsigned length, NSTimeInterval observedAt) {
     if (observedAt <= sp_ai_pose_at || (sp_ai_pose_at > 0 && observedAt - sp_ai_pose_at < 1.0 && seq == sp_ai_pose_seq)) return;
     sp_ai_pose = sp_ai_world_pose(data, length);
+    sp_ai_pose.observedAt = observedAt;
     sp_ai_pose_seq = seq;
     sp_ai_pose_at = observedAt;
+}
+
+static SPAIWorldPose sp_ai_game_pose(SPAINavSample sample) {
+    if (sp_ai_pose_seq == sp_ai_heartbeat_seq && sp_ai_pose.epoch == sample.evidence.position &&
+        fabs(sp_ai_pose_at - sample.at) < 0.4) return sp_ai_pose;
+    return (SPAIWorldPose){0};
 }
 
 static int sp_ai_payload_status = -1, sp_ai_state_reason = -1;
@@ -137,6 +143,8 @@ static void sp_ai_heartbeat(uint8_t seq, const uint8_t *data, size_t length, NST
 - (void)stop;
 - (void)yieldToManualInput;
 - (void)resumeFromManualInput;
+- (void)recordRouteMark;
+- (void)clearGrindRoute;
 - (void)invalidateDecision;
 - (void)toggleTeaching;
 - (void)recordManualSteering:(CGPoint)delta;
@@ -178,6 +186,8 @@ static void sp_ai_note_event(void *context, const char *message) {
     NSString *_layaState, *_lastPhase;
     NSString *_lastWorldSummary;
     SPAIEncounter _encounter;
+    SPAIRoute _grindRoute;
+    SPAIWorldPose _recordedLegStart;
     NSProcessInfoThermalState _lastThermal;
     SPAIApproachExamples _approachExamples;
     BOOL _teaching;
@@ -212,6 +222,31 @@ static void sp_ai_note_event(void *context, const char *message) {
     if (!_active || !_manualPaused) return;
     _manualResumeAt = NSProcessInfo.processInfo.systemUptime + 1.0;
     _manualPaused = NO;
+}
+
+- (void)recordRouteMark {
+    if (_active) return;
+    SPAINavSample sample = sp_ai_game_sample();
+    SPAIWorldPose pose = sp_ai_game_pose(sample);
+    NSString *status;
+    if (!sp_ai_sample_fresh(sample.at, NSProcessInfo.processInfo.systemUptime) || !pose.valid || !pose.headingKnown) {
+        status = @"ROUTE DATA";
+    } else if (!_recordedLegStart.valid) {
+        _recordedLegStart = pose;
+        status = @"LEG START";
+    } else {
+        BOOL added = sp_ai_route_append(&_grindRoute, _recordedLegStart, pose);
+        _recordedLegStart = (SPAIWorldPose){0};
+        status = added ? [NSString stringWithFormat:@"LEGS %u", _grindRoute.count] : @"LEG INVALID";
+    }
+    if (self.status) self.status(status);
+}
+
+- (void)clearGrindRoute {
+    if (_active) return;
+    _grindRoute = (SPAIRoute){0};
+    _recordedLegStart = (SPAIWorldPose){0};
+    if (self.status) self.status(@"ROUTE EMPTY");
 }
 
 - (void)toggleTeaching {
@@ -502,8 +537,7 @@ static NSArray<NSNumber *> *sp_ai_luminance(CVPixelBufferRef buffer) {
     NSString *direction = !sample.column ? @"unknown" : sample.column <= 6 ? @"left" : sample.column >= 10 ? @"right" : @"center";
     unsigned loot = sp_ai_game_corpse & (SP_CORPSE_LOOT_NONE|SP_CORPSE_LOOT_AVAILABLE);
     unsigned range = sp_ai_game_corpse & (SP_CORPSE_RANGE_OUT|SP_CORPSE_RANGE_IN);
-    BOOL poseKnown = sp_ai_pose.valid && sp_ai_pose_seq == sp_ai_heartbeat_seq &&
-        sp_ai_pose.epoch == sample.evidence.position && fabs(sp_ai_pose_at - sample.at) < 0.4;
+    SPAIWorldPose pose = sp_ai_game_pose(sample);
     NSString *summary = [NSString stringWithFormat:
         @"target=%@ identity=%@ plate=%@ position=%@ distance=%@ combat=%@ tab=%@ f12=%@ kill=%@ loot=%@ interact-range=%@ pose=%@ heading=%@",
         target, sample.evidence.target ? @"public" : @"unknown", direction,
@@ -515,7 +549,7 @@ static NSArray<NSNumber *> *sp_ai_luminance(CVPixelBufferRef buffer) {
         (sp_ai_game_corpse & SP_CORPSE_LOCAL_KILL) ? @"player-or-pet" : @"unknown",
         loot == SP_CORPSE_LOOT_AVAILABLE ? @"available" : loot == SP_CORPSE_LOOT_NONE ? @"none" : @"unknown",
         range == SP_CORPSE_RANGE_IN ? @"in" : range == SP_CORPSE_RANGE_OUT ? @"out" : @"unknown",
-        poseKnown ? @"public" : @"unknown", poseKnown && sp_ai_pose.headingKnown ? @"public" : @"unknown"];
+        pose.valid ? @"public" : @"unknown", pose.valid && pose.headingKnown ? @"public" : @"unknown"];
     if ([_lastWorldSummary isEqualToString:summary]) return;
     _lastWorldSummary = summary;
     sp_stub_log([[@"AI world: " stringByAppendingString:summary] UTF8String]);
@@ -553,7 +587,7 @@ static NSArray<NSNumber *> *sp_ai_luminance(CVPixelBufferRef buffer) {
         return sp_ai_state_reason > 0 ? [NSString stringWithFormat:@"AI DATA %d", sp_ai_state_reason] : @"AI STALE";
     }
     SPAIEncounterObservation observation = {sample, sp_ai_game_flags, sp_ai_game_hp, sp_ai_game_target_hp,
-        sp_ai_game_meta, sp_ai_game_move_keys, sp_ai_game_corpse, sp_ai_player_health};
+        sp_ai_game_meta, sp_ai_game_move_keys, sp_ai_game_corpse, sp_ai_player_health, sp_ai_game_pose(sample)};
     const char *phase = sp_ai_advance(&_encounter, observation, now, reduced, &_approachExamples, adapter);
     return [NSString stringWithUTF8String:phase];
 }
@@ -637,6 +671,7 @@ static NSArray<NSNumber *> *sp_ai_luminance(CVPixelBufferRef buffer) {
     _manualResumeAt = 0;
     _lastWorldSummary = nil;
     _encounter = (SPAIEncounter){.combatEvidence.lastHP = 255};
+    _encounter.route = _grindRoute;
     Class p2p = NSClassFromString(@"SPP2PBridge");
     SEL available = NSSelectorFromString(@"available");
     _p2pAvailable = [p2p respondsToSelector:available] && ((BOOL (*)(id,SEL))objc_msgSend)(p2p,available);

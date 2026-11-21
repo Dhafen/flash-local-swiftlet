@@ -9,6 +9,8 @@ typedef struct {
     uint8_t playerHP, targetHP, positionCounter;
     unsigned targetCommands, movementCommands, attacks, hits, lootCommands, stalls, approaches;
     bool selected, inCombat, looted, blockAllMovement, suppressDamage, rejectAttack;
+    SPAIRoute route;
+    int32_t routePositionQ4;
 } GameSimulator;
 
 static bool submit(void *context, const char *action, SPAINavSample sample, double hold) {
@@ -16,9 +18,10 @@ static bool submit(void *context, const char *action, SPAINavSample sample, doub
     assert(sample.at == game->now);
     if (!strcmp(action, "TARGET")) {
         ++game->targetCommands;
-        game->selected = !game->looted && game->now >= 2;
+        bool atSpawn = game->route.count ? game->routePositionQ4 >= 32 : game->now >= 2;
+        game->selected = !game->looted && atSpawn;
     } else if (!strcmp(action, "FORWARD")) {
-        assert(game->selected && game->targetHP > 0 && hold == 0.60);
+        assert((game->route.count || game->selected) && game->targetHP > 0 && hold == 0.60);
         ++game->movementCommands;
         game->movementEndsAt = game->now + hold;
     } else if (!strcmp(action, "ATTACK")) {
@@ -59,7 +62,8 @@ static SPAIEncounterObservation sample(GameSimulator *game) {
     if (game->movementEndsAt && game->now >= game->movementEndsAt) {
         game->movementEndsAt = 0;
         if (!game->blockAllMovement && game->movementCommands > 1) {
-            game->distance -= game->distance > 44 ? 28 : game->distance - 16;
+            if (game->selected) game->distance -= game->distance > 44 ? 28 : game->distance - 16;
+            else game->routePositionQ4 += 16;
             ++game->positionCounter;
         }
     }
@@ -79,12 +83,14 @@ static SPAIEncounterObservation sample(GameSimulator *game) {
         {game->selected ? 1 : 0, 1, SP_AI_TAB_BOUND | SP_AI_ROTATION_BOUND,
             game->selected ? game->distance : SP_AI_DISTANCE_UNKNOWN},
         game->selected && game->targetHP ? 8 : 0};
+    SPAIWorldPose pose = {.map = 0, .secondQ4 = game->routePositionQ4, .heading = 64, .epoch = 1,
+        .valid = game->route.count > 0, .headingKnown = true, .observedAt = game->now};
     return (SPAIEncounterObservation){nav, flags, game->playerHP, game->targetHP, meta, 1, corpse,
-        sp_ai_hp_known(game->playerHP) ? SP_HEALTH_PUBLIC : SP_HEALTH_RESTRICTED};
+        sp_ai_hp_known(game->playerHP) ? SP_HEALTH_PUBLIC : SP_HEALTH_RESTRICTED, pose};
 }
 
 static void run(GameSimulator *game, const char *finish, bool requireLoot) {
-    SPAIEncounter planner = {.combatEvidence.lastHP = 255};
+    SPAIEncounter planner = {.combatEvidence.lastHP = 255, .route = game->route};
     SPAIApproachExamples examples = {0};
     SPAIEncounterAdapter adapter = {game, submit, release, observe_navigation, NULL};
     bool lootConfirmed = false;
@@ -126,5 +132,20 @@ int main(void) {
     run(&protectedHealth, "HP SECRET", false);
     assert(protectedHealth.targetCommands == 0 && protectedHealth.attacks == 0 && !protectedHealth.selected);
 
+    GameSimulator waypointFarm = {.distance = 12, .playerHP = 100, .targetHP = 100};
+    SPAIWorldPose start = {.heading = 64, .epoch = 1, .valid = true, .headingKnown = true};
+    SPAIWorldPose end = start;
+    end.secondQ4 = 40;
+    assert(sp_ai_route_append(&waypointFarm.route, start, end));
+    run(&waypointFarm, "SEARCH", true);
+    assert(waypointFarm.routePositionQ4 == 32 && waypointFarm.movementCommands == 3);
+    assert(waypointFarm.hits == 2 && waypointFarm.lootCommands == 1);
+
+    GameSimulator waypointWall = {.distance = 12, .playerHP = 100, .targetHP = 100, .blockAllMovement = true,
+        .route = waypointFarm.route};
+    run(&waypointWall, "ROUTE BLOCK", false);
+    assert(waypointWall.movementCommands == 2 && waypointWall.routePositionQ4 == 0 && !waypointWall.selected);
+
     puts("Production planner simulator passed farming, wall, no damage, rejected attack and protected health");
+    puts("Recorded route simulator passed waypoint, resumed mob search, farm and route blockage");
 }

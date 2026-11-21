@@ -2,11 +2,13 @@
 #ifndef SP_AI_ENCOUNTER_H
 #define SP_AI_ENCOUNTER_H
 #include "ai-direct.h"
+#include "ai-navigation.h"
 
 typedef struct {
     SPAINavSample sample;
     uint8_t flags, hp, targetHP, meta, movementKeys, corpseEvidence;
     SPAIHealthStatus playerHealth;
+    SPAIWorldPose pose;
 } SPAIEncounterObservation;
 
 typedef struct {
@@ -27,6 +29,10 @@ typedef struct {
     SPAINavBudget navBudget;
     SPAICombatEvidence combatEvidence;
     bool recovering, probeAfterMove;
+    SPAIRoute route;
+    double routeDeadline, routeProgress, routeStartedAt;
+    unsigned routeFailures, routeMoves;
+    uint8_t routePositionEpoch;
 } SPAIEncounter;
 
 static inline void sp_ai_note(SPAIEncounterAdapter adapter, const char *message) {
@@ -37,6 +43,7 @@ static inline void sp_ai_cancel_steering(SPAIEncounter *encounter) {
     encounter->steering = (SPAISteering){0};
     encounter->pulse = (SPAINavPulse){0};
     encounter->lastPulseSample = (SPAINavSample){0};
+    encounter->routeDeadline = 0;
 }
 
 static inline void sp_ai_suspend_encounter(SPAIEncounter *encounter, SPAIEncounterAdapter adapter) {
@@ -60,6 +67,59 @@ static inline void sp_ai_stale_encounter(SPAIEncounter *encounter, SPAINavSample
     adapter.release(adapter.context);
 }
 
+static inline const char *sp_ai_follow_route(SPAIEncounter *encounter, SPAIEncounterObservation observation,
+    double now, bool reduced, SPAIEncounterAdapter adapter) {
+    SPAIWorldPose pose = observation.pose;
+    SPAIRoute *route = &encounter->route;
+    SPAIRouteDecision decision = sp_ai_route_probe(route, pose);
+    if (encounter->routeDeadline) {
+        if (decision == SP_ROUTE_OFF_ROUTE || decision == SP_ROUTE_FACE ||
+            (pose.valid && pose.epoch != encounter->routePositionEpoch)) {
+            adapter.release(adapter.context);
+            encounter->routeDeadline = 0;
+            return "ROUTE HOLD";
+        }
+        if (now < encounter->routeDeadline) return "ROUTE";
+        adapter.release(adapter.context);
+        encounter->routeDeadline = 0;
+        if (!pose.valid || pose.observedAt < encounter->routeStartedAt + 0.60) {
+            if (now < encounter->routeStartedAt + 1.8) {
+                encounter->routeDeadline = encounter->routeStartedAt + 1.8;
+                return "ROUTE";
+            }
+            ++encounter->routeFailures;
+            return "ROUTE DATA";
+        }
+        if (sp_ai_pose_distance2(pose, route->legs[route->next].end) + 16 < encounter->routeProgress)
+            encounter->routeFailures = 0;
+        else ++encounter->routeFailures;
+    }
+    switch (decision) {
+        case SP_ROUTE_COMPLETE: return "ROUTE DONE";
+        case SP_ROUTE_UNKNOWN: return "ROUTE DATA";
+        case SP_ROUTE_OFF_ROUTE: return "ROUTE HOLD";
+        case SP_ROUTE_FACE: return "FACE ROUTE";
+        case SP_ROUTE_REACHED:
+            ++route->next;
+            encounter->searchAttempts = encounter->routeFailures = encounter->routeMoves = 0;
+            return "WAYPOINT";
+        case SP_ROUTE_FORWARD: break;
+    }
+    if (encounter->routeFailures >= 2 || encounter->routeMoves >= 12) return "ROUTE BLOCK";
+    if (!sp_ai_movement_key(SP_MOVE_FORWARD, observation.movementKeys)) return "MOVE BIND";
+    if (now - encounter->routeStartedAt < (reduced ? 2.0 : 1.0)) return "ROUTE";
+    encounter->routeStartedAt = now;
+    if (!adapter.submit(adapter.context, "FORWARD", observation.sample, 0.60)) {
+        ++encounter->routeFailures;
+        return "NAV INPUT";
+    }
+    encounter->routePositionEpoch = pose.epoch;
+    encounter->routeProgress = sp_ai_pose_distance2(pose, route->legs[route->next].end);
+    encounter->routeDeadline = now + 1.2;
+    ++encounter->routeMoves;
+    return "ROUTE";
+}
+
 static inline const char *sp_ai_advance(SPAIEncounter *encounter, SPAIEncounterObservation observation,
     double now, bool reduced, const SPAIApproachExamples *examples, SPAIEncounterAdapter adapter) {
     SPAINavSample sample = observation.sample;
@@ -70,6 +130,10 @@ static inline const char *sp_ai_advance(SPAIEncounter *encounter, SPAIEncounterO
 
     uint8_t flags = observation.flags, meta = observation.meta;
     SPAIDecision decision = sp_ai_decision(true, flags, observation.hp, observation.targetHP, meta);
+    if (encounter->routeDeadline && (decision != SP_AI_TARGET || (flags & (4|32)))) {
+        adapter.release(adapter.context);
+        encounter->routeDeadline = 0;
+    }
     bool hostile = decision == SP_AI_ATTACK || decision == SP_AI_BIND;
     uint8_t target = sample.evidence.target;
     if (encounter->target != target) {
@@ -137,7 +201,11 @@ static inline const char *sp_ai_advance(SPAIEncounter *encounter, SPAIEncounterO
     }
     if (decision == SP_AI_TARGET) {
         if (!(sample.evidence.bindings & SP_AI_TAB_BOUND)) return "TAB BIND";
-        if (encounter->searchAttempts >= 4) return "NO TARGET";
+        if (encounter->searchAttempts >= 4) {
+            if (!encounter->route.count) return "NO TARGET";
+            if ((flags & (4|32)) != 0) return "ROUTE HOLD";
+            return sp_ai_follow_route(encounter, observation, now, reduced, adapter);
+        }
         if (now >= encounter->nextAction) {
             encounter->nextAction = now + 1.0;
             if (!adapter.submit(adapter.context, "TARGET", sample, 0)) return "AI INPUT";
