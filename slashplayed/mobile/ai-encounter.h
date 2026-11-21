@@ -39,7 +39,7 @@ typedef struct {
     uint8_t routeEvidenceSeq;
     SPAIWorldPose routeBefore;
     SPAIMove routeAction;
-    bool routeEvidenceArmed;
+    bool routeEvidenceArmed, routeHeadingUnconfirmed;
 } SPAIEncounter;
 
 static inline void sp_ai_note(SPAIEncounterAdapter adapter, const char *message) {
@@ -60,6 +60,7 @@ static inline void sp_ai_cancel_steering(SPAIEncounter *encounter) {
     encounter->lastPulseSample = (SPAINavSample){0};
     encounter->pulseTrainingEligible = false;
     encounter->routeDeadline = 0;
+    encounter->routeEvidenceArmed = false;
 }
 
 static inline void sp_ai_suspend_encounter(SPAIEncounter *encounter, SPAIEncounterAdapter adapter) {
@@ -99,11 +100,13 @@ static inline const char *sp_ai_follow_route(SPAIEncounter *encounter, SPAIEncou
         if (!sp_ai_movement_key(encounter->routeAction, observation.movementKeys)) {
             adapter.release(adapter.context);
             encounter->routeDeadline = 0;
+            encounter->routeEvidenceArmed = false;
             return turning ? "TURN BIND" : "MOVE BIND";
         }
         if (turning && pose.valid && sp_ai_pose_distance2(pose, encounter->routeBefore) > 9) {
             adapter.release(adapter.context);
             encounter->routeDeadline = 0;
+            encounter->routeEvidenceArmed = false;
             encounter->routeFailures = 2;
             return "ROUTE BLOCK";
         }
@@ -111,6 +114,7 @@ static inline const char *sp_ai_follow_route(SPAIEncounter *encounter, SPAIEncou
             decision == SP_ROUTE_UNKNOWN || (pose.valid && pose.epoch != encounter->routeBefore.epoch)) {
             adapter.release(adapter.context);
             encounter->routeDeadline = 0;
+            encounter->routeEvidenceArmed = false;
             if (decision == SP_ROUTE_UNKNOWN) {
                 ++encounter->routeFailures;
                 return "ROUTE DATA";
@@ -126,6 +130,7 @@ static inline const char *sp_ai_follow_route(SPAIEncounter *encounter, SPAIEncou
         if (!newEvidence && now < encounter->routeDeadline) return status;
         adapter.release(adapter.context);
         encounter->routeDeadline = 0;
+        encounter->routeEvidenceArmed = false;
         if (!newEvidence) {
             ++encounter->routeFailures;
             return "ROUTE DATA";
@@ -135,28 +140,45 @@ static inline const char *sp_ai_follow_route(SPAIEncounter *encounter, SPAIEncou
             ? pose.headingKnown && (decision == SP_ROUTE_FORWARD ||
                 sp_ai_heading_delta(leg.start.heading, pose.heading) + 2 <= encounter->routeProgress)
             : sp_ai_pose_distance2(pose, leg.end) + 16 < encounter->routeProgress;
+        if (turning && decision == SP_ROUTE_FORWARD) encounter->routeHeadingUnconfirmed = false;
         if (progressed)
             encounter->routeFailures = 0;
         else ++encounter->routeFailures;
     }
     switch (decision) {
         case SP_ROUTE_COMPLETE: return "ROUTE DONE";
-        case SP_ROUTE_UNKNOWN: return "ROUTE DATA";
-        case SP_ROUTE_OFF_ROUTE: return "ROUTE HOLD";
+        case SP_ROUTE_UNKNOWN:
+            encounter->routeEvidenceArmed = false;
+            return "ROUTE DATA";
+        case SP_ROUTE_OFF_ROUTE:
+            encounter->routeEvidenceArmed = false;
+            return "ROUTE HOLD";
         case SP_ROUTE_FACE: break;
         case SP_ROUTE_REACHED:
             ++route->next;
             encounter->searchAttempts = encounter->routeFailures = encounter->routeMoves = 0;
             encounter->routeTurns = 0;
+            encounter->routeHeadingUnconfirmed = false;
             return "WAYPOINT";
         case SP_ROUTE_FORWARD: break;
     }
     SPAIRouteLeg leg = route->legs[route->next];
     bool turning = decision == SP_ROUTE_FACE;
+    if (turning) encounter->routeEvidenceArmed = false;
     if (encounter->routeFailures >= 2 || (turning ? encounter->routeTurns >= 8 : encounter->routeMoves >= 12))
         return "ROUTE BLOCK";
     if (turning && sp_ai_pose_distance2(pose, leg.start) > SP_ROUTE_RADIUS_Q4 * SP_ROUTE_RADIUS_Q4)
         return "FACE ROUTE";
+    if (!turning && encounter->routeHeadingUnconfirmed) {
+        if (pose.observedAt <= encounter->routeStartedAt + encounter->routeHold) return "TURN ROUTE";
+        if (!encounter->routeEvidenceArmed) {
+            encounter->routeEvidenceArmed = true;
+            encounter->routeEvidenceSeq = pose.sequence;
+            return "TURN ROUTE";
+        }
+        if (pose.sequence == encounter->routeEvidenceSeq) return "TURN ROUTE";
+        encounter->routeHeadingUnconfirmed = false;
+    }
     int error = sp_ai_heading_error(leg.start.heading, pose.heading);
     SPAIMove action = turning ? (error > 0 ? SP_TURN_LEFT : SP_TURN_RIGHT) : SP_MOVE_FORWARD;
     if (!sp_ai_movement_key(action, observation.movementKeys)) return turning ? "TURN BIND" : "MOVE BIND";
@@ -176,7 +198,10 @@ static inline const char *sp_ai_follow_route(SPAIEncounter *encounter, SPAIEncou
     encounter->routeHold = hold;
     encounter->routeEvidenceArmed = false;
     encounter->routeDeadline = now + 2.6;
-    if (turning) ++encounter->routeTurns;
+    if (turning) {
+        ++encounter->routeTurns;
+        encounter->routeHeadingUnconfirmed = true;
+    }
     else ++encounter->routeMoves;
     return status;
 }

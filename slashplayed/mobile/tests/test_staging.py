@@ -296,4 +296,5 @@ assert 'sp_mobile_ai_movement_key(_mobileAIKeyboardHeld, NO)' in event
 turn_method = event.split('- (BOOL)sp_mobile_ai_hold_turn:(SPAIMove)move duration:(NSTimeInterval)duration {', 1)[1].split('\n}', 1)[0]
 assert 'sp_ai_movement_key(move, sp_ai_game_move_keys)' in turn_method
 assert 'driveAI:' not in turn_method and '[self sp_mobile_ai_schedule_release:duration]' in turn_method
+assert 'left || right ? SPFunction | SPNumericPad : 0' in event
 assert 'pressed ? SPKeyDown : SPKeyUp' in event

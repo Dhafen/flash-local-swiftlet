@@ -74,13 +74,15 @@ static inline SPAIRouteDecision sp_ai_route_probe(const SPAIRoute *route, SPAIWo
     if (!pose.valid) return SP_ROUTE_UNKNOWN;
     const SPAIRouteLeg *leg = &route->legs[route->next];
     if (pose.map != leg->start.map) return SP_ROUTE_OFF_ROUTE;
-    if (sp_ai_pose_distance2(pose, leg->end) <= SP_ROUTE_RADIUS_Q4 * SP_ROUTE_RADIUS_Q4) return SP_ROUTE_REACHED;
+    const double radius2 = SP_ROUTE_RADIUS_Q4 * SP_ROUTE_RADIUS_Q4;
+    if (sp_ai_pose_distance2(pose, leg->end) <= radius2 &&
+        (route->next + 1 == route->count || sp_ai_pose_distance2(pose, route->legs[route->next + 1].start) <= radius2))
+        return SP_ROUTE_REACHED;
     double x = (double)pose.firstQ4 - leg->start.firstQ4, y = (double)pose.secondQ4 - leg->start.secondQ4;
     double dx = (double)leg->end.firstQ4 - leg->start.firstQ4, dy = (double)leg->end.secondQ4 - leg->start.secondQ4;
     double along = x * dx + y * dy, across = x * dy - y * dx;
     double length2 = dx * dx + dy * dy;
-    if ((along < 0 && x * x + y * y > SP_ROUTE_RADIUS_Q4 * SP_ROUTE_RADIUS_Q4) ||
-        along > length2 || across * across > SP_ROUTE_RADIUS_Q4 * SP_ROUTE_RADIUS_Q4 * length2)
+    if ((along < 0 && x * x + y * y > radius2) || along > length2 || across * across > radius2 * length2)
         return SP_ROUTE_OFF_ROUTE;
     if (!pose.headingKnown) return SP_ROUTE_UNKNOWN;
     return sp_ai_heading_delta(leg->start.heading, pose.heading) <= 8 ? SP_ROUTE_FORWARD : SP_ROUTE_FACE;

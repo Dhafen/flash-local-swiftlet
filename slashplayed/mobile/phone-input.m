@@ -697,7 +697,7 @@ static void sp_mobile_ai_movement_key(unsigned char key, BOOL pressed) {
     event->keyCode = left ? 0x7B : right ? 0x7C : sp_soft_mac_code(key);
     event->characters = characters;
     event->charactersIgnoringModifiers = characters;
-    event->modifierFlags = 0;
+    event->modifierFlags = left || right ? SPFunction | SPNumericPad : 0;
     BOOL previousTyping = sp_soft_typing;
     sp_soft_typing = YES;
     sp_post(event);
