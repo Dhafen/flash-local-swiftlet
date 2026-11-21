@@ -7,6 +7,15 @@
 #include "ai-strip.h"
 #include "ai-movement.h"
 
+static void sp_ai_restriction_heartbeat(const uint8_t *bytes, unsigned length) {
+    static SPRuntimeRestriction previous;
+    SPRuntimeRestriction restriction = sp_ai_strip_restriction(bytes, length);
+    if (!restriction.kind || (restriction.kind == previous.kind && !strcmp(restriction.action, previous.action))) return;
+    previous = restriction;
+    sp_stub_log([[NSString stringWithFormat:@"SPHover restriction: %s action=%s",
+        restriction.kind == 1 ? "forbidden" : "blocked", restriction.action] UTF8String]);
+}
+
 static atomic_bool sp_p2p_capture_enabled;
 static atomic_bool sp_ai_health_capture_enabled;
 static atomic_uint sp_ai_health_capture_epoch;

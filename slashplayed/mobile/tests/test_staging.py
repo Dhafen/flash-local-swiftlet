@@ -30,6 +30,7 @@ assert 'sp_ai_xp_heartbeat(frame[2], frame + 5, aiLength, observedAt)' in (root 
 hover = (root / "shims/appkit/sphover.m").read_text()
 assert 'sp_ai_strip_payload_length(frame + 5, SPH_PAYLOAD_BYTES)' in hover
 assert 'sp_ai_health_heartbeat(frame[2], frame + 5, aiLength, observedAt)' in hover
+assert 'sp_ai_restriction_heartbeat(frame + 5, SPH_PAYLOAD_BYTES)' in hover
 assert 'sourceSize:MTLSizeMake(width,SP_HEALTH_SCAN_ROWS,1)' in hover
 encounter_advance = event.split('- (NSString *)advance:(SPAINavSample)sample', 1)[1].split('\n}', 1)[0]
 assert 'sp_ai_health_visual_result' not in encounter_advance

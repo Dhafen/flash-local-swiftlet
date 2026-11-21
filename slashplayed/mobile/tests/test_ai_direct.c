@@ -35,6 +35,21 @@ static void test_padded_observation_strip(void) {
     assert(!sp_ai_strip_payload_length(pose, sizeof pose));
 }
 
+static void test_restriction_strip(void) {
+    uint8_t packet[113] = {'A', 'E', 1, 1, 0};
+    const char action[] = "SetPreferredGamepadInteractTarget()";
+    packet[4] = sizeof action - 1;
+    memcpy(packet + 5, action, sizeof action - 1);
+    SPRuntimeRestriction blocked = sp_ai_strip_restriction(packet, sizeof packet);
+    assert(blocked.kind == 1 && strcmp(blocked.action, action) == 0);
+    assert(!sp_ai_strip_restriction(packet, 7).kind);
+    packet[5] = '\n';
+    assert(!sp_ai_strip_restriction(packet, sizeof packet).kind);
+    packet[5] = 'S';
+    packet[112] = 1;
+    assert(!sp_ai_strip_restriction(packet, sizeof packet).kind);
+}
+
 typedef struct {
     const char *lastAction;
     unsigned submissions, releases, outcomes;
@@ -453,6 +468,7 @@ static void test_route_turn_requires_binding_and_confirmed_heading(void) {
 }
 
 int main(void) {
+    test_restriction_strip();
     test_movement_ownership();
     test_padded_observation_strip();
     SPHealthReference hp[] = {{1.0, 27}, {1.5, 27}};

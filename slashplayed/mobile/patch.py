@@ -117,7 +117,8 @@ replace_once(event, "    sp_hover_count = n;\n    [sp_hover_layer setNeedsLayout
     [sp_hover_layer setNeedsLayout];""")
 hover = ROOT / "addon/SPHover/SPHover.lua"
 hover.with_name("SPHover.vision.lua").write_bytes(hover.read_bytes())
-hover.write_text("SPPhoneTouchRects = true\n" + hover.read_text())
+restrictions = Path(__file__).with_name("SPHoverRestrictions.lua").read_text()
+hover.write_text("SPPhoneTouchRects = true\n" + restrictions + "\n" + hover.read_text())
 replace_once(hover, "    local f = EnumerateFrames()",
              """    local function addPanel(frame)
         if not frame or isForbidden(frame) or not frame.IsProtected or frame:IsProtected()
@@ -336,17 +337,25 @@ replace_once(hover_lua, "    if #chunks > 0 and (#chunks > 1 or chunkIndex == 0)
             showChunk(aiHealthFrame)
             return
         end
+        if spHoverRestriction and aiTick % 16 == 14 then
+            showChunk(aiPacket(69, spHoverRestriction))
+            return
+        end
     end
     if #chunks > 0 and (#chunks > 1 or chunkIndex == 0) then""")
 # With single-chunk UI messages, redraw the rect strip after a heartbeat too.
 replace_once(hover_lua, "if #chunks > 0 and (#chunks > 1 or chunkIndex == 0) then",
     "if #chunks > 0 and (SPPhoneTouchRects or #chunks > 1 or chunkIndex == 0) then")
 replace_once(strip_header, "if (frame[0] != 'V' || frame[1] != 'W') return 0;",
-    "if (!((frame[0] == 'V' && frame[1] == 'W') || (frame[0] == 'A' && (frame[1] == 'I' || frame[1] == 'P' || frame[1] == 'X' || frame[1] == 'H')))) return 0;")
+    "if (!((frame[0] == 'V' && frame[1] == 'W') || (frame[0] == 'A' && (frame[1] == 'I' || frame[1] == 'P' || frame[1] == 'X' || frame[1] == 'H' || frame[1] == 'E')))) return 0;")
 replace_once(hover_native, "    static sph_rect rects[SPH_MAX_RECTS];",
-    """    if (frame[0] == 'A' && (frame[1] == 'I' || frame[1] == 'P' || frame[1] == 'X' || frame[1] == 'H')) {
+    """    if (frame[0] == 'A' && (frame[1] == 'I' || frame[1] == 'P' || frame[1] == 'X' || frame[1] == 'H' || frame[1] == 'E')) {
 #if !TARGET_OS_VISION
         if (getenv("SP_PHONE_UI_RECTS") && frame[3] == 0 && frame[4] == 1) {
+            if (frame[1] == 'E') {
+                sp_ai_restriction_heartbeat(frame + 5, SPH_PAYLOAD_BYTES);
+                return;
+            }
             _Static_assert(SPH_PAYLOAD_BYTES >= SP_AI_STRIP_RECORD_BYTES, "AI record exceeds strip capacity");
             unsigned aiLength = sp_ai_strip_payload_length(frame + 5, SPH_PAYLOAD_BYTES);
             if (!aiLength) return;
