@@ -192,6 +192,26 @@ local function spAIFinite(value)
         and value ~= math.huge and value ~= -math.huge
 end
 
+local function spAIU32(value)
+    return string.char(math.floor(value / 16777216) % 256, math.floor(value / 65536) % 256,
+        math.floor(value / 256) % 256, value % 256)
+end
+
+local function spAIPlayerPose(first, second, map, epoch)
+    if not spAIFinite(first) or not spAIFinite(second) or not spAIFinite(map) or epoch == 0
+        or map < 0 or map >= 4294967296 or map % 1 ~= 0 then return end
+    local a, b = math.floor(first * 4 + 0.5), math.floor(second * 4 + 0.5)
+    if a < -2147483648 or a > 2147483647 or b < -2147483648 or b > 2147483647 then return end
+    local flags, heading = 1, 0
+    if type(GetPlayerFacing) == "function" then
+        local ok, facing = pcall(GetPlayerFacing)
+        if ok and spAIFinite(facing) and facing >= 0 and facing <= 2 * math.pi then
+            flags, heading = 3, math.floor(facing * 128 / math.pi + 0.5) % 256
+        end
+    end
+    return string.char(65, 80, 1, flags) .. spAIU32(map) .. spAIU32(a) .. spAIU32(b) .. string.char(heading, epoch)
+end
+
 local function spAIPosition(unit)
     if type(UnitPosition) ~= "function" then return end
     local ok, x, y, _, map = pcall(UnitPosition, unit)
@@ -238,7 +258,8 @@ local function spAIMotion(foeID)
         end
     end
     spAIMotionSource = source
-    return source, spAIMotionCounter, source == 1 and spAIPositionEpoch or 0, distance
+    local epoch = source == 1 and spAIPositionEpoch or 0
+    return source, spAIMotionCounter, epoch, distance, spAIPlayerPose(x, y, map, epoch)
 end
 
 -- Health is optional. All decision flags must be public and known.
@@ -262,7 +283,7 @@ local function spAIState()
         end
         error("death API unavailable")
     end
-    local ok, state = pcall(function()
+    local ok, state, pose = pcall(function()
         if not boolValue(UnitExists("player")) then return unavailable(1) end
         local flags = 1
         stage = 4
@@ -320,7 +341,7 @@ local function spAIState()
             spAITargetEpoch = spAITargetEpoch % 255 + 1
             spAIPreviousTarget = foeID
         end
-        local motionSource, motionCounter, positionEpoch, distance = spAIMotion(foeID)
+        local motionSource, motionCounter, positionEpoch, distance, worldPose = spAIMotion(foeID)
         local bindings = (spAIBinding("TAB") == "TARGETNEARESTENEMY" and 1 or 0)
             + (rotation == "CLICK TactaraMainButton:LeftButton" and 2 or 0)
         local looted = targetDead and foeID and foeID == spAILootedTarget and 1 or 0
@@ -332,8 +353,8 @@ local function spAIState()
         local healthStatus = 64 + spAIHealthStatus(hp, hpReason) * 4 + targetHealth * 16
         return string.char(65, 73, flags, hp or 255, targetHP, meta, 75, spAIMovementBindings(),
             70, motionSource, motionCounter, corpseEvidence, 78, foeID and spAITargetEpoch or 0, positionEpoch,
-            math.floor(distance / 256), distance % 256, bindings + healthStatus)
+            math.floor(distance / 256), distance % 256, bindings + healthStatus), worldPose
     end)
     if not ok then spAICombatTarget = nil; spAIPreviousTarget = nil; return unavailable(stage) end
-    return state
+    return state, pose
 end

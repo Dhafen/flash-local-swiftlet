@@ -29,6 +29,8 @@ Hämta spconsole.log från Slashplayeds dokumentmapp under **På min iPhone** vi
 
 För ett observationsprov, starta AI utan att slå på autonomt testläge eller modelldiagnostik. Stå först utan mål och välj sedan en synlig NPC manuellt. Jämför hur `AI health evidence` skiljer `public`, `restricted`, `unavailable` och `absent`. `AI world` visar om målets identitet, nameplate och avstånd kunde läsas. Skyddad spelarhälsa ger `HP SECRET` i det autonoma testläget och blockerar input.
 
+För vägpunktstelemetri, kontrollera även `pose=public` och `heading=public` när du står still, vrider karaktären, går framåt och byter område. Loggraden visar tillgänglighet utan att skriva ut råa koordinater. Det separata AP-paketet och den ordinarie spelstatusen måste ha samma sekvens och positionsepok. Testa att skyddad eller saknad riktning lämnar `heading=unknown`. Axlarna från `UnitPosition` transporteras i API:ets ordning. Kalibrera deras relation till spelarens riktning innan de används för att styra rörelse.
+
 Enhetsprov den 21 november 2026 på `910380a` visade `player=restricted` med `target=absent` före strid. Spelarposition var offentlig och Tab och F12 var verifierat bundna. På det bygget behöver du välja målet före AI-knappen, eftersom ett manuellt tryck annars stänger observationen.
 
 Enhetsloggen från samma dag visar att iOS gick från FAIR till SERIOUS mellan 12.57 och 13.03. AI visade tidigare HEAT PAUSE fast observationen fortsatte. WoW låg nära 60 FPS även före AI-start. Inga fångst- eller modellmätningar loggades runt övergången. Loggen visar temperaturförloppet men räcker inte för att fördela kostnaden mellan spelrendering och telemetri.

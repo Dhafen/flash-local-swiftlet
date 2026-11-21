@@ -7,6 +7,7 @@
 #include <stdatomic.h>
 #include <stdbool.h>
 #include "ai-encounter.h"
+#include "ai-navigation.h"
 
 static atomic_bool sp_p2p_capture_enabled;
 static atomic_uint sp_p2p_capture_epoch;
@@ -52,6 +53,16 @@ static SPAIDecision sp_ai_current_decision(NSTimeInterval now) {
         sp_ai_game_flags,sp_ai_game_hp,sp_ai_game_target_hp,sp_ai_game_meta);
 }
 static uint8_t sp_ai_heartbeat_seq;
+static uint8_t sp_ai_pose_seq;
+static SPAIWorldPose sp_ai_pose;
+static NSTimeInterval sp_ai_pose_at;
+static void sp_ai_pose_heartbeat(uint8_t seq, const uint8_t *data, unsigned length, NSTimeInterval observedAt) {
+    if (observedAt <= sp_ai_pose_at || (sp_ai_pose_at > 0 && observedAt - sp_ai_pose_at < 1.0 && seq == sp_ai_pose_seq)) return;
+    sp_ai_pose = sp_ai_world_pose(data, length);
+    sp_ai_pose_seq = seq;
+    sp_ai_pose_at = observedAt;
+}
+
 static int sp_ai_payload_status = -1, sp_ai_state_reason = -1;
 static void sp_ai_game_update(const uint8_t *data, size_t length, NSTimeInterval observedAt) {
     if (observedAt <= sp_ai_game_at) return;
@@ -491,8 +502,10 @@ static NSArray<NSNumber *> *sp_ai_luminance(CVPixelBufferRef buffer) {
     NSString *direction = !sample.column ? @"unknown" : sample.column <= 6 ? @"left" : sample.column >= 10 ? @"right" : @"center";
     unsigned loot = sp_ai_game_corpse & (SP_CORPSE_LOOT_NONE|SP_CORPSE_LOOT_AVAILABLE);
     unsigned range = sp_ai_game_corpse & (SP_CORPSE_RANGE_OUT|SP_CORPSE_RANGE_IN);
+    BOOL poseKnown = sp_ai_pose.valid && sp_ai_pose_seq == sp_ai_heartbeat_seq &&
+        sp_ai_pose.epoch == sample.evidence.position && fabs(sp_ai_pose_at - sample.at) < 0.4;
     NSString *summary = [NSString stringWithFormat:
-        @"target=%@ identity=%@ plate=%@ position=%@ distance=%@ combat=%@ tab=%@ f12=%@ kill=%@ loot=%@ interact-range=%@",
+        @"target=%@ identity=%@ plate=%@ position=%@ distance=%@ combat=%@ tab=%@ f12=%@ kill=%@ loot=%@ interact-range=%@ pose=%@ heading=%@",
         target, sample.evidence.target ? @"public" : @"unknown", direction,
         sample.evidence.position && sample.motion.source == SP_MOTION_POSITION ? @"public" : @"unknown",
         sample.evidence.distance == SP_AI_DISTANCE_UNKNOWN ? @"unknown" : @"public",
@@ -501,7 +514,8 @@ static NSArray<NSNumber *> *sp_ai_luminance(CVPixelBufferRef buffer) {
         (sample.evidence.bindings & SP_AI_ROTATION_BOUND) ? @"verified" : @"unknown",
         (sp_ai_game_corpse & SP_CORPSE_LOCAL_KILL) ? @"player-or-pet" : @"unknown",
         loot == SP_CORPSE_LOOT_AVAILABLE ? @"available" : loot == SP_CORPSE_LOOT_NONE ? @"none" : @"unknown",
-        range == SP_CORPSE_RANGE_IN ? @"in" : range == SP_CORPSE_RANGE_OUT ? @"out" : @"unknown"];
+        range == SP_CORPSE_RANGE_IN ? @"in" : range == SP_CORPSE_RANGE_OUT ? @"out" : @"unknown",
+        poseKnown ? @"public" : @"unknown", poseKnown && sp_ai_pose.headingKnown ? @"public" : @"unknown"];
     if ([_lastWorldSummary isEqualToString:summary]) return;
     _lastWorldSummary = summary;
     sp_stub_log([[@"AI world: " stringByAppendingString:summary] UTF8String]);

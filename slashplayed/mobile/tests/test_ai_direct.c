@@ -1,6 +1,7 @@
 #include <assert.h>
 #include <string.h>
 #include "../ai-encounter.h"
+#include "../ai-navigation.h"
 
 typedef struct {
     const char *lastAction;
@@ -299,6 +300,16 @@ static void test_manual_takeover_preserves_encounter(void) {
 }
 
 int main(void) {
+    uint8_t posePacket[] = {65, 80, 1, 3, 0, 0, 0, 0, 255, 255, 255, 251, 0, 0, 0, 8, 64, 7};
+    SPAIWorldPose pose = sp_ai_world_pose(posePacket, sizeof posePacket);
+    assert(pose.valid && pose.headingKnown && pose.map == 0 && pose.firstQ4 == -5 && pose.secondQ4 == 8);
+    assert(pose.heading == 64 && pose.epoch == 7);
+    assert(!sp_ai_world_pose(posePacket, sizeof posePacket - 1).valid);
+    posePacket[3] = 1;
+    pose = sp_ai_world_pose(posePacket, sizeof posePacket);
+    assert(pose.valid && !pose.headingKnown);
+    posePacket[17] = 0;
+    assert(!sp_ai_world_pose(posePacket, sizeof posePacket).valid);
     test_manual_takeover_preserves_encounter();
     test_forward_probe();
     test_encounter_adapter();

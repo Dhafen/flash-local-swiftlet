@@ -2,7 +2,7 @@ local path = assert(arg[1])
 local f = assert(io.open(path, "r"))
 local source = f:read("*a")
 f:close()
-local read = assert(loadstring(source .. "\nreturn spReadHealthPercent"))()
+local read, playerPose = assert(loadstring(source .. "\nreturn spReadHealthPercent, spAIPlayerPose"))()
 local secret = {}
 issecretvalue = function(value) return value == secret end
 canaccessvalue = function(value) return value ~= secret end
@@ -29,6 +29,16 @@ reset(val(0/0), val(-1), val(100)); check(nil, "unavailable")
 issecretvalue = nil
 reset(val(secret), val(secret), val(100)); check(nil, "restricted")
 print("health telemetry tests passed")
+GetPlayerFacing = val(math.pi / 2)
+local pose = assert(playerPose(-1.25, 2, 0, 7))
+local expected = string.char(65, 80, 1, 3, 0, 0, 0, 0, 255, 255, 255, 251, 0, 0, 0, 8, 64, 7)
+assert(pose == expected, "signed position, map zero and heading must survive encoding")
+GetPlayerFacing = val(secret)
+-- Retain coordinates if only the heading is restricted.
+issecretvalue = function(value) return value == secret end
+assert(assert(playerPose(0, 0, 1, 7)):byte(4) == 1)
+assert(playerPose(secret, 0, 1, 7) == nil)
+assert(playerPose(0, 0, 0, 0) == nil)
 
 -- Flags must survive protected health but protected attackability must fail closed.
 local state = assert(loadstring(source .. "\nreturn spAIState"))()
