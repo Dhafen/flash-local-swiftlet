@@ -27,6 +27,8 @@ En deterministisk planerare avgör uppgift och håller reda på pågående handl
 
 Skyddad hälsa förblir okänd i WoW:s addon-API och SPHover. En ren läsning av användarens synliga egen hälsomätare är en möjlig separat observationskälla. Den ska avvisa förväxlade, dolda och inaktuella bilder. [Core ML](https://developer.apple.com/documentation/coreml) kan använda CPU, GPU och Neural Engine. Kör jämförbara mätningar på telefonen för bildläsning, inferens, minnestopp, termik och felklassificering innan beslut styrs av en sådan observation.
 
+Det nya observationsläget **Observe visible player health** testar en första referens utan Core ML. Lua transporterar fyra offentliga koordinater för den redan synliga spelarmätaren. Metal läser tre bildrader i ett smalt utsnitt högst en gång per sekund vid normal temperatur. C-klassificeraren kräver sammanhängande grönt från vänster och överensstämmelse mellan raderna. Helt mörkt utsnitt, annan färg eller inkonsekventa rader ger okänt. Verifieringen använder syntetiska pixlar och mockad geometri. Visuell uppskattning används ännu enbart i diagnostik och offentligt skyddad HP fortsätter blockera den autonoma loopen.
+
 ### Den kompakta modellen i koden
 
 `SPAIApproachModel` lagrar åtta 16-bitars räknare, totalt 16 byte för parametrarna. Den lär en utjämnad framgångsandel för framåt och sidsteg i två tydliga situationer där målplattan ligger nära bildens mitt. Underlaget är samma måls bekräftade avstånd, förflyttning eller förbättrade centrering. Den får föreslå framåt i stället för sidsteg först efter minst sex mätbara försök per rörelse och en beräknad fördel på minst 25 procentenheter. Skyddade värden, okänt avstånd, målbyte och saknade positionsutfall räknas inte som träningsdata.

@@ -2,7 +2,8 @@ local path = assert(arg[1])
 local f = assert(io.open(path, "r"))
 local source = f:read("*a")
 f:close()
-local read, playerPose, progression = assert(loadstring(source .. "\nreturn spReadHealthPercent, spAIPlayerPose, spAIProgression"))()
+local read, playerPose, progression, healthBounds = assert(loadstring(source ..
+    "\nreturn spReadHealthPercent, spAIPlayerPose, spAIProgression, spAIVisibleHealthBounds"))()
 local secret = {}
 issecretvalue = function(value) return value == secret end
 canaccessvalue = function(value) return value ~= secret end
@@ -50,6 +51,16 @@ assert(progression():byte(4) == 2)
 C_QuestLog = {GetNumQuestLogEntries = function() error("not available") end}
 assert(progression() == nil)
 print("optional public XP and quest count tests passed")
+UIParent = {GetWidth = val(1000), GetHeight = val(500), GetEffectiveScale = val(1)}
+WolkaraMobilePlayer = {health = {IsForbidden = val(false), IsVisible = val(true), GetEffectiveAlpha = val(1),
+    GetEffectiveScale = val(1), GetRect = function() return 100, 400, 200, 25 end}}
+assert(assert(healthBounds()):sub(1, 4) == string.char(65, 72, 1, 1))
+WolkaraMobilePlayer.health.IsVisible = val(false)
+assert(healthBounds() == nil)
+WolkaraMobilePlayer.health.IsVisible = val(true)
+WolkaraMobilePlayer.health.GetRect = function() return secret, 400, 200, 25 end
+assert(healthBounds() == nil)
+print("visible player health geometry tests passed")
 
 -- Flags must survive protected health but protected attackability must fail closed.
 local state = assert(loadstring(source .. "\nreturn spAIState"))()

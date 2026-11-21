@@ -8,8 +8,21 @@
 #include <stdbool.h>
 #include "ai-encounter.h"
 #include "ai-progression.h"
+#include "ai-health-vision.h"
 
 static atomic_bool sp_p2p_capture_enabled;
+static atomic_bool sp_ai_health_capture_enabled;
+static atomic_uint sp_ai_health_capture_epoch;
+static _Atomic(uint64_t) sp_ai_health_bounds, sp_ai_health_bounds_ms;
+static uint8_t sp_ai_health_visual_result = SP_VISUAL_HP_UNKNOWN;
+static NSTimeInterval sp_ai_health_visual_at;
+static void sp_ai_health_enable(BOOL enabled) {
+    if (atomic_load(&sp_ai_health_capture_enabled) == enabled) return;
+    atomic_fetch_add(&sp_ai_health_capture_epoch, 1);
+    atomic_store(&sp_ai_health_capture_enabled, enabled);
+    sp_ai_health_visual_result = SP_VISUAL_HP_UNKNOWN;
+    sp_ai_health_visual_at = 0;
+}
 static atomic_uint sp_p2p_capture_epoch;
 static NSData *sp_p2p_latest_frame;
 static NSTimeInterval sp_p2p_latest_at;
@@ -77,6 +90,8 @@ static SPAIWorldPose sp_ai_pose;
 static SPAIProgression sp_ai_progress;
 static NSTimeInterval sp_ai_pose_at;
 static NSTimeInterval sp_ai_xp_at;
+static uint8_t sp_ai_health_seq;
+static NSTimeInterval sp_ai_health_at;
 static void sp_ai_pose_heartbeat(uint8_t seq, const uint8_t *data, unsigned length, NSTimeInterval observedAt) {
     if (observedAt <= sp_ai_pose_at || (sp_ai_pose_at > 0 && observedAt - sp_ai_pose_at < 1.0 && seq == sp_ai_pose_seq)) return;
     sp_ai_pose = sp_ai_world_pose(data, length);
@@ -97,6 +112,20 @@ static void sp_ai_xp_heartbeat(uint8_t seq, const uint8_t *data, unsigned length
     sp_ai_progress = sp_ai_progression(data, length);
     sp_ai_xp_seq = seq;
     sp_ai_xp_at = observedAt;
+}
+
+static void sp_ai_health_heartbeat(uint8_t seq, const uint8_t *data, unsigned length, NSTimeInterval observedAt) {
+    if (observedAt <= sp_ai_health_at || (sp_ai_health_at > 0 && observedAt - sp_ai_health_at < 2.0 && seq == sp_ai_health_seq))
+        return;
+    sp_ai_health_seq = seq;
+    sp_ai_health_at = observedAt;
+    uint64_t bounds = sp_ai_health_region(data, length);
+    if (atomic_exchange(&sp_ai_health_bounds, bounds) != bounds) {
+        atomic_fetch_add(&sp_ai_health_capture_epoch, 1);
+        sp_ai_health_visual_result = SP_VISUAL_HP_UNKNOWN;
+        sp_ai_health_visual_at = 0;
+    }
+    atomic_store(&sp_ai_health_bounds_ms, (uint64_t)(observedAt * 1000));
 }
 
 static int sp_ai_payload_status = -1, sp_ai_state_reason = -1;
@@ -168,6 +197,7 @@ static void sp_ai_heartbeat(uint8_t seq, const uint8_t *data, size_t length, NST
 @property(nonatomic) BOOL autonomousTest;
 @property(nonatomic) BOOL observationSelected;
 @property(nonatomic) BOOL modelDiagnostics;
+@property(nonatomic) BOOL healthDiagnostics;
 @property(nonatomic, copy) BOOL (^action)(NSString *, CGPoint, NSTimeInterval, NSTimeInterval);
 @property(nonatomic, copy) void (^releaseInput)(void);
 @property(nonatomic, copy) void (^status)(NSString *);
@@ -252,6 +282,7 @@ static void sp_ai_note_event(void *context, const char *message) {
         sp_ai_navigation_outcome, sp_ai_note_event};
     sp_ai_suspend_encounter(&_encounter, adapter);
     sp_p2p_enable(NO);
+    sp_ai_health_enable(NO);
     [self invalidateDecision];
     [self showPhase:@"AI PAUSED"];
 }
@@ -398,6 +429,7 @@ static NSArray<NSNumber *> *sp_ai_luminance(CVPixelBufferRef buffer) {
     _visualPreviewStatus = nil;
     _visualPreviewAt = 0;
     sp_p2p_enable(NO);
+    sp_ai_health_enable(NO);
     ++_run;
     @synchronized(self) { _captureRun = 0; _busy = NO; }
     if (self.releaseInput) self.releaseInput();
@@ -679,6 +711,9 @@ static NSArray<NSNumber *> *sp_ai_luminance(CVPixelBufferRef buffer) {
     BOOL paused = _manualPaused || (_manualResumeAt > 0 && (!fresh || sample.at <= _manualResumeAt));
     if (!paused) _manualResumeAt = 0;
     BOOL preview = diagnosticsRequested && !paused && thermal == NSProcessInfoThermalStateNominal;
+    BOOL healthDiag = self.healthDiagnostics && !self.autonomousTest;
+    BOOL healthPreview = healthDiag && !paused && fresh && thermal == NSProcessInfoThermalStateNominal;
+    sp_ai_health_enable(healthPreview);
     NSTimeInterval interval = reduced ? 0.8 : 0.4;
     if (thermal != _lastThermal || !_lastPhase) {
         _lastThermal = thermal;
@@ -705,6 +740,12 @@ static NSArray<NSNumber *> *sp_ai_luminance(CVPixelBufferRef buffer) {
         [self showPhase:@"AI PAUSED"];
     } else if (self.autonomousTest) {
         [self showPhase:[self advance:sample now:now reduced:reduced]];
+    } else if (healthDiag) {
+        NSString *status = !healthPreview ? (fresh ? @"HP PAUSED" : @"AI STALE") : @"HP NO VIEW";
+        if (healthPreview && sp_ai_health_visual_at > 0 && now - sp_ai_health_visual_at < 2.0 &&
+            sp_ai_health_visual_result != SP_VISUAL_HP_UNKNOWN)
+            status = [NSString stringWithFormat:@"HP≈%u%%", (unsigned)sp_ai_health_visual_result];
+        [self showPhase:status];
     } else if (preview) {
         if (fresh) {
             SPAIDecision decision = sp_ai_current_decision(now);

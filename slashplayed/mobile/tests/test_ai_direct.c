@@ -3,6 +3,7 @@
 #include "../ai-encounter.h"
 #include "../ai-navigation.h"
 #include "../ai-progression.h"
+#include "../ai-health-vision.h"
 
 typedef struct {
     const char *lastAction;
@@ -343,6 +344,22 @@ static void test_route_stops_when_pose_disappears(void) {
 }
 
 int main(void) {
+    uint8_t health[3][64][4] = {0};
+    for (unsigned row = 0; row < 3; ++row)
+        for (unsigned x = 0; x < 64; ++x) {
+            health[row][x][0] = 29;
+            health[row][x][1] = x < 40 ? 170 : 29;
+            health[row][x][2] = 29;
+        }
+    assert(sp_ai_visible_health(&health[0][0][0], 64, 64 * 4, true) == 63);
+    memset(health[1], 255, sizeof health[1]);
+    assert(sp_ai_visible_health(&health[0][0][0], 64, 64 * 4, true) == SP_VISUAL_HP_UNKNOWN);
+    uint8_t region[] = {65, 72, 1, 1, 0, 10, 0, 20, 0, 150, 0, 75, 0, 0, 0, 0, 0, 0};
+    assert(sp_ai_health_region(region, sizeof region) == UINT64_C(0x000a00140096004b));
+    region[3] = 0;
+    assert(sp_ai_health_region(region, sizeof region) == 0);
+    memset(health, 0, sizeof health);
+    assert(sp_ai_visible_health(&health[0][0][0], 64, 64 * 4, true) == SP_VISUAL_HP_UNKNOWN);
     test_route_stops_when_pose_disappears();
     test_approach_model_requires_measured_benefit();
     uint8_t xpPacket[] = {65, 88, 1, 3, 0, 0, 3, 82, 0, 0, 4, 176, 0, 6, 0, 4, 0, 0};

@@ -241,6 +241,29 @@ local function spAIProgression()
         .. string.char(math.floor(level / 256), level % 256, math.floor(quests / 256), quests % 256, 0, 0)
 end
 
+local function spAIVisibleHealthBounds()
+    local ok, bounds = pcall(function()
+        local player = _G.WolkaraMobilePlayer
+        local bar = player and player.health
+        if not bar or bar:IsForbidden() or not bar:IsVisible() or bar:GetEffectiveAlpha() < 0.8 then return end
+        local left, bottom, width, height = bar:GetRect()
+        local rootScale, scale = UIParent:GetEffectiveScale(), bar:GetEffectiveScale()
+        local w, h = UIParent:GetWidth() * rootScale, UIParent:GetHeight() * rootScale
+        if not spAIFinite(left) or not spAIFinite(bottom) or not spAIFinite(width) or not spAIFinite(height) or
+            not spAIFinite(scale) or not spAIFinite(w) or not spAIFinite(h) or
+            scale <= 0 or w <= 0 or h <= 0 or width <= 0 or height <= 0 then return end
+        local l, t = left * scale / w, 1 - (bottom + height) * scale / h
+        local r, b = (left + width) * scale / w, 1 - bottom * scale / h
+        if l < 0 or t < 0 or r > 1 or b > 1 then return end
+        local function q12(value)
+            local q = math.floor(4095 * value + 0.5)
+            return string.char(math.floor(q / 256), q % 256)
+        end
+        return string.char(65, 72, 1, 1) .. q12(l) .. q12(t) .. q12(r) .. q12(b) .. string.rep("\0", 6)
+    end)
+    return ok and bounds or nil
+end
+
 local function spAIPlayerPose(first, second, map, epoch)
     if not spAIFinite(first) or not spAIFinite(second) or not spAIFinite(map) or epoch == 0
         or map < 0 or map >= 4294967296 or map % 1 ~= 0 then return end

@@ -497,6 +497,7 @@ static UIButton *sp_mobile_button(NSString *title, NSString *label, id owner, SE
         input->_mobileAI.autonomousTest = NO;
         input->_mobileAI.observationSelected = YES;
         input->_mobileAI.modelDiagnostics = NO;
+        input->_mobileAI.healthDiagnostics = NO;
         input->_mobileAIButton.showsMenuAsPrimaryAction = NO;
         [input->_mobileAIButton setTitle:@"OBS READY" forState:UIControlStateNormal];
     }];
@@ -536,14 +537,26 @@ static UIButton *sp_mobile_button(NSString *title, NSString *label, id owner, SE
         if (!input) return;
         [input->_mobileAI stop];
         input->_mobileAI.modelDiagnostics = !input->_mobileAI.modelDiagnostics;
+        input->_mobileAI.healthDiagnostics = NO;
         input->_mobileAI.autonomousTest = NO;
         input->_mobileAI.observationSelected = YES;
         input->_mobileAIButton.showsMenuAsPrimaryAction = NO;
         [input->_mobileAIButton setTitle:input->_mobileAI.modelDiagnostics ? @"MODEL ON" : @"MODEL OFF"
             forState:UIControlStateNormal];
     }];
+    UIAction *inspectHealth = [UIAction actionWithTitle:@"Observe visible player health" image:nil identifier:nil handler:^(__kindof UIAction *action) {
+        SPInputView *input = weakSelf;
+        if (!input) return;
+        [input->_mobileAI stop];
+        input->_mobileAI.healthDiagnostics = YES;
+        input->_mobileAI.modelDiagnostics = NO;
+        input->_mobileAI.autonomousTest = NO;
+        input->_mobileAI.observationSelected = YES;
+        input->_mobileAIButton.showsMenuAsPrimaryAction = NO;
+        [input->_mobileAIButton setTitle:@"HP READY" forState:UIControlStateNormal];
+    }];
     UIMenu *route = [UIMenu menuWithTitle:@"Grind route" children:@[markRoute, clearRoute]];
-    return [UIMenu menuWithTitle:@"AI options" children:@[observe, aiTest, approachTest, aiTestMode, route, aiModels, aiTeach]];
+    return [UIMenu menuWithTitle:@"AI options" children:@[observe, aiTest, approachTest, aiTestMode, route, inspectHealth, aiModels, aiTeach]];
 }
 
 - (void)sp_mobile_layout:(CGRect)game top:(CGFloat)top {
