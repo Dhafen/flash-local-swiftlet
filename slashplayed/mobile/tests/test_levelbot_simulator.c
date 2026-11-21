@@ -9,6 +9,7 @@ typedef struct {
     uint8_t playerHP, targetHP, positionCounter;
     unsigned targetCommands, movementCommands, attacks, hits, lootCommands, stalls, approaches;
     bool selected, inCombat, looted, blockAllMovement, suppressDamage, rejectAttack;
+    bool suppressLootConfirmation;
     SPAIRoute route;
     int32_t routePositionQ4;
     SPAIApproachModel model;
@@ -55,7 +56,7 @@ static bool submit(void *context, const char *action, SPAINavSample sample, doub
     } else if (!strcmp(action, "LOOT")) {
         assert(game->selected && !game->targetHP && game->distance <= 16 && !game->inCombat);
         ++game->lootCommands;
-        game->looted = true;
+        game->looted = !game->suppressLootConfirmation;
     } else {
         assert(!"unexpected action");
     }
@@ -150,6 +151,11 @@ int main(void) {
     run(&farm, "SEARCH", true);
     assert(farm.stalls == 1 && farm.approaches >= 2 && farm.hits == 2 && farm.lootCommands == 1);
     assert(farm.targetCommands >= 3);
+
+    GameSimulator missingLoot = {.distance = 12, .playerHP = 100, .targetHP = 100,
+        .suppressLootConfirmation = true};
+    run(&missingLoot, "LOOT UNCONF", false);
+    assert(missingLoot.hits == 2 && missingLoot.lootCommands == 2 && missingLoot.selected && !missingLoot.looted);
     printf("Farming cycle: %u stall, %u measured approaches, %u hits, %u loot, returned to search\n",
         farm.stalls, farm.approaches, farm.hits, farm.lootCommands);
 

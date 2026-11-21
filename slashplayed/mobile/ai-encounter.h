@@ -23,6 +23,7 @@ typedef struct {
 typedef struct {
     double nextAction, lastMoveAt, lastDamageAt;
     unsigned lootAttempts, searchAttempts;
+    bool lootConfirmed;
     unsigned inputFailures;
     SPAISteering steering;
     uint8_t steeringPosition, target;
@@ -290,6 +291,7 @@ static inline const char *sp_ai_advance(SPAIEncounter *encounter, SPAIEncounterO
         encounter->combatEvidence = (SPAICombatEvidence){.lastHP = 255};
         encounter->probeAfterMove = false;
         encounter->lootAttempts = 0;
+        encounter->lootConfirmed = false;
         encounter->inputFailures = 0;
         encounter->targetTurns = encounter->targetTurnFailures = 0;
         encounter->targetTurnUnconfirmed = false;
@@ -350,20 +352,23 @@ static inline const char *sp_ai_advance(SPAIEncounter *encounter, SPAIEncounterO
     }
 
     if (sample.motion.lootConfirmed && (flags & (16|128)) == (16|128) && target &&
-        !combat && encounter->lootAttempts < 3) {
+        !combat && !encounter->lootConfirmed) {
         sp_ai_note(adapter, "AI loot: selected corpse slot cleared");
-        encounter->lootAttempts = 3;
+        encounter->lootConfirmed = true;
         encounter->nextAction = now + 0.4;
         return "LOOT OK";
     }
-    decision = sp_ai_farm_decision(decision, flags, meta, encounter->lootAttempts, sample.motion.lootConfirmed);
+    unsigned loot = observation.corpseEvidence & (SP_CORPSE_LOOT_NONE|SP_CORPSE_LOOT_AVAILABLE);
+    bool emptyCorpse = decision == SP_AI_TARGET && (flags & (4|16|128)) == (4|16|128) && target &&
+        !encounter->lootAttempts && !encounter->lootConfirmed && loot == SP_CORPSE_LOOT_NONE;
+    if (!emptyCorpse)
+        decision = sp_ai_farm_decision(decision, flags, meta, encounter->lootAttempts, encounter->lootConfirmed);
     if (decision == SP_AI_LOOT_BIND) return "INTERACT BIND";
-    if (decision == SP_AI_LOOT_WAIT) return "LOOT UNCONF";
+    if (decision == SP_AI_LOOT_WAIT) return now < encounter->nextAction ? "LOOT CHECK" : "LOOT UNCONF";
     if (decision == SP_AI_LOOT) {
         if (!target) return "LOOT UNKNOWN";
         unsigned range = observation.corpseEvidence & (SP_CORPSE_RANGE_OUT|SP_CORPSE_RANGE_IN);
-        unsigned loot = observation.corpseEvidence & (SP_CORPSE_LOOT_NONE|SP_CORPSE_LOOT_AVAILABLE);
-        if (loot == SP_CORPSE_LOOT_NONE) return "LOOT EMPTY";
+        if (loot == SP_CORPSE_LOOT_NONE) return now < encounter->nextAction ? "LOOT CHECK" : "LOOT UNCONF";
         if (range == SP_CORPSE_RANGE_OUT) return "LOOT RANGE";
         if (range != SP_CORPSE_RANGE_IN || loot != SP_CORPSE_LOOT_AVAILABLE) return "LOOT UNKNOWN";
         if (now >= encounter->nextAction) {
@@ -383,6 +388,7 @@ static inline const char *sp_ai_advance(SPAIEncounter *encounter, SPAIEncounterO
         if (now >= encounter->nextAction) {
             encounter->nextAction = now + 1.0;
             if (!sp_ai_try_input(encounter, adapter, "TARGET", sample, 0)) return "AI INPUT";
+            if (emptyCorpse) sp_ai_note(adapter, "AI loot: selected corpse has no loot");
             ++encounter->searchAttempts;
         }
         return "SEARCH";

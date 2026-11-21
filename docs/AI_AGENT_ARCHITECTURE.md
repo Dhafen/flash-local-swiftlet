@@ -14,8 +14,8 @@ SPHover läser offentlig spelstatus ungefär två gånger per sekund. ObjC tidss
 | SEARCH | Prova Tab upp till fyra accepterade försök. Offentligt valt levande attackbart NPC-mål med identifierare går till ENGAGE. Om inget mål kan väljas visas NO TARGET. |
 | ENGAGE | Prova Tactara F12. Observerad skada eller strid går till IN COMBAT. Utan observerad skada kan ett synligt mål ge APPROACH. Närhet inom fyra horisontella distansenheter prioriterar en ny F12-prob. |
 | APPROACH | Bekräfta två riktningstecken från färska paket. Skicka en puls på 0,60 s med verifierad tangent, invänta utfall högst 1,8 s. Enbart bekräftad framåtförflyttning med okänt avstånd får en ny F12-prob. |
-| IN COMBAT | Mål-HP behöver faktiskt minska för att återställa F12-budgeten. Högst fyra accepterade F12 utan sådan observation. Matchad vald död NPC och avslutad strid går till LOOT CHECK. |
-| LOOT CHECK | Prova på verifierad Interact With Target-bindning. En tömd slot som matchar samma corpse ger LOOT OK och återgång till SEARCH. Två försök utan bekräftelse ger LOOT UNCONF. |
+| IN COMBAT | En observerad träff från den egna spelaren på samma valda mål återställer F12-budgeten. Högst fyra accepterade F12 utan sådan observation. Matchad vald död NPC och avslutad strid går till LOOT CHECK. |
+| LOOT CHECK | Prova på verifierad Interact With Target-bindning. En tömd slot som matchar samma kropp ger LOOT OK och återgång till SEARCH. Offentligt bekräftad tom kropp före första försöket går direkt till SEARCH. Efter två försök utan bekräftelse väntar agenten ut svarstiden och visar LOOT UNCONF. |
 | RECOVER | Låg hälsa under 35 % pausar input tills minst 50 % observeras. Monterad eller död spelare pausar. Återhämtning och återupplivning sker manuellt. |
 | BLOCKED / STOPPED | Saknade bindningar, okänd hälsa, stale data eller slut på budget blockerar respektive handling. Ett manuellt övertagande, stopp eller appdeaktivering släpper input och ogiltigförklarar väntande arbete. Kritisk temperatur stoppar loopen. |
 

@@ -81,8 +81,6 @@ static void test_encounter_adapter(void) {
     observation.corpseEvidence = SP_CORPSE_RANGE_OUT | SP_CORPSE_LOOT_AVAILABLE;
     assert(strcmp(sp_ai_advance(&planner, observation, 6.5, false, &examples, adapter), "LOOT RANGE") == 0);
     assert(planner.lootAttempts == 0 && strcmp(mock.lastAction, "ATTACK") == 0);
-    observation.corpseEvidence = SP_CORPSE_RANGE_IN | SP_CORPSE_LOOT_NONE;
-    assert(strcmp(sp_ai_advance(&planner, observation, 6.5, false, &examples, adapter), "LOOT EMPTY") == 0);
     observation.corpseEvidence = SP_CORPSE_LOOT_AVAILABLE;
     assert(strcmp(sp_ai_advance(&planner, observation, 6.5, false, &examples, adapter), "LOOT UNKNOWN") == 0);
     observation.corpseEvidence = SP_CORPSE_RANGE_IN | SP_CORPSE_LOOT_AVAILABLE;
@@ -96,10 +94,38 @@ static void test_encounter_adapter(void) {
     observation.sample.at = 7.5;
     assert(strcmp(sp_ai_advance(&planner, observation, 7.5, false, &examples, adapter), "RECOVER") == 0);
     observation.hp = 50;
+    observation.sample.motion.lootConfirmed = false;
     observation.sample.at = 8;
     assert(strcmp(sp_ai_advance(&planner, observation, 8, false, &examples, adapter), "SEARCH") == 0);
     assert(strcmp(mock.lastAction, "TARGET") == 0);
     assert(mock.submissions == 7);
+}
+
+static void test_loot_wait_and_empty_corpse(void) {
+    SPAIEncounter planner = {.combatEvidence.lastHP = 255};
+    SPTestAdapter mock = {.accept = true};
+    SPAIEncounterAdapter adapter = {&mock, test_submit, test_release, test_outcome, NULL};
+    SPAIApproachExamples examples = {0};
+    SPAIEncounterObservation corpse = {
+        .sample = {10, {SP_MOTION_POSITION, 7, false}, {1, 2, SP_AI_TAB_BOUND, 12}, 0},
+        .flags = 149, .hp = 80, .meta = 133,
+        .corpseEvidence = SP_CORPSE_RANGE_IN | SP_CORPSE_LOOT_AVAILABLE
+    };
+    assert(strcmp(sp_ai_advance(&planner, corpse, 10, false, &examples, adapter), "LOOT CHECK") == 0);
+    corpse.sample.at = 11.5;
+    assert(strcmp(sp_ai_advance(&planner, corpse, 11.5, false, &examples, adapter), "LOOT CHECK") == 0);
+    corpse.sample.at = 12;
+    corpse.corpseEvidence = SP_CORPSE_LOOT_NONE;
+    assert(strcmp(sp_ai_advance(&planner, corpse, 12, false, &examples, adapter), "LOOT CHECK") == 0);
+    corpse.sample.at = 13;
+    assert(strcmp(sp_ai_advance(&planner, corpse, 13, false, &examples, adapter), "LOOT UNCONF") == 0);
+    assert(mock.submissions == 2 && !strcmp(mock.lastAction, "LOOT"));
+
+    corpse.sample.at = 14;
+    ++corpse.sample.evidence.target;
+    corpse.meta = 128;
+    assert(strcmp(sp_ai_advance(&planner, corpse, 14, false, &examples, adapter), "SEARCH") == 0);
+    assert(mock.submissions == 3 && !strcmp(mock.lastAction, "TARGET"));
 }
 
 static void test_encounter_stops(void) {
@@ -541,6 +567,7 @@ int main(void) {
     test_manual_takeover_preserves_encounter();
     test_forward_probe();
     test_encounter_adapter();
+    test_loot_wait_and_empty_corpse();
     test_encounter_stops();
     test_steering_observations();
     test_pulse_outcomes();
