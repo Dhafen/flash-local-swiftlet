@@ -40,8 +40,12 @@ static void sp_health_capture(id<MTLCommandBuffer> cb, id<MTLTexture> texture) {
             uint8_t result = sp_ai_visible_health(data.contents, width, stride, bgra);
             dispatch_async(dispatch_get_main_queue(), ^{
                 if (atomic_load(&sp_ai_health_capture_enabled) && atomic_load(&sp_ai_health_capture_epoch) == epoch) {
+                    NSTimeInterval now = NSProcessInfo.processInfo.systemUptime;
+                    sp_ai_finish_health_comparison(now);
                     sp_ai_health_visual_result = result;
                     sp_ai_health_visual_at = (double)ms / 1000;
+                    sp_ai_health_comparison_pending = YES;
+                    sp_ai_finish_health_comparison(now);
                     sp_stub_log([[NSString stringWithFormat:@"AI visual health diagnostic: %u crop-bytes=%zu",
                         (unsigned)result, stride * SP_HEALTH_SCAN_ROWS] UTF8String]);
                 }

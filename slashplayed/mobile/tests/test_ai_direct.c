@@ -397,6 +397,18 @@ static void test_route_turn_requires_binding_and_confirmed_heading(void) {
 }
 
 int main(void) {
+    SPHealthReference hp[] = {{1.0, 27}, {1.5, 27}};
+    uint8_t actual = 255;
+    assert(sp_ai_compare_visible_health(hp, 1, 1.25, 90, 1.5, &actual) == SP_HEALTH_COMPARE_PENDING);
+    assert(sp_ai_compare_visible_health(hp, 2, 1.25, 90, 1.5, &actual) == SP_HEALTH_COMPARE_PAIRED && actual == 27);
+    assert(sp_ai_compare_visible_health(hp, 2, 1.25, 255, 1.5, &actual) == SP_HEALTH_COMPARE_UNREADABLE && actual == 27);
+    hp[1].hp = 70;
+    assert(sp_ai_compare_visible_health(hp, 2, 1.25, 90, 1.5, &actual) == SP_HEALTH_COMPARE_CHANGING);
+    hp[1].hp = 255;
+    assert(sp_ai_compare_visible_health(hp, 2, 1.25, 90, 1.5, &actual) == SP_HEALTH_COMPARE_UNKNOWN);
+    assert(sp_ai_compare_visible_health(hp, 1, 1.25, 90, 2.2, &actual) == SP_HEALTH_COMPARE_UNBRACKETED);
+    SPHealthReference sameTime[] = {{1, 80}, {1.25, 25}, {1.5, 80}};
+    assert(sp_ai_compare_visible_health(sameTime, 3, 1.25, 80, 1.5, &actual) == SP_HEALTH_COMPARE_CHANGING);
     SPAIRoute calibrated = {0};
     SPAIWorldPose axisA = {.map = 7, .valid = true, .headingKnown = true, .epoch = 1};
     SPAIWorldPose joint = axisA;

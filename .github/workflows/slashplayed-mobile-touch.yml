@@ -32,6 +32,7 @@ jobs:
           lua5.1 slashplayed/mobile/tests/test_phone_layout.lua slashplayed/mobile/PhoneLayout.lua
           luac5.1 -p slashplayed/mobile/HealthTelemetry.lua
           lua5.1 slashplayed/mobile/tests/test_health_telemetry.lua slashplayed/mobile/HealthTelemetry.lua
+          PYTHONPATH=slashplayed/mobile python3 slashplayed/mobile/tests/test_health_validation_report.py
           luac5.1 -p slashplayed/mobile/HealthDisplay.lua
           lua5.1 slashplayed/mobile/tests/test_health_display.lua slashplayed/mobile/HealthDisplay.lua
           lua5.1 slashplayed/mobile/tests/test_wolkara_setup.lua slashplayed/mobile/WolkaraSetup.lua

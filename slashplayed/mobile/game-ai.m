@@ -16,12 +16,43 @@ static atomic_uint sp_ai_health_capture_epoch;
 static _Atomic(uint64_t) sp_ai_health_bounds, sp_ai_health_bounds_ms;
 static uint8_t sp_ai_health_visual_result = SP_VISUAL_HP_UNKNOWN;
 static NSTimeInterval sp_ai_health_visual_at;
+static SPHealthReference sp_ai_health_reference[4];
+static unsigned sp_ai_health_reference_count;
+static BOOL sp_ai_health_comparison_pending;
+static void sp_ai_clear_health_comparison(void) {
+    sp_ai_health_reference_count = 0;
+    sp_ai_health_comparison_pending = NO;
+}
+static void sp_ai_finish_health_comparison(NSTimeInterval now) {
+    if (!sp_ai_health_comparison_pending) return;
+    uint8_t reference;
+    SPHealthComparison result = sp_ai_compare_visible_health(sp_ai_health_reference, sp_ai_health_reference_count,
+        sp_ai_health_visual_at, sp_ai_health_visual_result, now, &reference);
+    if (result == SP_HEALTH_COMPARE_PENDING) return;
+    sp_ai_health_comparison_pending = NO;
+    static const char *const status[] = {"pending", "paired", "unreadable", "changing", "unknown", "unbracketed"};
+    sp_stub_log([[NSString stringWithFormat:@"AI health validation: %s visual=%u public=%u", status[result],
+        (unsigned)sp_ai_health_visual_result, (unsigned)reference] UTF8String]);
+}
+static void sp_ai_record_health_reference(NSTimeInterval at, uint8_t hp) {
+    if (!atomic_load(&sp_ai_health_capture_enabled)) return;
+    unsigned count = sp_ai_health_reference_count;
+    if (count && at <= sp_ai_health_reference[count - 1].at) return;
+    if (count == sizeof sp_ai_health_reference / sizeof sp_ai_health_reference[0]) {
+        --count;
+        memmove(sp_ai_health_reference, sp_ai_health_reference + 1, count * sizeof sp_ai_health_reference[0]);
+    }
+    sp_ai_health_reference[count] = (SPHealthReference){at, hp};
+    sp_ai_health_reference_count = count + 1;
+    sp_ai_finish_health_comparison(at);
+}
 static void sp_ai_health_enable(BOOL enabled) {
     if (atomic_load(&sp_ai_health_capture_enabled) == enabled) return;
     atomic_fetch_add(&sp_ai_health_capture_epoch, 1);
     atomic_store(&sp_ai_health_capture_enabled, enabled);
     sp_ai_health_visual_result = SP_VISUAL_HP_UNKNOWN;
     sp_ai_health_visual_at = 0;
+    sp_ai_clear_health_comparison();
 }
 static atomic_uint sp_p2p_capture_epoch;
 static NSData *sp_p2p_latest_frame;
@@ -126,6 +157,7 @@ static void sp_ai_health_heartbeat(uint8_t seq, const uint8_t *data, unsigned le
         atomic_fetch_add(&sp_ai_health_capture_epoch, 1);
         sp_ai_health_visual_result = SP_VISUAL_HP_UNKNOWN;
         sp_ai_health_visual_at = 0;
+        sp_ai_clear_health_comparison();
     }
     atomic_store(&sp_ai_health_bounds_ms, (uint64_t)(observedAt * 1000));
 }
@@ -152,6 +184,7 @@ static void sp_ai_game_update(const uint8_t *data, size_t length, NSTimeInterval
         sp_ai_game_hit = (SPAIOwnHit){0};
         sp_ai_game_evidence = (SPAINavEvidence){0, 0, 0, SP_AI_DISTANCE_UNKNOWN};
         sp_ai_player_health = sp_ai_target_health = SP_HEALTH_UNSPECIFIED;
+        sp_ai_record_health_reference(observedAt, SP_VISUAL_HP_UNKNOWN);
         return;
     }
     if (sp_ai_game_at <= 0 || sp_ai_packet_at - sp_ai_game_at >= 6.0 ||
@@ -179,6 +212,7 @@ static void sp_ai_game_update(const uint8_t *data, size_t length, NSTimeInterval
     sp_ai_player_health = player;
     sp_ai_target_health = target;
     sp_ai_game_at = observedAt;
+    sp_ai_record_health_reference(observedAt, player == SP_HEALTH_PUBLIC ? sp_ai_game_hp : SP_VISUAL_HP_UNKNOWN);
 }
 
 static void sp_ai_heartbeat(uint8_t seq, const uint8_t *data, size_t length, NSTimeInterval observedAt) {
@@ -776,6 +810,7 @@ static NSArray<NSNumber *> *sp_ai_luminance(CVPixelBufferRef buffer) {
     } else if (self.autonomousTest) {
         [self showPhase:[self advance:sample now:now reduced:reduced]];
     } else if (healthDiag) {
+        sp_ai_finish_health_comparison(now);
         NSString *status = !healthPreview ? (fresh ? @"HP PAUSED" : @"AI STALE") : @"HP NO VIEW";
         if (healthPreview && sp_ai_health_visual_at > 0 && now - sp_ai_health_visual_at < 2.0 &&
             sp_ai_health_visual_result != SP_VISUAL_HP_UNKNOWN)
