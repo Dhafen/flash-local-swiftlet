@@ -36,13 +36,11 @@ assert 'sp_ai_health_visual_result' not in encounter_advance
 assert 'seq == sp_ai_heartbeat_seq' in event
 assert '[_mobileAI stop];' in event
 assert 'sp_mobile_emit_rotation()' in event
-assert 'RPSampleBufferTypeVideo' in event
-assert 'VNRecognizeTextRequest' in event
-assert 'VNClassifyImageRequest' in event and 'sp_ai_luminance' in event
+assert 'RPSampleBufferTypeVideo' not in event
+assert 'VNRecognizeTextRequest' not in event
+assert 'VNClassifyImageRequest' not in event
 assert 'resetDecision' in event
 assert 'captured < input->_mobileAIManualUntil' in event
-legacy_result = event.split('- (void)finish:', 1)[1].split('- (void)inspect:', 1)[0]
-assert 'self.action' not in legacy_result
 assert 'SPAIHarness' in (root / "apps/client/SPAIGraph.swift").read_text()
 assert 'harness.validate' in (root / "apps/client/spgameai.swift").read_text()
 if sys.platform == "darwin" and len(sys.argv) == 2:
@@ -59,8 +57,6 @@ assert 'sp_mobile_phone_zone(x, y, interface)' in event
 assert 'Restore floating joystick (Play)' in event
 assert 'RPScreenRecorder' not in event and 'startScreen' not in event and '_mobileAI.starting' not in event
 assert 'UISceneDidEnterBackgroundNotification' in event
-assert 'AI NO VID' in event and 'AI NO TEXT' in event and 'AI THINK' in event
-assert 'AI MODEL!' in event and 'AI CAP!' in event
 assert 'sp_mobile_ai_release_key' in event and 'sp_mobile_ai_hold_axis:' in event
 assert '[_mobileStick driveAI:axis]' in event and 'Test AI movement (forward)' in event
 assert 'AI input: Tactara F12 rotation' in event and 'sp_mobile_emit_rotation();' in event
@@ -68,7 +64,6 @@ manual_rotation = event.split('- (void)sp_mobile_rotation:(UIButton *)button {',
 assert 'sp_mobile_emit_rotation();' in manual_rotation
 assert 'if ([action isEqualToString:@"ATTACK"]) {\n            sp_mobile_emit_rotation();' in event
 assert 'VIS SLOW' in event
-assert 'NSProcessInfo.processInfo.systemUptime - captured <= 8.0' in event
 assert 'input->_mobileAIManualUntil' in event
 assert 'SystemLanguageModel.default.isAvailable' in (root / "apps/client/spgameai.swift").read_text()
 assert 'spgameai.swift -o' in (root / "apps/client/build-launcher.sh").read_text()
