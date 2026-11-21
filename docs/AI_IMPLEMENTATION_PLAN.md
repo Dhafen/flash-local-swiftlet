@@ -8,6 +8,10 @@ På iPhone med `d7bfd0e` visar loggen `OBSERVING`, `player=restricted`, `target=
 
 När användaren valde en fientlig NPC kl. 13.27 den 21 november visade samma bygge `identity=public`, `position=public`, `distance=public` och `plate=unknown`. Båda hälsovärdena rapporterades som skyddade. Ingen riktningssignal loggades i det uppföljande provet när användaren såg namnplattan. Därmed finns mätdata för en användarriktad puls mot samma mål. Den automatiska riktningssignalen och bevis för skada återstår.
 
+Telefonen med `9b9034f` loggade `held verified key w`, `adapter accepted` och `target-closer` den 21 november kl. 13.35. Testet skickade en enda puls på 0,60 s. Det är uppmätt närmande under ett användarstartat prov. Resultatet bekräftar varken att målet nåddes eller att flera pulser fungerade.
+
+REA inventerade det verifierade leveranspaketet i evidens `ev_d1a99c37e6a4dfd45b181a992da26f894448913f964b5a662a3bf5b82d8d2f14`. Paketet innehöll iOS-versionen av `libspAppKit.dylib` och inga medföljande Core ML-modellpaket. Observationen gäller själva zip-filen. Modeller kan installeras separat. [WowClassicGrindBots navigationskod](https://github.com/Xian55/WowClassicGrindBot/blob/dev/Core/GoalsComponent/Navigation.cs) använder separat navigationsstatus och övervakar framsteg mot ruttpunkter. Den här deländringen använder samma princip med offentligt avstånd till valt mål och en begränsad rörelsebudget.
+
 ## 1. Hitta rätt läge från en knapp
 
 - [x] Döp om observationsfasen till `OBS ONLY` i `slashplayed/mobile/game-ai.m`. Behåll `AI STALE` när observationen saknar färsk data.
@@ -17,7 +21,7 @@ När användaren valde en fientlig NPC kl. 13.27 den 21 november visade samma by
 ## 2. Mät de signaler som krävs för målrörelse
 
 - [ ] Logga i `HealthTelemetry.lua` vilken kontroll i `spAITargetColumn` som avvisar namnplattan. Skilj saknad enhet eller ram, förbjuden ram, dold ram och oläsbar koordinat. Använd `AI world` i `game-ai.m` för att verifiera att målidentitet, namnplatta och avstånd till samma mål håller ihop när kameran rör sig och när användaren går närmare. Behåll `unknown` som riktningsvärde vid avvisning.
-- [ ] Lägg i `phone-input.m` till ett användarstartat prov med ett redan valt mål som återanvänder `sp_ai_nav_outcome` från `ai-direct.h`. Användaren riktar karaktären mot målet på fri mark. Skicka en framåtpuls om högst 0,60 s. Kräv färsk startposition, stabil målidentitet och verifierad W-bindning. Logga `closer`, `displaced`, `stalled`, målförlust och avbruten input som separata utfall.
+- [x] Återanvänd `sp_ai_nav_outcome` från `ai-direct.h` för ett användarstartat framåtprov. Visa när målet faktiskt blev närmare och logga före- och efteravstånd. Lägg till ett separat prov i godkänt testläge med högst tre pulser och ny kontroll av mål, position, avstånd och bindning inför varje puls. Användaren riktar karaktären manuellt inför provet.
 - [ ] Kör fallen i `tests/test_ai_direct.c` med oförändrat avstånd, minskat avstånd, växlat mål, skyddad position, försenade paket, blockerad rörelse och manuell avbrytning. Kontrollera samma-id före och efter varje puls på telefonen. Utan tillförlitligt målavstånd stannar leveransen vid `TEST MOVED` eller motsvarande precis status.
 
 ## 3. Flytta testet från manuell puls till reglerad styrning

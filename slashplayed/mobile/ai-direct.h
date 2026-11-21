@@ -180,6 +180,18 @@ static inline SPAINavOutcome sp_ai_nav_outcome(SPAINavPulse pulse, SPAINavSample
         pulse.before.column && after.column) ? SP_NAV_NO_PROGRESS : SP_NAV_DISPLACED;
 }
 
+static inline bool sp_ai_forward_probe_ready(SPAINavSample sample, uint8_t flags, uint8_t movementKeys, double now) {
+    // Leave an eight-yard margin in this test. Distance is in quarter yards.
+    return sp_ai_sample_fresh(sample.at, now) && (flags & (1|2|4|8|16|32|64)) == (1|4|8) &&
+           sample.evidence.target && sample.evidence.position && sample.motion.source == SP_MOTION_POSITION &&
+           sample.evidence.distance != SP_AI_DISTANCE_UNKNOWN && sample.evidence.distance > 32 &&
+           sp_ai_movement_key(SP_MOVE_FORWARD, movementKeys);
+}
+
+static inline bool sp_ai_forward_probe_repeat(SPAINavOutcome outcome, unsigned remaining) {
+    return outcome == SP_NAV_CLOSER && remaining > 1;
+}
+
 typedef struct {
     unsigned pulses, failures, unmeasured, reversals;
     SPAIMove lastLateral;

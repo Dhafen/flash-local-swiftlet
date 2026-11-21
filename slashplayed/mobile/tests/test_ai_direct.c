@@ -269,7 +269,24 @@ static void test_simulated_encounter(void) {
     assert(sp_ai_readiness(1, 50, &recovering) == SP_AI_READY);
 }
 
+static void test_forward_probe(void) {
+    SPAINavSample sample = {10, {SP_MOTION_POSITION, 1, false}, {3, 5, 0, 100}, 0};
+    assert(sp_ai_forward_probe_ready(sample, 13, 1, 10.1));
+    assert(!sp_ai_forward_probe_ready(sample, 13 | 32, 1, 10.1));
+    assert(!sp_ai_forward_probe_ready(sample, 13, 0, 10.1));
+    assert(!sp_ai_forward_probe_ready(sample, 13, 1, 14));
+    assert(sp_ai_forward_probe_repeat(SP_NAV_CLOSER, 2));
+    assert(!sp_ai_forward_probe_repeat(SP_NAV_NO_PROGRESS, 2));
+    assert(!sp_ai_forward_probe_repeat(SP_NAV_CONTEXT_CHANGED, 2));
+    assert(!sp_ai_forward_probe_repeat(SP_NAV_CLOSER, 1));
+    sample.evidence.distance = SP_AI_DISTANCE_UNKNOWN;
+    assert(!sp_ai_forward_probe_ready(sample, 13, 1, 10.1));
+    sample.evidence.distance = 32;
+    assert(!sp_ai_forward_probe_ready(sample, 13, 1, 10.1));
+}
+
 int main(void) {
+    test_forward_probe();
     test_encounter_adapter();
     test_encounter_stops();
     test_steering_observations();

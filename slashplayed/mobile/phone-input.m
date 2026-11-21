@@ -470,7 +470,12 @@ static UIButton *sp_mobile_button(NSString *title, NSString *label, id owner, SE
     __weak SPInputView *weakSelf = self;
     UIAction *aiTest = [UIAction actionWithTitle:@"Test AI movement (forward)" image:nil identifier:nil handler:^(__kindof UIAction *action) {
         SPInputView *input = weakSelf;
-        if (input) [input sp_mobile_ai_test];
+        if (input) [input sp_mobile_ai_test:0];
+    }];
+    UIAction *approachTest = [UIAction actionWithTitle:@"Test approach (authorized realm, face selected target)"
+        image:nil identifier:nil handler:^(__kindof UIAction *action) {
+        SPInputView *input = weakSelf;
+        if (input) [input sp_mobile_ai_test:3];
     }];
     UIAction *aiTeach = [UIAction actionWithTitle:@"Teach AI approach (start / save)" image:nil identifier:nil handler:^(__kindof UIAction *action) {
         SPInputView *input = weakSelf;
@@ -492,7 +497,7 @@ static UIButton *sp_mobile_button(NSString *title, NSString *label, id owner, SE
         [input->_mobileAIButton setTitle:input->_mobileAI.modelDiagnostics ? @"MODEL ON" : @"MODEL OFF"
             forState:UIControlStateNormal];
     }];
-    return [UIMenu menuWithTitle:@"AI options" children:@[aiTest, aiTestMode, aiModels, aiTeach]];
+    return [UIMenu menuWithTitle:@"AI options" children:@[aiTest, approachTest, aiTestMode, aiModels, aiTeach]];
 }
 
 - (void)sp_mobile_layout:(CGRect)game top:(CGFloat)top {
@@ -672,32 +677,50 @@ static void sp_mobile_ai_movement_key(unsigned char key, BOOL pressed) {
     });
     return YES;
 }
-- (void)sp_mobile_ai_check_test:(SPAINavPulse)pulse generation:(NSUInteger)generation {
+- (void)sp_mobile_ai_check_test:(SPAINavPulse)pulse generation:(NSUInteger)generation remaining:(unsigned)remaining {
     if (_mobileAIKeyGeneration != generation && _mobileAIKeyGeneration != generation + 1) return;
     if (_mobileAI.active || self.window.windowScene.activationState != UISceneActivationStateForegroundActive) return;
     NSTimeInterval now = NSProcessInfo.processInfo.systemUptime;
-    SPAINavOutcome outcome = sp_ai_nav_outcome(pulse, sp_ai_game_sample(), now);
+    SPAINavSample after = sp_ai_game_sample();
+    SPAINavOutcome outcome = sp_ai_nav_outcome(pulse, after, now);
     if (outcome == SP_NAV_PENDING) {
         __weak SPInputView *weakSelf = self;
         dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.2 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
-            [weakSelf sp_mobile_ai_check_test:pulse generation:generation];
+            [weakSelf sp_mobile_ai_check_test:pulse generation:generation remaining:remaining];
         });
         return;
     }
-    BOOL displaced = outcome == SP_NAV_DISPLACED || outcome == SP_NAV_CLOSER || outcome == SP_NAV_NO_PROGRESS;
-    NSString *status = displaced ? @"TEST MOVED" : outcome == SP_NAV_STALLED ? @"TEST STALL" : @"TEST NO DATA";
+    NSString *status = @"TEST NO DATA";
+    switch (outcome) {
+        case SP_NAV_CLOSER: status = @"TEST CLOSER"; break;
+        case SP_NAV_DISPLACED: status = @"TEST MOVED"; break;
+        case SP_NAV_NO_PROGRESS: status = @"TEST NO GAIN"; break;
+        case SP_NAV_STALLED: status = @"TEST STALL"; break;
+        case SP_NAV_CONTEXT_CHANGED: status = @"TEST TARGET"; break;
+        default: break;
+    }
     [_mobileAIButton setTitle:status forState:UIControlStateNormal];
-    sp_stub_log([[NSString stringWithFormat:@"AI movement diagnostic: %s", sp_ai_nav_outcome_name(outcome)] UTF8String]);
+    sp_stub_log([[NSString stringWithFormat:@"AI movement diagnostic: %s distance-q4=%u->%u",
+        sp_ai_nav_outcome_name(outcome), (unsigned)pulse.before.evidence.distance, (unsigned)after.evidence.distance] UTF8String]);
+    if (sp_ai_forward_probe_repeat(outcome, remaining)) {
+        [self sp_mobile_ai_release_key];
+        [self sp_mobile_ai_schedule_test:remaining - 1 after:after];
+    }
 }
 
-// A user-triggered one-shot movement test independent of the AI model.
-- (void)sp_mobile_ai_test {
+// The standalone pulse and opt-in approach probe share the same input adapter.
+- (void)sp_mobile_ai_test:(unsigned)remaining {
     if (_mobileAI.active) [_mobileAI stop];
     [self sp_mobile_ai_release_key];
-    NSUInteger generation = ++_mobileAIKeyGeneration;
     [_mobileStick prepareAI];
+    [self sp_mobile_ai_schedule_test:remaining after:(SPAINavSample){0}];
+}
+
+- (void)sp_mobile_ai_schedule_test:(unsigned)remaining after:(SPAINavSample)confirmed {
+    NSUInteger generation = ++_mobileAIKeyGeneration;
+    NSTimeInterval delay = confirmed.at && NSProcessInfo.processInfo.thermalState >= NSProcessInfoThermalStateSerious ? 2.0 : 1.0;
     __weak SPInputView *weakSelf = self;
-    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1.0 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(delay * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
         SPInputView *input = weakSelf;
         if (!input || input->_mobileAIKeyGeneration != generation || input->_mobileAI.active ||
             !sp_client_window || input->_softField.isFirstResponder || !input->_mobileDirect ||
@@ -711,12 +734,26 @@ static void sp_mobile_ai_movement_key(unsigned char key, BOOL pressed) {
         }
         SPAINavSample before = sp_ai_game_sample();
         if (!sp_ai_heartbeat_seen || !sp_ai_sample_fresh(before.at, now)) before = (SPAINavSample){0};
+        if (remaining) {
+            NSString *blocked = nil;
+            if (!input->_mobileAI.autonomousTest) blocked = @"TEST MODE";
+            else if (confirmed.at && (before.evidence.target != confirmed.evidence.target ||
+                before.evidence.position != confirmed.evidence.position)) blocked = @"TEST TARGET";
+            else if (!sp_ai_forward_probe_ready(before, sp_ai_game_flags, sp_ai_game_move_keys, now) ||
+                (sp_ai_hp_known(sp_ai_game_hp) && sp_ai_game_hp < 35) ||
+                (confirmed.at && before.evidence.distance > confirmed.evidence.distance + 2)) blocked = @"TEST HOLD";
+            if (blocked) {
+                [input->_mobileAIButton setTitle:blocked forState:UIControlStateNormal];
+                sp_stub_log([[NSString stringWithFormat:@"AI movement diagnostic: %@", blocked] UTF8String]);
+                return;
+            }
+        }
         NSTimeInterval hold = 0.60;
         BOOL sent = [input sp_mobile_ai_hold_axis:CGPointMake(0,1) duration:hold];
         [input->_mobileAIButton setTitle:sent ? @"TEST ACCEPT" : @"TEST INPUT" forState:UIControlStateNormal];
         sp_stub_log(sent ? "AI movement diagnostic: adapter accepted" : "AI movement diagnostic: adapter rejected");
         if (sent) [input sp_mobile_ai_check_test:(SPAINavPulse){before, SP_MOVE_FORWARD, now+hold, now+1.8}
-            generation:input->_mobileAIKeyGeneration];
+            generation:input->_mobileAIKeyGeneration remaining:remaining];
     });
 }
 - (void)sp_mobile_ai_toggle:(UIButton *)button {

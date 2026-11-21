@@ -90,8 +90,14 @@ assert '_mobileAIButton.showsMenuAsPrimaryAction = NO;' in event
 assert 'input->_mobileAIButton.menu = input->_mobileAI.active ? nil : [input sp_mobile_ai_menu];' in event
 ai_menu = event.split('- (UIMenu *)sp_mobile_ai_menu {', 1)[1].split('\n}', 1)[0]
 assert 'Test AI movement (forward)' in ai_menu
+assert 'Test approach (authorized realm, face selected target)' in ai_menu
+assert '[input sp_mobile_ai_test:3]' in ai_menu
 assert 'Toggle automation on authorized test realm' in ai_menu
 assert '[input->_mobileAI start]' not in ai_menu
+repeat_probe = event.split('- (void)sp_mobile_ai_check_test:(SPAINavPulse)pulse', 1)[1].split('\n}', 1)[0]
+assert 'sp_ai_forward_probe_repeat(outcome, remaining)' in repeat_probe
+assert 'sp_mobile_ai_schedule_test:remaining - 1 after:after' in repeat_probe
+assert 'if (!input->_mobileAI.autonomousTest) blocked = @"TEST MODE";' in event
 assert '_softToggle.showsMenuAsPrimaryAction = NO;' in event
 assert 'CGRectGetMidX(game) - 22' in event
 assert 'Show / hide Jump button' in event and 'Show / hide extra controls' in event
