@@ -197,7 +197,7 @@ int main(void) {
     GameSimulator geometry = {.distance = 44, .playerHP = 100, .targetHP = 100, .geometryTarget = true, .heading = 64};
     start.heading = 0;
     end = start;
-    end.firstQ4 = 24;
+    end.firstQ4 = 48;
     assert(sp_ai_route_append(&geometry.route, start, end));
     next = end;
     next.heading = 64;

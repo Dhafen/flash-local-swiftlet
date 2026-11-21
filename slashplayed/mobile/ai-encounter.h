@@ -83,7 +83,8 @@ static inline bool sp_ai_observed_bearing(const SPAIEncounter *encounter, SPAIEn
         !sp_ai_sample_fresh(pose.observedAt, now)) return false;
     double dx = pose.targetFirstQ4, dy = pose.targetSecondQ4;
     double low = distance - 2, high = distance + 2, length2 = dx * dx + dy * dy;
-    return length2 >= low * low && length2 <= high * high && sp_ai_target_heading(&encounter->route, pose, desired);
+    return length2 >= low * low && length2 <= high * high &&
+        sp_ai_target_in_recorded_corridor(&encounter->route, pose) && sp_ai_target_heading(&encounter->route, pose, desired);
 }
 
 static inline const char *sp_ai_check_target_turn(SPAIEncounter *encounter, SPAIEncounterObservation observation,

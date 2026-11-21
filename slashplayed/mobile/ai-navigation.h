@@ -141,6 +141,31 @@ static inline bool sp_ai_projected_approach(SPAIWorldPose before, SPAIWorldPose 
     return along > 0 && along * along >= 4 * (tx * tx + ty * ty);
 }
 
+static inline bool sp_ai_recorded_leg_contains(SPAIRouteLeg leg, double firstQ4, double secondQ4) {
+    double x = firstQ4 - leg.start.firstQ4, y = secondQ4 - leg.start.secondQ4;
+    double dx = (double)leg.end.firstQ4 - leg.start.firstQ4, dy = (double)leg.end.secondQ4 - leg.start.secondQ4;
+    double along = x * dx + y * dy, across = x * dy - y * dx, length2 = dx * dx + dy * dy;
+    const double radius2 = SP_ROUTE_RADIUS_Q4 * SP_ROUTE_RADIUS_Q4;
+    if (along < 0) return x * x + y * y <= radius2;
+    if (along > length2) {
+        x -= dx;
+        y -= dy;
+        return x * x + y * y <= radius2;
+    }
+    return length2 > 0 && across * across <= radius2 * length2;
+}
+
+static inline bool sp_ai_target_in_recorded_corridor(const SPAIRoute *route, SPAIWorldPose pose) {
+    for (unsigned i = 0; i < route->count; ++i) {
+        SPAIRouteLeg leg = route->legs[i];
+        if (leg.calibrated && leg.start.map == pose.map &&
+            sp_ai_recorded_leg_contains(leg, pose.firstQ4, pose.secondQ4) &&
+            sp_ai_recorded_leg_contains(leg, (double)pose.firstQ4 + pose.targetFirstQ4,
+                (double)pose.secondQ4 + pose.targetSecondQ4)) return true;
+    }
+    return false;
+}
+
 static inline bool sp_ai_target_heading(const SPAIRoute *route, SPAIWorldPose pose, uint8_t *desired) {
     if (!pose.valid || !pose.headingKnown || !pose.targetKnown ||
         (!pose.targetFirstQ4 && !pose.targetSecondQ4)) return false;

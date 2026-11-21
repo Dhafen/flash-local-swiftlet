@@ -422,6 +422,11 @@ int main(void) {
     assert(!sp_ai_target_heading(&calibrated, selected, &desired));
     sp_ai_route_calibrate_leg(&calibrated.legs[1], joint, axisB);
     assert(sp_ai_target_heading(&calibrated, selected, &desired) && desired == 32);
+    assert(!sp_ai_target_in_recorded_corridor(&calibrated, selected));
+    SPAIWorldPose onLeg = selected;
+    onLeg.targetFirstQ4 = 20;
+    onLeg.targetSecondQ4 = 0;
+    assert(sp_ai_target_in_recorded_corridor(&calibrated, onLeg));
     selected.targetFirstQ4 = -30;
     assert(sp_ai_target_heading(&calibrated, selected, &desired) && desired == 96);
     selected.map = 8;
