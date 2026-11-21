@@ -411,6 +411,16 @@ int main(void) {
     selected.targetFirstQ4 = 30;
     selected.targetSecondQ4 = -30;
     uint8_t desired = 0;
+    assert(!sp_ai_target_heading(&calibrated, selected, &desired));
+    axisA.observedAt = joint.observedAt = 1;
+    SPAIWorldPose firstEnd = calibrated.legs[0].end;
+    firstEnd.observedAt = axisB.observedAt = 2;
+    sp_ai_route_calibrate_leg(&calibrated.legs[0], axisA, firstEnd);
+    SPAIWorldPose turnedMidLeg = joint;
+    turnedMidLeg.heading = 128;
+    sp_ai_route_calibrate_leg(&calibrated.legs[1], turnedMidLeg, axisB);
+    assert(!sp_ai_target_heading(&calibrated, selected, &desired));
+    sp_ai_route_calibrate_leg(&calibrated.legs[1], joint, axisB);
     assert(sp_ai_target_heading(&calibrated, selected, &desired) && desired == 32);
     selected.targetFirstQ4 = -30;
     assert(sp_ai_target_heading(&calibrated, selected, &desired) && desired == 96);
@@ -423,6 +433,18 @@ int main(void) {
     SPAIWorldPose decodedTarget = sp_ai_world_pose(targetPosePacket, sizeof targetPosePacket);
     assert(decodedTarget.valid && decodedTarget.targetKnown && decodedTarget.firstQ4 == -5 &&
         decodedTarget.secondQ4 == 8 && decodedTarget.targetFirstQ4 == 12 && decodedTarget.targetSecondQ4 == -16);
+    selected = axisA;
+    selected.targetKnown = true;
+    selected.targetFirstQ4 = 44;
+    SPAIWorldPose onFoot = selected;
+    onFoot.observedAt = selected.observedAt + 1;
+    onFoot.firstQ4 += 4;
+    assert(sp_ai_projected_approach(selected, onFoot));
+    onFoot.firstQ4 -= 4;
+    onFoot.secondQ4 += 20;
+    assert(!sp_ai_projected_approach(selected, onFoot));
+    onFoot.firstQ4 -= 4;
+    assert(!sp_ai_projected_approach(selected, onFoot));
     test_route_turn_requires_binding_and_confirmed_heading();
     uint8_t health[3][64][4] = {0};
     for (unsigned row = 0; row < 3; ++row)

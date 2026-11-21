@@ -41,6 +41,7 @@ typedef struct {
     SPAIMove routeAction;
     bool routeEvidenceArmed, routeHeadingUnconfirmed;
     SPAIWorldPose targetTurnBefore;
+    SPAIWorldPose targetWalkBefore;
     double targetTurnReleasedAt, targetTurnDeadline;
     unsigned targetTurnError, targetTurns, targetTurnFailures;
     SPAIMove targetTurnMove;
@@ -70,14 +71,15 @@ static inline void sp_ai_cancel_steering(SPAIEncounter *encounter) {
     encounter->routeEvidenceArmed = false;
     encounter->targetTurnDeadline = 0;
     encounter->targetFacingProof = (SPAISteering){0};
+    encounter->targetWalkBefore = (SPAIWorldPose){0};
 }
 
 static inline bool sp_ai_observed_bearing(const SPAIEncounter *encounter, SPAIEncounterObservation observation,
     double now, uint8_t *desired) {
     SPAIWorldPose pose = observation.pose;
     uint16_t distance = observation.sample.evidence.distance;
-    if (observation.sample.column || !observation.sample.evidence.target || (observation.flags & 32) ||
-        distance <= 16 || distance > 120 || pose.epoch != observation.sample.evidence.position ||
+    if (!observation.sample.evidence.target ||
+        distance < 4 || distance > 120 || pose.epoch != observation.sample.evidence.position ||
         !sp_ai_sample_fresh(pose.observedAt, now)) return false;
     double dx = pose.targetFirstQ4, dy = pose.targetSecondQ4;
     double low = distance - 2, high = distance + 2, length2 = dx * dx + dy * dy;
@@ -310,8 +312,14 @@ static inline const char *sp_ai_advance(SPAIEncounter *encounter, SPAIEncounterO
     }
 
     const char *approach = "APPROACH";
+    bool combat = (flags & 32) != 0;
     uint8_t desired = 0;
     bool bearing = hostile && sp_ai_observed_bearing(encounter, observation, now, &desired);
+    if (encounter->targetTurnDeadline && combat) {
+        adapter.release(adapter.context);
+        sp_ai_cancel_steering(encounter);
+        return "IN COMBAT";
+    }
     if (encounter->targetTurnDeadline)
         return sp_ai_check_target_turn(encounter, observation, bearing, desired, now, adapter);
     if (encounter->pulse.deadline) {
@@ -320,6 +328,13 @@ static inline const char *sp_ai_advance(SPAIEncounter *encounter, SPAIEncounterO
             sp_ai_movement_key(encounter->pulse.move, observation.movementKeys);
         SPAINavSample outcomeSample = sample;
         SPAINavOutcome outcome = sp_ai_nav_observe(encounter->pulse, &outcomeSample, now, &encounter->lastPulseSample);
+        if (outcome == SP_NAV_CLOSER && encounter->targetWalkBefore.valid) {
+            SPAIWorldPose pose = observation.pose;
+            if (!sp_ai_sample_fresh(pose.observedAt, now) || pose.observedAt < encounter->pulse.endedAt)
+                outcome = SP_NAV_NO_SAMPLE;
+            else if (!sp_ai_projected_approach(encounter->targetWalkBefore, pose))
+                outcome = SP_NAV_NO_PROGRESS;
+        }
         if (!canContinue && (outcome == SP_NAV_PENDING || outcome == SP_NAV_NO_SAMPLE))
             outcome = SP_NAV_CONTEXT_CHANGED;
         if (outcome == SP_NAV_PENDING) return approach;
@@ -329,10 +344,10 @@ static inline const char *sp_ai_advance(SPAIEncounter *encounter, SPAIEncounterO
         encounter->pulse = (SPAINavPulse){0};
         encounter->lastPulseSample = (SPAINavSample){0};
         encounter->pulseTrainingEligible = false;
+        encounter->targetWalkBefore = (SPAIWorldPose){0};
         encounter->nextAction = now + 0.4;
     }
 
-    bool combat = (flags & 32) != 0;
     if (sample.motion.lootConfirmed && (flags & (16|128)) == (16|128) && target &&
         !combat && encounter->lootAttempts < 3) {
         sp_ai_note(adapter, "AI loot: selected corpse slot cleared");
@@ -375,8 +390,9 @@ static inline const char *sp_ai_advance(SPAIEncounter *encounter, SPAIEncounterO
     if (!hostile) return "AI WAIT";
     if (!(sample.evidence.bindings & SP_AI_ROTATION_BOUND)) return "F12 BIND";
     if (!target) return "TARGET UNKNOWN";
-    if (encounter->targetTurnUnconfirmed && encounter->targetTurnFailures >= 2) return "NAV BLOCK";
-    if (encounter->targetTurnUnconfirmed && !bearing) return "NAV BEARING";
+    if (!combat && encounter->targetTurnUnconfirmed && encounter->targetTurnFailures >= 2 && !sample.column) return "NAV BLOCK";
+    if (!combat && encounter->targetTurnUnconfirmed && !bearing && !sample.column) return "NAV BEARING";
+    bool useBearing = !combat && bearing && (!sample.column || encounter->targetTurnUnconfirmed);
 
     if (sp_ai_observe_damage(&encounter->combatEvidence, observation.targetHP, sample.at)) {
         sp_ai_note(adapter, "AI combat: selected target health decreased");
@@ -387,21 +403,24 @@ static inline const char *sp_ai_advance(SPAIEncounter *encounter, SPAIEncounterO
     }
     bool recentDamage = encounter->lastDamageAt > 0 && now - encounter->lastDamageAt < 3.0;
     SPAIMove ruleMove = sp_ai_visible_approach(meta, 2, false, false);
-    if (bearing) {
+    if (useBearing) {
         int error = sp_ai_heading_error(desired, observation.pose.heading);
         ruleMove = error >= -8 && error <= 8 ? SP_MOVE_FORWARD : (error > 0 ? SP_TURN_LEFT : SP_TURN_RIGHT);
     }
     SPAIMove move = sp_ai_predict_approach(&encounter->approachModel, sample, ruleMove, combat);
     // Demonstrations can opt out of model changes where the player taught lateral movement.
     unsigned side = ruleMove == SP_MOVE_RIGHT;
-    if (!bearing && move != ruleMove && examples->lateral[side] > examples->forward[side] && examples->lateral[side] >= 4)
+    if (!useBearing && move != ruleMove && examples->lateral[side] > examples->forward[side] && examples->lateral[side] >= 4)
         move = ruleMove;
     if (encounter->steeringPosition != sample.evidence.position) {
         encounter->steering = (SPAISteering){0};
         encounter->steeringPosition = sample.evidence.position;
     }
-    bool confirmed = sp_ai_confirm_steering(&encounter->steering, move, bearing ? observation.pose.observedAt : sample.at);
-    if (bearing && move == SP_MOVE_FORWARD && confirmed) encounter->targetTurnUnconfirmed = false;
+    bool confirmed = sp_ai_confirm_steering(&encounter->steering, move, useBearing ? observation.pose.observedAt : sample.at);
+    if (confirmed && ((useBearing && move == SP_MOVE_FORWARD) ||
+        (!useBearing && sample.column && sample.at >= encounter->targetTurnReleasedAt)))
+        encounter->targetTurnUnconfirmed = false;
+    if (!combat && encounter->targetTurnUnconfirmed && sample.evidence.distance <= 16) return "NAV BEARING";
     const char *phase = combat ? "IN COMBAT" : "ENGAGE";
     if (now < encounter->nextAction) return phase;
     SPAIEngagement engagement = sp_ai_engagement(encounter->combatEvidence, move, sample.evidence.distance,
@@ -440,13 +459,14 @@ static inline const char *sp_ai_advance(SPAIEncounter *encounter, SPAIEncounterO
             encounter->nextAction = now + 0.8;
             return "NAV INPUT";
         }
-        sp_ai_note(adapter, bearing ? "AI policy: calibrated target bearing selected forward" :
+        sp_ai_note(adapter, useBearing ? "AI policy: calibrated target bearing selected forward" :
             move == ruleMove ? "AI policy: rules selected approach" :
             "AI policy: measured approach model selected forward");
         sp_ai_nav_accept(&encounter->navBudget, move);
         encounter->steering = (SPAISteering){0};
         encounter->lastMoveAt = now;
         encounter->pulse = (SPAINavPulse){sample, move, now + hold, now + 1.8};
+        if (useBearing) encounter->targetWalkBefore = observation.pose;
         encounter->pulseTrainingEligible = !combat;
         return approach;
     }

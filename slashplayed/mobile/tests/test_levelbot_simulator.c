@@ -14,7 +14,7 @@ typedef struct {
     SPAIApproachModel model;
     unsigned modelMoves;
     bool lateralBlocked, lateralPulse;
-    bool corner, geometryTarget;
+    bool corner, geometryTarget, geometryCrossTrack, interruptTurnWithCombat;
     uint8_t heading;
     int32_t routeFirstQ4;
     unsigned turns;
@@ -39,6 +39,10 @@ static bool submit(void *context, const char *action, SPAINavSample sample, doub
         int bins = hold == 0.28 ? 32 : 10;
         game->heading = (uint8_t)(game->heading + (!strcmp(action, "TURN_LEFT") ? bins : -bins));
         ++game->turns;
+        if (game->interruptTurnWithCombat) {
+            game->inCombat = true;
+            game->distance = 12;
+        }
     } else if (!strcmp(action, "ATTACK")) {
         assert(game->selected && game->targetHP > 0);
         ++game->attacks;
@@ -82,7 +86,14 @@ static SPAIEncounterObservation sample(GameSimulator *game) {
     if (game->movementEndsAt && game->now >= game->movementEndsAt) {
         game->movementEndsAt = 0;
         if (!game->blockAllMovement && !(game->lateralPulse && game->lateralBlocked) && game->movementCommands > 1) {
-            if (game->selected) game->distance -= game->distance > 44 ? 28 : game->distance - 16;
+            if (game->selected) {
+                unsigned progress = game->distance > 44 ? 28 : game->distance - 16;
+                game->distance -= progress;
+                if (game->geometryTarget) {
+                    if (game->geometryCrossTrack) game->routePositionQ4 += progress;
+                    else game->routeFirstQ4 += progress;
+                }
+            }
             else if (game->corner && game->heading == 0)
                 game->routeFirstQ4 += game->routeFirstQ4 >= 24 ? 8 : 16;
             else game->routePositionQ4 += 16;
@@ -193,6 +204,10 @@ int main(void) {
     nextEnd = next;
     nextEnd.secondQ4 = 24;
     assert(sp_ai_route_append(&geometry.route, next, nextEnd));
+    start.observedAt = next.observedAt = 1;
+    end.observedAt = nextEnd.observedAt = 2;
+    sp_ai_route_calibrate_leg(&geometry.route.legs[0], start, end);
+    sp_ai_route_calibrate_leg(&geometry.route.legs[1], next, nextEnd);
     run(&geometry, "SEARCH", true);
     assert(geometry.turns == 2 && geometry.approaches == 1 && geometry.hits == 2 && geometry.lootCommands == 1);
     GameSimulator uncalibrated = {.distance = 44, .playerHP = 100, .targetHP = 100, .geometryTarget = true,
@@ -200,6 +215,14 @@ int main(void) {
     uncalibrated.route.count = 1;
     run(&uncalibrated, "NO DAMAGE", false);
     assert(!uncalibrated.turns && !uncalibrated.movementCommands && !uncalibrated.hits);
+    GameSimulator intercepted = {.distance = 44, .playerHP = 100, .targetHP = 100, .geometryTarget = true,
+        .heading = 64, .route = geometry.route, .interruptTurnWithCombat = true};
+    run(&intercepted, "SEARCH", true);
+    assert(intercepted.turns == 1 && !intercepted.movementCommands && intercepted.hits == 2);
+    GameSimulator crossTrack = {.distance = 44, .playerHP = 100, .targetHP = 100, .geometryTarget = true,
+        .heading = 64, .route = geometry.route, .geometryCrossTrack = true};
+    run(&crossTrack, "SEARCH", true);
+    assert(!crossTrack.approaches && crossTrack.routePositionQ4 > 0);
 
     GameSimulator rules = {.distance = 44, .playerHP = 100, .targetHP = 100, .lateralBlocked = true};
     GameSimulator learned = rules;

@@ -52,7 +52,7 @@ static inline SPAIWorldPose sp_ai_world_pose(const uint8_t *bytes, unsigned leng
 }
 
 enum { SP_ROUTE_MAX_LEGS = 8, SP_ROUTE_RADIUS_Q4 = 8 };
-typedef struct { SPAIWorldPose start, end; } SPAIRouteLeg;
+typedef struct { SPAIWorldPose start, end; bool calibrated; } SPAIRouteLeg;
 typedef struct {
     SPAIRouteLeg legs[SP_ROUTE_MAX_LEGS];
     unsigned count, next;
@@ -88,8 +88,21 @@ static inline bool sp_ai_route_append(SPAIRoute *route, SPAIWorldPose start, SPA
         if (previous.map != start.map || sp_ai_pose_distance2(previous, start) > SP_ROUTE_RADIUS_Q4 * SP_ROUTE_RADIUS_Q4)
             return false;
     }
-    route->legs[route->count++] = (SPAIRouteLeg){start, end};
+    route->legs[route->count++] = (SPAIRouteLeg){start, end, false};
     return true;
+}
+
+static inline void sp_ai_route_calibrate_leg(SPAIRouteLeg *leg, SPAIWorldPose first, SPAIWorldPose second) {
+    if (!first.valid || !second.valid || !first.headingKnown || !second.headingKnown ||
+        first.map != leg->start.map || second.map != first.map ||
+        first.epoch != leg->start.epoch || second.epoch != first.epoch || second.observedAt <= first.observedAt ||
+        sp_ai_heading_delta(first.heading, leg->start.heading) > 5 ||
+        sp_ai_heading_delta(second.heading, leg->start.heading) > 5 ||
+        sp_ai_pose_distance2(first, second) < 16) return;
+    double dx = (double)leg->end.firstQ4 - leg->start.firstQ4, dy = (double)leg->end.secondQ4 - leg->start.secondQ4;
+    double x = (double)second.firstQ4 - first.firstQ4, y = (double)second.secondQ4 - first.secondQ4;
+    double along = x * dx + y * dy, cross = x * dy - y * dx;
+    leg->calibrated = along > 0 && 16 * cross * cross <= along * along;
 }
 
 static inline SPAIRouteDecision sp_ai_route_probe(const SPAIRoute *route, SPAIWorldPose pose) {
@@ -119,13 +132,22 @@ static inline double sp_ai_axis_angle(double x, double y, double tx, double ty) 
     return atan2(x * ty - y * tx, x * tx + y * ty) * (128.0 / 3.14159265358979323846);
 }
 
+static inline bool sp_ai_projected_approach(SPAIWorldPose before, SPAIWorldPose after) {
+    if (!before.valid || !before.targetKnown || !after.valid || before.map != after.map ||
+        before.epoch != after.epoch || after.observedAt <= before.observedAt) return false;
+    double dx = (double)after.firstQ4 - before.firstQ4, dy = (double)after.secondQ4 - before.secondQ4;
+    double tx = before.targetFirstQ4, ty = before.targetSecondQ4;
+    double along = dx * tx + dy * ty;
+    return along > 0 && along * along >= 4 * (tx * tx + ty * ty);
+}
+
 static inline bool sp_ai_target_heading(const SPAIRoute *route, SPAIWorldPose pose, uint8_t *desired) {
     if (!pose.valid || !pose.headingKnown || !pose.targetKnown ||
         (!pose.targetFirstQ4 && !pose.targetSecondQ4)) return false;
     bool calibrated = false;
     for (unsigned i = 1; i < route->count; ++i) {
         SPAIRouteLeg a = route->legs[i - 1], b = route->legs[i];
-        if (a.start.map != pose.map || b.start.map != pose.map) continue;
+        if (!a.calibrated || !b.calibrated || a.start.map != pose.map || b.start.map != pose.map) continue;
         int heading = sp_ai_heading_error(b.start.heading, a.start.heading);
         unsigned separation = sp_ai_heading_delta(b.start.heading, a.start.heading);
         if (separation < 48 || separation > 80) continue;

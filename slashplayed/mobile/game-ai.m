@@ -257,7 +257,9 @@ static void sp_ai_note_event(void *context, const char *message) {
     SPAIEncounter _encounter;
     SPAIRoute _grindRoute;
     SPAIWorldPose _recordedLegStart;
+    SPAIWorldPose _recordedFirstMotion, _recordedLastMotion;
     BOOL _recordedForward, _recordedOtherDirection;
+    NSUInteger _routeRecordingGeneration;
     NSProcessInfoThermalState _lastThermal;
     SPAIApproachExamples _approachExamples;
     BOOL _teaching;
@@ -295,6 +297,23 @@ static void sp_ai_note_event(void *context, const char *message) {
     _manualPaused = NO;
 }
 
+- (void)sampleRecordedLeg:(NSUInteger)generation {
+    if (generation != _routeRecordingGeneration || !_recordedLegStart.valid || _active) return;
+    SPAIWorldPose pose = sp_ai_game_pose(sp_ai_game_sample());
+    if (pose.valid && pose.headingKnown && sp_ai_sample_fresh(pose.observedAt, NSProcessInfo.processInfo.systemUptime)) {
+        if (pose.map != _recordedLegStart.map || pose.epoch != _recordedLegStart.epoch ||
+            sp_ai_heading_delta(pose.heading, _recordedLegStart.heading) > 5) {
+            _recordedOtherDirection = YES;
+        } else {
+            if (!_recordedFirstMotion.valid) _recordedFirstMotion = pose;
+            _recordedLastMotion = pose;
+        }
+    }
+    __weak SPGameAIController *weak = self;
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, NSEC_PER_SEC / 4), dispatch_get_main_queue(),
+        ^{ [weak sampleRecordedLeg:generation]; });
+}
+
 - (void)recordRouteMark {
     if (_active) return;
     SPAINavSample sample = sp_ai_game_sample();
@@ -304,12 +323,21 @@ static void sp_ai_note_event(void *context, const char *message) {
         status = @"ROUTE DATA";
     } else if (!_recordedLegStart.valid) {
         _recordedLegStart = pose;
+        _recordedFirstMotion = _recordedLastMotion = (SPAIWorldPose){0};
         _recordedForward = _recordedOtherDirection = NO;
         status = @"LEG START";
+        [self sampleRecordedLeg:++_routeRecordingGeneration];
     } else {
         BOOL added = _recordedForward && !_recordedOtherDirection && sp_ai_route_append(&_grindRoute, _recordedLegStart, pose);
+        if (added) {
+            SPAIRouteLeg *leg = &_grindRoute.legs[_grindRoute.count - 1];
+            sp_ai_route_calibrate_leg(leg, _recordedFirstMotion, _recordedLastMotion);
+            status = leg->calibrated ? [NSString stringWithFormat:@"LEGS %u", _grindRoute.count] : @"LEG NO CAL";
+        } else {
+            status = @"LEG INVALID";
+        }
         _recordedLegStart = (SPAIWorldPose){0};
-        status = added ? [NSString stringWithFormat:@"LEGS %u", _grindRoute.count] : @"LEG INVALID";
+        ++_routeRecordingGeneration;
     }
     if (self.status) self.status(status);
 }
@@ -318,6 +346,7 @@ static void sp_ai_note_event(void *context, const char *message) {
     if (_active) return;
     _grindRoute = (SPAIRoute){0};
     _recordedLegStart = (SPAIWorldPose){0};
+    ++_routeRecordingGeneration;
     if (self.status) self.status(@"ROUTE EMPTY");
 }
 
@@ -350,8 +379,11 @@ static void sp_ai_note_event(void *context, const char *message) {
 
 - (void)recordManualSteering:(CGPoint)delta {
     if (_recordedLegStart.valid && hypot(delta.x, delta.y) >= 12) {
-        if (-delta.y >= 12 && fabs(delta.x) <= -delta.y * 0.25) _recordedForward = YES;
-        else _recordedOtherDirection = YES;
+        if (-delta.y >= 12 && fabs(delta.x) <= -delta.y * 0.25) {
+            _recordedForward = YES;
+        } else {
+            _recordedOtherDirection = YES;
+        }
     }
     if (!_teaching || _active || _teachingSamples >= 60) return;
     NSTimeInterval now = NSProcessInfo.processInfo.systemUptime;
@@ -769,6 +801,8 @@ static NSArray<NSNumber *> *sp_ai_luminance(CVPixelBufferRef buffer) {
 }
 - (void)start {
     if (_active || _starting || _stopping) return;
+    _recordedLegStart = (SPAIWorldPose){0};
+    ++_routeRecordingGeneration;
     if (_teaching) [self toggleTeaching];
     NSArray *examples = [NSUserDefaults.standardUserDefaults arrayForKey:@"sp_wolkara_approach_examples_v1"];
     _approachExamples = (SPAIApproachExamples){0};
