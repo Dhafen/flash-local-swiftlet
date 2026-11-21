@@ -103,7 +103,7 @@ local function spAIIdentity(unit)
 end
 
 local spAICombatTarget, spAILootedTarget
-local spAIHitTarget, spAIHitCount = nil, 0
+local spAIHitTarget, spAIHitCount, spAIHitAt = nil, 0, nil
 local spAIPlayerKill, spAIPlayerKillAt
 local spAIPreviousTarget, spAITargetEpoch = nil, 0
 local spAILootSlots = {}
@@ -144,16 +144,17 @@ local function spAICombatLog(_, kind, _, source, _, _, _, destination, _, _, _, 
         amount = select(4, ...)
     else return end
     if not spAIReadable(amount) or type(amount) ~= "number" or not (amount > 0 and amount < math.huge) then return end
-    if source ~= spAIIdentity("player") or destination ~= spAIIdentity("target") then return end
+    local now = spAIClock()
+    if not now or source ~= spAIIdentity("player") or destination ~= spAIIdentity("target") then return end
     if spAIHitTarget ~= destination then spAIHitCount = 0 end
-    spAIHitTarget, spAIHitCount = destination, (spAIHitCount + 1) % 4
+    spAIHitTarget, spAIHitCount, spAIHitAt = destination, (spAIHitCount + 1) % 4, now
 end
 
 local function spAILootEvent(_, event, first, second)
     if event == "PLAYER_TARGET_CHANGED" then
         spAICombatTarget, spAIPlayerKill, spAIPlayerKillAt = nil, nil, nil
         spAIPreviousTarget = nil
-        spAIHitTarget, spAIHitCount = nil, 0
+        spAIHitTarget, spAIHitCount, spAIHitAt = nil, 0, nil
         spAILootSlots = {}
         return
     end
@@ -311,10 +312,10 @@ local function spAIState()
     if not SPPhoneTouchRects then return "" end
     local stage = 1
     local function unavailable(code) return string.char(65, 73, 0, code, 0, 0, 75, 0, 70, 0, 0, 0, 78, 0, 0, 255, 255, 0) end
-    local function boolValue(value)
+    local function boolValue(value, absentIsFalse)
         if type(issecretvalue) == "function" and issecretvalue(value) then error("restricted value") end
         if type(canaccessvalue) == "function" and not canaccessvalue(value) then error("restricted value") end
-        if value == nil then return false end
+        if value == nil and absentIsFalse then return false end
         if type(value) == "boolean" then return value end
         if type(value) == "number" and (value == 0 or value == 1) then return value == 1 end
         error("unexpected boolean")
@@ -333,7 +334,7 @@ local function spAIState()
         if dead("player") then flags = flags + 2 end
         stage = 5
         local hostile, targetDead, foeID = false, false, nil
-        local hasTarget = boolValue(UnitExists("target"))
+        local hasTarget = boolValue(UnitExists("target"), true)
         if hasTarget then
             flags = flags + 4
             stage = 6
@@ -394,7 +395,8 @@ local function spAIState()
                 + 4 * spAICorpseQuery(UnitHasLootInteraction) + 16 * spAICorpseQuery(UnitIsInInteractRange)
         end
         local healthStatus = 64 + spAIHealthStatus(hp, hpReason) * 4 + targetHealth * 16
-        if foeID and spAIHitTarget == foeID then
+        local hitClock = spAIHitAt and spAIClock()
+        if foeID and spAIHitTarget == foeID and hitClock and hitClock >= spAIHitAt and hitClock - spAIHitAt < 1 then
             corpseEvidence = corpseEvidence + 64 * spAIHitCount
             healthStatus = healthStatus + 128
         end

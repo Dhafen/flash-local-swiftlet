@@ -34,9 +34,10 @@ typedef struct {
     bool approachModelDirty, pulseTrainingEligible;
     SPAIApproachModel approachModel;
     SPAIRoute route;
-    double routeDeadline, routeProgress, routeStartedAt;
+    double routeDeadline, routeProgress, routeStartedAt, routeHold;
     unsigned routeFailures, routeMoves;
-    uint8_t routePositionEpoch;
+    uint8_t routePositionEpoch, routeEvidenceSeq;
+    bool routeEvidenceArmed;
 } SPAIEncounter;
 
 static inline void sp_ai_note(SPAIEncounterAdapter adapter, const char *message) {
@@ -90,20 +91,26 @@ static inline const char *sp_ai_follow_route(SPAIEncounter *encounter, SPAIEncou
     SPAIRoute *route = &encounter->route;
     SPAIRouteDecision decision = sp_ai_route_probe(route, pose);
     if (encounter->routeDeadline) {
-        if (decision == SP_ROUTE_OFF_ROUTE || decision == SP_ROUTE_FACE ||
+        if (decision == SP_ROUTE_OFF_ROUTE || decision == SP_ROUTE_FACE || decision == SP_ROUTE_UNKNOWN ||
             (pose.valid && pose.epoch != encounter->routePositionEpoch)) {
             adapter.release(adapter.context);
             encounter->routeDeadline = 0;
+            if (decision == SP_ROUTE_UNKNOWN) {
+                ++encounter->routeFailures;
+                return "ROUTE DATA";
+            }
             return "ROUTE HOLD";
         }
-        if (now < encounter->routeDeadline) return "ROUTE";
+        bool afterRelease = pose.observedAt > encounter->routeStartedAt + encounter->routeHold;
+        bool newEvidence = afterRelease && encounter->routeEvidenceArmed && pose.sequence != encounter->routeEvidenceSeq;
+        if (afterRelease && !encounter->routeEvidenceArmed) {
+            encounter->routeEvidenceArmed = true;
+            encounter->routeEvidenceSeq = pose.sequence;
+        }
+        if (!newEvidence && now < encounter->routeDeadline) return "ROUTE";
         adapter.release(adapter.context);
         encounter->routeDeadline = 0;
-        if (!pose.valid || pose.observedAt < encounter->routeStartedAt + 0.60) {
-            if (now < encounter->routeStartedAt + 1.8) {
-                encounter->routeDeadline = encounter->routeStartedAt + 1.8;
-                return "ROUTE";
-            }
+        if (!newEvidence) {
             ++encounter->routeFailures;
             return "ROUTE DATA";
         }
@@ -126,13 +133,16 @@ static inline const char *sp_ai_follow_route(SPAIEncounter *encounter, SPAIEncou
     if (!sp_ai_movement_key(SP_MOVE_FORWARD, observation.movementKeys)) return "MOVE BIND";
     if (now - encounter->routeStartedAt < (reduced ? 2.0 : 1.0)) return "ROUTE";
     encounter->routeStartedAt = now;
-    if (!sp_ai_try_input(encounter, adapter, "FORWARD", observation.sample, 0.60)) {
+    double hold = sp_ai_route_hold(route, pose);
+    if (!sp_ai_try_input(encounter, adapter, "FORWARD", observation.sample, hold)) {
         ++encounter->routeFailures;
         return "NAV INPUT";
     }
     encounter->routePositionEpoch = pose.epoch;
     encounter->routeProgress = sp_ai_pose_distance2(pose, route->legs[route->next].end);
-    encounter->routeDeadline = now + 1.2;
+    encounter->routeHold = hold;
+    encounter->routeEvidenceArmed = false;
+    encounter->routeDeadline = now + 2.6;
     ++encounter->routeMoves;
     return "ROUTE";
 }
@@ -213,8 +223,11 @@ static inline const char *sp_ai_advance(SPAIEncounter *encounter, SPAIEncounterO
     if (decision == SP_AI_LOOT_WAIT) return "LOOT UNCONF";
     if (decision == SP_AI_LOOT) {
         if (!target) return "LOOT UNKNOWN";
-        if ((observation.corpseEvidence & (SP_CORPSE_RANGE_OUT|SP_CORPSE_RANGE_IN)) == SP_CORPSE_RANGE_OUT)
-            return "LOOT RANGE";
+        unsigned range = observation.corpseEvidence & (SP_CORPSE_RANGE_OUT|SP_CORPSE_RANGE_IN);
+        unsigned loot = observation.corpseEvidence & (SP_CORPSE_LOOT_NONE|SP_CORPSE_LOOT_AVAILABLE);
+        if (loot == SP_CORPSE_LOOT_NONE) return "LOOT EMPTY";
+        if (range == SP_CORPSE_RANGE_OUT) return "LOOT RANGE";
+        if (range != SP_CORPSE_RANGE_IN || loot != SP_CORPSE_LOOT_AVAILABLE) return "LOOT UNKNOWN";
         if (now >= encounter->nextAction) {
             encounter->nextAction = now + 1.4;
             if (!sp_ai_try_input(encounter, adapter, "LOOT", sample, 0)) return "AI INPUT";

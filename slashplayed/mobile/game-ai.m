@@ -81,6 +81,7 @@ static void sp_ai_pose_heartbeat(uint8_t seq, const uint8_t *data, unsigned leng
     if (observedAt <= sp_ai_pose_at || (sp_ai_pose_at > 0 && observedAt - sp_ai_pose_at < 1.0 && seq == sp_ai_pose_seq)) return;
     sp_ai_pose = sp_ai_world_pose(data, length);
     sp_ai_pose.observedAt = observedAt;
+    sp_ai_pose.sequence = seq;
     sp_ai_pose_seq = seq;
     sp_ai_pose_at = observedAt;
 }
@@ -211,6 +212,7 @@ static void sp_ai_note_event(void *context, const char *message) {
     BOOL _active, _starting, _stopping, _ownsCapture;
     BOOL _manualPaused;
     NSTimeInterval _manualResumeAt;
+    NSTimeInterval _lastFreshGameAt;
     NSUInteger _run, _captureRun;
     BOOL _busy;
     NSTimeInterval _nextFrame, _lastFrame;
@@ -223,6 +225,7 @@ static void sp_ai_note_event(void *context, const char *message) {
     SPAIEncounter _encounter;
     SPAIRoute _grindRoute;
     SPAIWorldPose _recordedLegStart;
+    BOOL _recordedForward, _recordedOtherDirection;
     NSProcessInfoThermalState _lastThermal;
     SPAIApproachExamples _approachExamples;
     BOOL _teaching;
@@ -268,9 +271,10 @@ static void sp_ai_note_event(void *context, const char *message) {
         status = @"ROUTE DATA";
     } else if (!_recordedLegStart.valid) {
         _recordedLegStart = pose;
+        _recordedForward = _recordedOtherDirection = NO;
         status = @"LEG START";
     } else {
-        BOOL added = sp_ai_route_append(&_grindRoute, _recordedLegStart, pose);
+        BOOL added = _recordedForward && !_recordedOtherDirection && sp_ai_route_append(&_grindRoute, _recordedLegStart, pose);
         _recordedLegStart = (SPAIWorldPose){0};
         status = added ? [NSString stringWithFormat:@"LEGS %u", _grindRoute.count] : @"LEG INVALID";
     }
@@ -312,6 +316,10 @@ static void sp_ai_note_event(void *context, const char *message) {
 }
 
 - (void)recordManualSteering:(CGPoint)delta {
+    if (_recordedLegStart.valid && hypot(delta.x, delta.y) >= 12) {
+        if (-delta.y >= 12 && fabs(delta.x) <= -delta.y * 0.25) _recordedForward = YES;
+        else _recordedOtherDirection = YES;
+    }
     if (!_teaching || _active || _teachingSamples >= 60) return;
     NSTimeInterval now = NSProcessInfo.processInfo.systemUptime;
     if (now-sp_ai_game_at >= 0.85 || sp_ai_game_at <= _lastTeachingPacket ||
@@ -662,6 +670,12 @@ static NSArray<NSNumber *> *sp_ai_luminance(CVPixelBufferRef buffer) {
     BOOL diagnosticsRequested = self.modelDiagnostics && !self.autonomousTest;
     SPAINavSample sample = sp_ai_game_sample();
     BOOL fresh = sp_ai_sample_fresh(sample.at, now);
+    if (fresh) _lastFreshGameAt = now;
+    else if (self.autonomousTest && now - _lastFreshGameAt >= 6.0) {
+        self.autonomousTest = NO;
+        [self fail:@"AI MODE"];
+        return;
+    }
     BOOL paused = _manualPaused || (_manualResumeAt > 0 && (!fresh || sample.at <= _manualResumeAt));
     if (!paused) _manualResumeAt = 0;
     BOOL preview = diagnosticsRequested && !paused && thermal == NSProcessInfoThermalStateNominal;
@@ -733,6 +747,7 @@ static NSArray<NSNumber *> *sp_ai_luminance(CVPixelBufferRef buffer) {
     _lastPhase = nil;
     _manualPaused = NO;
     _manualResumeAt = 0;
+    _lastFreshGameAt = NSProcessInfo.processInfo.systemUptime;
     _lastWorldSummary = nil;
     _lastProgressSummary = nil;
     _lastProgress = (SPAIProgression){0};

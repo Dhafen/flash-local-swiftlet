@@ -82,6 +82,11 @@ assert(packet:byte(18) == 64 + 3 * 16)
 reset(nil, nil, nil)
 assert(state():byte(18) == 64 + 1 * 4 + 3 * 16, "missing and restricted are distinct")
 print("partial public game-state tests passed")
+local setupNPC = UnitIsPlayer
+UnitIsPlayer = val(nil)
+UnitExists = val(true)
+assert(state():byte(3) == 0 and state():byte(4) == 6)
+UnitIsPlayer = setupNPC
 
 GetBindingAction = function(key, checkOverride)
     assert(checkOverride)
@@ -289,6 +294,8 @@ assert(corpseState():byte(18) < 128)
 amount = 40
 corpseEvent(nil, "COMBAT_LOG_EVENT_UNFILTERED")
 assert(corpseState():byte(18) >= 128 and math.floor(corpseState():byte(12) / 64) == 1)
+GetTime = val(30)
+assert(corpseState():byte(18) < 128)
 corpseEvent(nil, "PLAYER_TARGET_CHANGED")
 assert(corpseState():byte(18) < 128)
 print("public selected-target local damage evidence passed")

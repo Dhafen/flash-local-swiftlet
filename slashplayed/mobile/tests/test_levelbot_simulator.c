@@ -24,7 +24,7 @@ static bool submit(void *context, const char *action, SPAINavSample sample, doub
         bool atSpawn = game->route.count ? game->routePositionQ4 >= 32 : game->now >= 2;
         game->selected = !game->looted && atSpawn;
     } else if (!strcmp(action, "FORWARD") || !strcmp(action, "STRAFE_LEFT")) {
-        assert((game->route.count || game->selected) && game->targetHP > 0 && hold == 0.60);
+        assert((game->route.count || game->selected) && game->targetHP > 0 && (hold == 0.60 || hold == 0.20));
         ++game->movementCommands;
         game->lateralPulse = !strcmp(action, "STRAFE_LEFT");
         game->movementEndsAt = game->now + hold;
@@ -94,7 +94,7 @@ static SPAIEncounterObservation sample(GameSimulator *game) {
             game->selected ? game->distance : SP_AI_DISTANCE_UNKNOWN},
         game->selected && game->targetHP ? column : 0};
     SPAIWorldPose pose = {.map = 0, .secondQ4 = game->routePositionQ4, .heading = 64, .epoch = 1,
-        .valid = game->route.count > 0, .headingKnown = true, .observedAt = game->now};
+        .valid = game->route.count > 0, .headingKnown = true, .observedAt = game->now, .sequence = (uint8_t)(2 * game->now)};
     return (SPAIEncounterObservation){nav, flags, game->playerHP, game->targetHP, meta, 1 | 4, corpse,
         sp_ai_hp_known(game->playerHP) ? SP_HEALTH_PUBLIC : SP_HEALTH_RESTRICTED, pose,
         {game->hits % 4, game->selected && game->hits > 0}};

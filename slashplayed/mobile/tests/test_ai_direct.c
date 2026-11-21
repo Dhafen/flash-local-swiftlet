@@ -79,6 +79,10 @@ static void test_encounter_adapter(void) {
     observation.corpseEvidence = SP_CORPSE_RANGE_OUT | SP_CORPSE_LOOT_AVAILABLE;
     assert(strcmp(sp_ai_advance(&planner, observation, 6.5, false, &examples, adapter), "LOOT RANGE") == 0);
     assert(planner.lootAttempts == 0 && strcmp(mock.lastAction, "ATTACK") == 0);
+    observation.corpseEvidence = SP_CORPSE_RANGE_IN | SP_CORPSE_LOOT_NONE;
+    assert(strcmp(sp_ai_advance(&planner, observation, 6.5, false, &examples, adapter), "LOOT EMPTY") == 0);
+    observation.corpseEvidence = SP_CORPSE_LOOT_AVAILABLE;
+    assert(strcmp(sp_ai_advance(&planner, observation, 6.5, false, &examples, adapter), "LOOT UNKNOWN") == 0);
     observation.corpseEvidence = SP_CORPSE_RANGE_IN | SP_CORPSE_LOOT_AVAILABLE;
     observation.sample.at = 6.75;
     assert(strcmp(sp_ai_advance(&planner, observation, 6.75, false, &examples, adapter), "LOOT CHECK") == 0);
@@ -228,7 +232,9 @@ static void test_combat_feedback(void) {
     assert(!sp_ai_observe_damage(&combat, 89, 8));
     assert(sp_ai_observe_damage(&combat, 89, 9));
     assert(!sp_ai_combat_budget_open(combat));
-    assert(sp_ai_observe_own_damage(&combat, (SPAIOwnHit){1, true}, 9));
+    assert(!sp_ai_observe_own_damage(&combat, (SPAIOwnHit){1, true}, 9));
+    assert(!sp_ai_observe_own_damage(&combat, (SPAIOwnHit){1, true}, 9.5));
+    assert(sp_ai_observe_own_damage(&combat, (SPAIOwnHit){2, true}, 10));
     assert(sp_ai_combat_budget_open(combat));
 }
 
@@ -319,7 +325,25 @@ static void test_approach_model_requires_measured_benefit(void) {
     assert(!sp_ai_train_approach(&model, sample, SP_MOVE_FORWARD, SP_NAV_CLOSER));
 }
 
+static void test_route_stops_when_pose_disappears(void) {
+    SPAIEncounter planner = {0};
+    SPAIWorldPose begin = {.valid = true, .headingKnown = true, .epoch = 1, .sequence = 1, .observedAt = 4};
+    SPAIWorldPose end = begin;
+    end.firstQ4 = 40;
+    assert(sp_ai_route_append(&planner.route, begin, end));
+    SPTestAdapter mock = {.accept = true};
+    SPAIEncounterAdapter adapter = {&mock, test_submit, test_release, test_outcome, NULL};
+    SPAIEncounterObservation observation = {.pose = begin, .sample.at = 4, .movementKeys = 1};
+    assert(strcmp(sp_ai_follow_route(&planner, observation, 4, false, adapter), "ROUTE") == 0);
+    assert(mock.submissions == 1 && !mock.releases);
+    observation.pose.valid = false;
+    observation.sample.at = 4.4;
+    assert(strcmp(sp_ai_follow_route(&planner, observation, 4.4, false, adapter), "ROUTE DATA") == 0);
+    assert(mock.releases == 1 && mock.submissions == 1 && !planner.routeDeadline);
+}
+
 int main(void) {
+    test_route_stops_when_pose_disappears();
     test_approach_model_requires_measured_benefit();
     uint8_t xpPacket[] = {65, 88, 1, 3, 0, 0, 3, 82, 0, 0, 4, 176, 0, 6, 0, 4, 0, 0};
     SPAIProgression xp = sp_ai_progression(xpPacket, sizeof xpPacket);
@@ -354,6 +378,8 @@ int main(void) {
     SPAIWorldPose moved = start;
     moved.secondQ4 = 20;
     assert(sp_ai_route_probe(&route, moved) == SP_ROUTE_FORWARD);
+    moved.secondQ4 = 31;
+    assert(sp_ai_route_hold(&route, moved) == 0.20);
     moved.heading = 128;
     assert(sp_ai_route_probe(&route, moved) == SP_ROUTE_FACE);
     moved = end;

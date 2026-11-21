@@ -270,7 +270,7 @@ static inline bool sp_ai_observe_damage(SPAICombatEvidence *combat, uint8_t hp, 
 
 static inline bool sp_ai_observe_own_damage(SPAICombatEvidence *combat, SPAIOwnHit hit, double at) {
     if (!hit.known) return false;
-    bool changed = !combat->lastOwnHit.known || hit.count != combat->lastOwnHit.count;
+    bool changed = combat->lastOwnHit.known && hit.count != combat->lastOwnHit.count;
     combat->lastOwnHit = hit;
     if (!changed || !combat->attacks || at <= combat->probedAt) return false;
     combat->attacks = 0;

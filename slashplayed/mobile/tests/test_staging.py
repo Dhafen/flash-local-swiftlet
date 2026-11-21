@@ -268,6 +268,9 @@ poll = event.split('- (void)pollDirect:(NSUInteger)run {', 1)[1].split('\n}', 1)
 assert 'self.modelDiagnostics && !self.autonomousTest' in poll
 assert 'diagnosticsRequested && !paused && thermal == NSProcessInfoThermalStateNominal' in poll
 assert 'sample.at <= _manualResumeAt' in poll and 'if (paused)' in poll
+assert 'self.autonomousTest && now - _lastFreshGameAt >= 6.0' in poll
+assert '[_mobilePhysicalKeys addIndex:p.key.keyCode]' in event
+assert '[_mobilePhysicalKeys removeIndex:p.key.keyCode]' in event
 assert 'if (thermal == NSProcessInfoThermalStateCritical) { [self fail:@"AI HEAT"]; return; }' in poll
 assert 'interval = reduced ? 0.8 : 0.4' in poll
 assert 'sp_p2p_enable(preview &&' in poll and '[self previewP2P:run]' in poll.split('} else if (preview) {', 1)[1]
@@ -277,6 +280,7 @@ assert 'input->_mobileAI.autonomousTest' in event and '_mobileAI.autonomousTest 
 
 start_method = event.split("- (void)sp_mobile_ai_toggle:(UIButton *)button {", 1)[1].split("\n}", 1)[0]
 assert "dispatch_async(dispatch_get_main_queue()" in start_method
+assert start_method.index('[self sp_mobile_ai_release_key]') < start_method.index('++_mobileAIKeyGeneration')
 assert "input->_mobileAIKeyGeneration != generation" in start_method
 manual_button_group = next(line for line in event.splitlines() if "@[_mobileRotation, _mobileUI, _mobileEdit" in line)
 assert "_mobileAIButton" not in manual_button_group

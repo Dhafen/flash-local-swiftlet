@@ -47,6 +47,7 @@ def patch_input():
     BOOL _mobileAIKeyHeld;
     unsigned char _mobileAIKeyboardHeld;
     NSUInteger _mobileAIKeyGeneration;
+    NSMutableIndexSet *_mobilePhysicalKeys;
     NSTimeInterval _mobileAIManualUntil;
     UIPanGestureRecognizer *_mobileJumpPan, *_mobileRotationPan;
     UITouch *_mobileLeft, *_mobileRight, *_mobileInterface;
@@ -74,9 +75,16 @@ def patch_input():
                  methods + "- (void)pressesBegan:(NSSet<UIPress *> *)presses")
     replace_once(path, "        if (p.key) sp_key(p.key, YES);", """        if (p.key) {
 #if !TARGET_OS_VISION
+            [_mobilePhysicalKeys addIndex:p.key.keyCode];
             [self sp_mobile_ai_yield:nil];
 #endif
             sp_key(p.key, YES);
+        }""")
+    replace_once(path, "        if (p.key) sp_key(p.key, NO);", """        if (p.key) {
+#if !TARGET_OS_VISION
+            [_mobilePhysicalKeys removeIndex:p.key.keyCode];
+#endif
+            sp_key(p.key, NO);
         }""")
 
 
@@ -278,6 +286,7 @@ replace_once(hover_native, "    sp_hover_misses = 0;\n    sp_hover_crop(YES, hei
 replace_once(hover_lua, "local sinceScan = SCAN_INTERVAL",
     """local sinceScan = SCAN_INTERVAL
 local aiElapsed, aiBeat, aiFrame, aiPoseFrame, aiXPFrame, aiTick = 1, 0, nil, nil, nil, 0
+local aiPosePending
 local function aiPacket(kind, payload)
     local b = {65, kind, aiBeat, 0, 1}
     for i = 1, PAYLOAD_BYTES do b[5+i] = payload:byte(i) or 0 end
@@ -302,10 +311,12 @@ replace_once(hover_lua, "    if #chunks > 0 and (#chunks > 1 or chunkIndex == 0)
         end
         if aiTick % 4 == 0 then
             showChunk(aiFrame)
+            aiPosePending = aiPoseFrame
             return
         end
-        if aiPoseFrame and aiTick % 8 == 2 then
-            showChunk(aiPoseFrame)
+        if aiPosePending and aiTick % 8 == 1 then
+            showChunk(aiPosePending)
+            aiPosePending = nil
             return
         end
         if aiXPFrame and aiTick % 16 == 6 then

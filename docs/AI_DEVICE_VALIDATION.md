@@ -13,7 +13,7 @@ Verifierat den 21 november 2026 på iPhone 17 Pro Max med iOS 27.3 och device-ki
 1. Ställ spelaren på plan, fri mark där testet är tillåtet. Vänta stilla tills SPHover-telemetri är färsk. Låt modeller vara avstängda.
 2. Håll inne tangentbordsknappen och välj **Test AI movement (forward)**. Anteckna först TEST ACCEPT eller TEST INPUT och sedan TEST MOVED, TEST STALL eller TEST NO DATA. Bekräfta med synlig position före och efter pulsen.
 3. Upprepa mot ett ofarligt hinder. TEST STALL förutsätter en fungerande positionskälla och oförändrad räknare. Prova att avbryta med touch och att bakgrundslägga appen under pulsen. Lyft alla manuella kontroller och kontrollera att ingen kvarhängande rörelse finns.
-4. I godkänt autonomt testläge, ta över medan agenten rör sig och verifiera AI PAUSED, direkt släpp av rörelsetangenten och avsaknad av nya AI-kommandon. Fortsätt styra manuellt. Håll inne AI-knappen och välj **Resume after manual control**. Verifiera att agenten väntar på färsk telemetri innan nästa försök. Tryck kort i pausläge för att kontrollera att sessionen stoppas med AI OFF.
+4. I godkänt autonomt testläge, ta över medan agenten rör sig och verifiera AI PAUSED, direkt släpp av rörelsetangenten och avsaknad av nya AI-kommandon. Försök återuppta med en fysisk rörelsetangent nedtryckt. Återuppta sedan med alla manuella kontroller släppta. Verifiera att agenten väntar på färsk telemetri innan nästa försök. Tryck kort i pausläge för att kontrollera att sessionen stoppas med AI OFF. Bakgrundslägg appen och verifiera att AI MODE kräver ett nytt lägesval.
 
 ## Godkända autonoma testfall
 

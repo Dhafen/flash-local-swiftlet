@@ -294,6 +294,7 @@ static UIButton *sp_mobile_button(NSString *title, NSString *label, id owner, SE
     [_mobileRotation addGestureRecognizer:_mobileRotationPan];
     _mobileRotation.hidden = YES;
     _mobileAI = [SPGameAIController new];
+    _mobilePhysicalKeys = [NSMutableIndexSet indexSet];
     _mobileAIButton = sp_mobile_button(@"AI MODE", @"Local AI", self, @selector(sp_mobile_ai_toggle:));
     _mobileAIButton.titleLabel.font = [UIFont systemFontOfSize:10 weight:UIFontWeightSemibold];
     _mobileAIButton.titleLabel.adjustsFontSizeToFitWidth = YES;
@@ -316,7 +317,7 @@ static UIButton *sp_mobile_button(NSString *title, NSString *label, id owner, SE
         if (!input || !input->_mobileAI.active || !input->_mobileAI.autonomousTest || !sp_client_window || input->_softField.isFirstResponder ||
             !input.window || input.window.windowScene.activationState != UISceneActivationStateForegroundActive ||
             input->_mobileEditing || input->_mobileLeft || input->_mobileRight || input->_mobileInterface ||
-            input->_touches.count || sp_mouse_buttons || !input->_mobileDirect || input->_mobileJumpHeld ||
+            input->_touches.count || input->_mobilePhysicalKeys.count || sp_mouse_buttons || !input->_mobileDirect || input->_mobileJumpHeld ||
             input->_mobileRotation.highlighted || input->_mobileAIButton.highlighted || input->_softToggle.highlighted ||
             input->_mobileRotationPan.state == UIGestureRecognizerStateBegan ||
             input->_mobileRotationPan.state == UIGestureRecognizerStateChanged ||
@@ -360,6 +361,8 @@ static UIButton *sp_mobile_button(NSString *title, NSString *label, id owner, SE
         if (!input) return;
         [input->_mobileAIButton setTitle:status forState:UIControlStateNormal];
         input->_mobileAIButton.menu = input->_mobileAI.active && !input->_mobileAI.manualPaused ? nil : [input sp_mobile_ai_menu];
+        input->_mobileAIButton.showsMenuAsPrimaryAction =
+            !input->_mobileAI.active && !input->_mobileAI.autonomousTest && !input->_mobileAI.observationSelected;
         input->_mobileAIButton.backgroundColor = input->_mobileAI.active
             && !input->_mobileAI.manualPaused && input->_mobileAI.autonomousTest
             ? [UIColor colorWithRed:0.10 green:0.39 blue:0.22 alpha:0.92] : [UIColor colorWithWhite:0 alpha:0.55];
@@ -391,6 +394,11 @@ static UIButton *sp_mobile_button(NSString *title, NSString *label, id owner, SE
 - (void)sp_mobile_background:(NSNotification *)notification {
     if (notification.object == self.window.windowScene) {
         [_mobileAI stop];
+        if (_mobileAI.autonomousTest) {
+            _mobileAI.autonomousTest = NO;
+            _mobileAIButton.showsMenuAsPrimaryAction = YES;
+            [_mobileAIButton setTitle:@"AI MODE" forState:UIControlStateNormal];
+        }
         [self sp_mobile_cancel];
     }
 }
@@ -473,7 +481,9 @@ static UIButton *sp_mobile_button(NSString *title, NSString *label, id owner, SE
     __weak SPInputView *weakSelf = self;
     UIAction *resume = [UIAction actionWithTitle:@"Resume after manual control" image:nil identifier:nil handler:^(__kindof UIAction *action) {
         SPInputView *input = weakSelf;
-        if (input) [input->_mobileAI resumeFromManualInput];
+        if (input && !input->_mobilePhysicalKeys.count && !input->_mobileLeft && !input->_mobileRight &&
+            !input->_mobileInterface && !input->_touches.count && !input->_mobileJumpHeld)
+            [input->_mobileAI resumeFromManualInput];
     }];
     return [UIMenu menuWithTitle:@"AI paused" children:@[resume]];
 }
@@ -764,7 +774,7 @@ static void sp_mobile_ai_movement_key(unsigned char key, BOOL pressed) {
             !sp_client_window || input->_softField.isFirstResponder || !input->_mobileDirect ||
             !input.window || input.window.windowScene.activationState != UISceneActivationStateForegroundActive ||
             input->_mobileEditing || input->_mobileLeft || input->_mobileRight || input->_mobileInterface ||
-            input->_touches.count || sp_mouse_buttons) return;
+            input->_touches.count || input->_mobilePhysicalKeys.count || sp_mouse_buttons) return;
         NSTimeInterval now = NSProcessInfo.processInfo.systemUptime;
         if (NSProcessInfo.processInfo.thermalState == NSProcessInfoThermalStateCritical) {
             [input->_mobileAIButton setTitle:@"AI HEAT" forState:UIControlStateNormal];
@@ -798,7 +808,8 @@ static void sp_mobile_ai_movement_key(unsigned char key, BOOL pressed) {
     if (_mobileAI.active) { [_mobileAI stop]; return; }
     if (!_mobileAI.autonomousTest && !_mobileAI.observationSelected) return;
     if (!sp_client_window || _softField.isFirstResponder || _mobileEditing ||
-        _mobileLeft || _mobileRight || _mobileInterface || _touches.count || sp_mouse_buttons) return;
+        _mobileLeft || _mobileRight || _mobileInterface || _touches.count || _mobilePhysicalKeys.count || sp_mouse_buttons) return;
+    [self sp_mobile_ai_release_key];
     ++_mobileAIKeyGeneration;
     [_mobileStick prepareAI];
     // Begin after UIKit finishes the button event, so its highlight cannot

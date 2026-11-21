@@ -9,6 +9,7 @@ typedef struct {
     uint8_t heading, epoch;
     bool valid, headingKnown;
     double observedAt;
+    uint8_t sequence;
 } SPAIWorldPose;
 
 static inline uint32_t sp_ai_pose_u32(const uint8_t *bytes) {
@@ -24,7 +25,7 @@ static inline SPAIWorldPose sp_ai_world_pose(const uint8_t *bytes, unsigned leng
     if (length != 18 || bytes[0] != 'A' || bytes[1] != 'P' || bytes[2] != 1 ||
         (bytes[3] != 1 && bytes[3] != 3) || !bytes[17]) return (SPAIWorldPose){0};
     return (SPAIWorldPose){sp_ai_pose_u32(bytes + 4), sp_ai_pose_i32(bytes + 8),
-        sp_ai_pose_i32(bytes + 12), bytes[16], bytes[17], true, bytes[3] == 3, 0};
+        sp_ai_pose_i32(bytes + 12), bytes[16], bytes[17], true, bytes[3] == 3, 0, 0};
 }
 
 enum { SP_ROUTE_MAX_LEGS = 8, SP_ROUTE_RADIUS_Q4 = 8 };
@@ -78,5 +79,9 @@ static inline SPAIRouteDecision sp_ai_route_probe(const SPAIRoute *route, SPAIWo
         return SP_ROUTE_OFF_ROUTE;
     if (!pose.headingKnown) return SP_ROUTE_UNKNOWN;
     return sp_ai_heading_delta(leg->start.heading, pose.heading) <= 8 ? SP_ROUTE_FORWARD : SP_ROUTE_FACE;
+}
+
+static inline double sp_ai_route_hold(const SPAIRoute *route, SPAIWorldPose pose) {
+    return sp_ai_pose_distance2(pose, route->legs[route->next].end) <= 16 * 16 ? 0.20 : 0.60;
 }
 #endif
