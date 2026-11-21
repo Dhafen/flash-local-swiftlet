@@ -28,6 +28,9 @@ def patch_input():
     source = source.replace('#include "game-ai.m"', Path(__file__).with_name("game-ai.m").read_text())
     source = source.replace('#include "ai-encounter.h"', Path(__file__).with_name("ai-encounter.h").read_text())
     source = source.replace('#include "ai-direct.h"', Path(__file__).with_name("ai-direct.h").read_text())
+    source = source.replace('#include "ai-navigation.h"', Path(__file__).with_name("ai-navigation.h").read_text())
+    source = source.replace('#include "ai-progression.h"', Path(__file__).with_name("ai-progression.h").read_text())
+    source = source.replace('#include "ai-health-vision.h"', Path(__file__).with_name("ai-health-vision.h").read_text())
     declarations, methods = source.split("// SPInputView methods follow.\n")
     require(path, ["SPSoftKeyboardField", "sp_press_soft_escape:"])
     for phase in ("Began", "Moved", "Ended", "Cancelled"):
@@ -45,6 +48,7 @@ def patch_input():
     BOOL _mobileAIKeyHeld;
     unsigned char _mobileAIKeyboardHeld;
     NSUInteger _mobileAIKeyGeneration;
+    NSMutableIndexSet *_mobilePhysicalKeys;
     NSTimeInterval _mobileAIManualUntil;
     UIPanGestureRecognizer *_mobileJumpPan, *_mobileRotationPan;
     UITouch *_mobileLeft, *_mobileRight, *_mobileInterface;
@@ -72,9 +76,16 @@ def patch_input():
                  methods + "- (void)pressesBegan:(NSSet<UIPress *> *)presses")
     replace_once(path, "        if (p.key) sp_key(p.key, YES);", """        if (p.key) {
 #if !TARGET_OS_VISION
+            [_mobilePhysicalKeys addIndex:p.key.keyCode];
             [self sp_mobile_ai_yield:nil];
 #endif
             sp_key(p.key, YES);
+        }""")
+    replace_once(path, "        if (p.key) sp_key(p.key, NO);", """        if (p.key) {
+#if !TARGET_OS_VISION
+            [_mobilePhysicalKeys removeIndex:p.key.keyCode];
+#endif
+            sp_key(p.key, NO);
         }""")
 
 
@@ -208,9 +219,11 @@ replace_once(hover_native, "    sp_hover_set_rects(fractions, n);", """    sp_ho
 
 # Stage opt-in, low-rate direct Metal game-frame readback for validated P2P packages.
 replace_once(hover_native, "static void sp_hover_capture(id<MTLCommandBuffer> cb, id drawable) {",
-    Path(__file__).with_name("p2p-capture.m").read_text() + "\nstatic void sp_hover_capture(id<MTLCommandBuffer> cb, id drawable) {")
+    Path(__file__).with_name("p2p-capture.m").read_text() + "\n" + Path(__file__).with_name("health-capture.m").read_text() +
+    "\nstatic void sp_hover_capture(id<MTLCommandBuffer> cb, id drawable) {")
 replace_once(hover_native, "    MTLPixelFormat format = tex.pixelFormat;", """#if !TARGET_OS_VISION
     sp_p2p_capture(cb, tex);
+    sp_health_capture(cb, tex);
 #endif
     MTLPixelFormat format = tex.pixelFormat;""")
 
@@ -275,16 +288,26 @@ replace_once(hover_native, "    sp_hover_misses = 0;\n    sp_hover_crop(YES, hei
 # The regular UI rectangle transport remains unchanged for other platforms.
 replace_once(hover_lua, "local sinceScan = SCAN_INTERVAL",
     """local sinceScan = SCAN_INTERVAL
-local aiElapsed, aiBeat, aiFrame, aiTick = 1, 0, nil, 0
+local aiElapsed, aiBeat, aiFrame, aiPoseFrame, aiXPFrame, aiHealthFrame, aiTick = 1, 0, nil, nil, nil, nil, 0
+local aiPosePending
+local function aiPacket(kind, payload)
+    local b = {65, kind, aiBeat, 0, 1}
+    for i = 1, PAYLOAD_BYTES do b[5+i] = payload:byte(i) or 0 end
+    b[FRAME_BYTES-1], b[FRAME_BYTES] = fletcher16(b, FRAME_BYTES-2)
+    return b
+end
 local function aiHeartbeat()
-    local state = spAIState()
+    local state, pose = spAIState()
     if #state ~= 18 then state = string.char(65, 73, 0, 0, 0, 0, 75, 0, 70, 0, 0, 0, 78, 0, 0, 255, 255, 0) end
     spLastAIState = state
     aiBeat = (aiBeat + 1) % 256
-    local b = {65, 73, aiBeat, 0, 1}
-    for i = 1, PAYLOAD_BYTES do b[5+i] = state:byte(i) or 0 end
-    b[FRAME_BYTES-1], b[FRAME_BYTES] = fletcher16(b, FRAME_BYTES-2)
-    return b
+    local progression = aiBeat % 2 == 0 and spAIProgression() or nil
+    local healthBounds
+    if aiBeat % 2 == 0 then
+        healthBounds = spAIVisibleHealthBounds() or string.char(65, 72, 1, 0) .. string.rep(string.char(0), 14)
+    end
+    return aiPacket(73, state), pose and aiPacket(80, pose) or nil, progression and aiPacket(88, progression) or nil,
+        healthBounds and aiPacket(72, healthBounds) or nil
 end""")
 replace_once(hover_lua, "    if #chunks > 0 and (#chunks > 1 or chunkIndex == 0) then",
     """    if SPPhoneTouchRects then
@@ -292,10 +315,24 @@ replace_once(hover_lua, "    if #chunks > 0 and (#chunks > 1 or chunkIndex == 0)
         aiTick = aiTick + 1
         if not aiFrame or aiElapsed >= 0.5 then
             aiElapsed = 0
-            aiFrame = aiHeartbeat()
+            aiFrame, aiPoseFrame, aiXPFrame, aiHealthFrame = aiHeartbeat()
         end
         if aiTick % 4 == 0 then
             showChunk(aiFrame)
+            aiPosePending = aiPoseFrame
+            return
+        end
+        if aiPosePending and aiTick % 8 == 1 then
+            showChunk(aiPosePending)
+            aiPosePending = nil
+            return
+        end
+        if aiXPFrame and aiTick % 16 == 6 then
+            showChunk(aiXPFrame)
+            return
+        end
+        if aiHealthFrame and aiTick % 16 == 10 then
+            showChunk(aiHealthFrame)
             return
         end
     end
@@ -304,12 +341,16 @@ replace_once(hover_lua, "    if #chunks > 0 and (#chunks > 1 or chunkIndex == 0)
 replace_once(hover_lua, "if #chunks > 0 and (#chunks > 1 or chunkIndex == 0) then",
     "if #chunks > 0 and (SPPhoneTouchRects or #chunks > 1 or chunkIndex == 0) then")
 replace_once(strip_header, "if (frame[0] != 'V' || frame[1] != 'W') return 0;",
-    "if (!((frame[0] == 'V' && frame[1] == 'W') || (frame[0] == 'A' && frame[1] == 'I'))) return 0;")
+    "if (!((frame[0] == 'V' && frame[1] == 'W') || (frame[0] == 'A' && (frame[1] == 'I' || frame[1] == 'P' || frame[1] == 'X' || frame[1] == 'H')))) return 0;")
 replace_once(hover_native, "    static sph_rect rects[SPH_MAX_RECTS];",
-    """    if (frame[0] == 'A' && frame[1] == 'I') {
+    """    if (frame[0] == 'A' && (frame[1] == 'I' || frame[1] == 'P' || frame[1] == 'X' || frame[1] == 'H')) {
 #if !TARGET_OS_VISION
-        if (getenv("SP_PHONE_UI_RECTS") && frame[3] == 0 && frame[4] == 1)
-            sp_ai_heartbeat(frame[2], frame + 5, SPH_PAYLOAD_BYTES, observedAt);
+        if (getenv("SP_PHONE_UI_RECTS") && frame[3] == 0 && frame[4] == 1) {
+            if (frame[1] == 'P') sp_ai_pose_heartbeat(frame[2], frame + 5, SPH_PAYLOAD_BYTES, observedAt);
+            else if (frame[1] == 'X') sp_ai_xp_heartbeat(frame[2], frame + 5, SPH_PAYLOAD_BYTES, observedAt);
+            else if (frame[1] == 'H') sp_ai_health_heartbeat(frame[2], frame + 5, SPH_PAYLOAD_BYTES, observedAt);
+            else sp_ai_heartbeat(frame[2], frame + 5, SPH_PAYLOAD_BYTES, observedAt);
+        }
 #endif
         return;
     }

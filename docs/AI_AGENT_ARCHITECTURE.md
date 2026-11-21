@@ -7,15 +7,15 @@
 | Användarstyrt | AI-knappen startar eller stoppar observation. Touch och F12 styr spelet manuellt. Vid opt-in kan lokala modeller lämna diagnoser. |
 | Autonomt test | En separat behörighetsmarkering i samma UI aktiverar AI-knappens regelbaserade testloop. Använd läget i en uttryckligen tillåten testmiljö. |
 
-SPHover läser offentlig spelstatus ungefär två gånger per sekund. ObjC tidsstämplar den ritade observationen innan GPU-callbacken och kräver en ny oberoende heartbeat och högst 0,85 s ålder för input. En åttabitars mål-/positionsepok och kvantiserat horisontellt avstånd räcker för jämförelse inom en kort puls. Råa GUID:n och koordinater stannar i spelprocessens Lua-lager. Skyddade eller saknade värden ger uttryckliga okända tillstånd.
+SPHover läser offentlig spelstatus ungefär två gånger per sekund. ObjC tidsstämplar den ritade observationen innan GPU-callbacken och kräver en ny oberoende heartbeat och högst 0,85 s ålder för input. En åttabitars mål-/positionsepok och kvantiserat horisontellt avstånd räcker för jämförelse inom en kort puls. Råa GUID:n stannar i Lua-lagret. Kvantiserade spelarkoordinater för rutter passerar den lokala pose-telemetrin och skrivs inte till enhetsloggen. Skyddade eller saknade värden ger uttryckliga okända tillstånd.
 
 | Fas | Möjliga övergångar och observerade villkor |
 | --- | --- |
 | SEARCH | Prova Tab upp till fyra accepterade försök. Offentligt valt levande attackbart NPC-mål med identifierare går till ENGAGE. Om inget mål kan väljas visas NO TARGET. |
 | ENGAGE | Prova Tactara F12. Observerad skada eller strid går till IN COMBAT. Utan observerad skada kan ett synligt mål ge APPROACH. Närhet inom fyra horisontella distansenheter prioriterar en ny F12-prob. |
 | APPROACH | Bekräfta två riktningstecken från färska paket. Skicka en puls på 0,60 s med verifierad tangent, invänta utfall högst 1,8 s. Enbart bekräftad framåtförflyttning med okänt avstånd får en ny F12-prob. |
-| IN COMBAT | Mål-HP behöver faktiskt minska för att återställa F12-budgeten. Högst fyra accepterade F12 utan sådan observation. Matchad vald död NPC och avslutad strid går till LOOT CHECK. |
-| LOOT CHECK | Prova på verifierad Interact With Target-bindning. En tömd slot som matchar samma corpse ger LOOT OK och återgång till SEARCH. Två försök utan bekräftelse ger LOOT UNCONF. |
+| IN COMBAT | En observerad träff från den egna spelaren på samma valda mål återställer F12-budgeten. Högst fyra accepterade F12 utan sådan observation. Matchad vald död NPC och avslutad strid går till LOOT CHECK. |
+| LOOT CHECK | Prova på verifierad Interact With Target-bindning. En tömd slot som matchar samma kropp ger LOOT OK och återgång till SEARCH. Offentligt bekräftad tom kropp före första försöket går direkt till SEARCH. Efter två försök utan bekräftelse väntar agenten ut svarstiden och visar LOOT UNCONF. |
 | RECOVER | Låg hälsa under 35 % pausar input tills minst 50 % observeras. Monterad eller död spelare pausar. Återhämtning och återupplivning sker manuellt. |
 | BLOCKED / STOPPED | Saknade bindningar, okänd hälsa, stale data eller slut på budget blockerar respektive handling. Ett manuellt övertagande, stopp eller appdeaktivering släpper input och ogiltigförklarar väntande arbete. Kritisk temperatur stoppar loopen. |
 
@@ -24,3 +24,10 @@ Vid APPROACH är adapteracceptans, förflyttning, minskat målavstånd och centr
 Native-exekveraren äger UIKit-fokus, modalgränser, tangent ner/upp, deadlines och kontext. Lyckad input innebär accepterad handling. Mål-HP kan falla på grund av andra källor, och en tömd matchad loot-slot behöver kopplas till ett inventarieresultat i fysisk test. Mätning med kvantiserat avstånd visar observerat framsteg över ett intervall. En spellträff eller faktisk nådd punkt kräver ytterligare bevis.
 
 Navigation sparar begränsade räknare för varje observerat utfall lokalt. Menyns manuella steeringexempel kan fortsatt föreslå framåt i stället för sidsteg när horisontellt målavstånd finns. Räknarna och handexemplen uppdaterar inga modellvikter.
+## Inspelad Grind-profil
+
+Ruttmotorn i `ai-navigation.h` hanterar raka, användarinspelade sträckor med kart-ID, position och inspelad riktning. Den här versionen härleder den gåbara korridoren från start och slut på varje genomgången sträcka. Den behöver ingen översättning mellan de råa positionsaxlarna och kompassriktningen. Vid starten av en delsträcka kan agenten vrida spelaren med en verifierad pilbindning. Den bekräftar minskat vinkelfel med nya positions- och riktningsobservationer och avbryter om spelaren samtidigt förflyttas. Delsträckan får aldrig bli en gissad väg genom en annan karta, okänd terräng eller en NPC som saknar riktningssignal.
+
+När en vald fiendes namnplatta saknas kan två inspelade, nästan vinkelräta sträckor på samma karta kalibrera spelpositionens axlar. Bäringen beräknas från båda sträckorna och måste stämma överens. Både spelaren och målet måste ligga inom samma inspelade korridor. Det kräver färsk offentlig position, riktning, identitet och ett avstånd som överensstämmer med målets relativa position. Svängning kontrolleras mot mätt ändring av spelarens riktning. Upprepad utebliven rotation, målbyte, för gammal position eller uteblivet närmande stoppar styrningen.
+
+Encounterplaneraren ger spelarstatus och målval företräde. Vid uteblivet mål använder den en inspelad sträcka om sådan finns. Färsk pose och verifierad W-bindning krävs före input. En uppföljande pose från efter pulsen måste visa minskat avstånd till slutpunkten. Vid två blockerade, avvisade eller omätbara försök håller motorn positionen. Vid vägpunkt nollställs sökbudgeten och den befintliga målsökningen återupptas.

@@ -16,18 +16,23 @@ static inline SPAIDecision sp_ai_decision(bool fresh, uint8_t flags, uint8_t hp,
     if ((meta & 128) && (meta & 2)) return SP_AI_BIND;
     return SP_AI_ATTACK;
 }
-typedef enum { SP_MOVE_NONE, SP_MOVE_FORWARD, SP_MOVE_BACK, SP_MOVE_LEFT, SP_MOVE_RIGHT } SPAIMove;
+typedef enum {
+    SP_MOVE_NONE, SP_MOVE_FORWARD, SP_MOVE_BACK, SP_MOVE_LEFT, SP_MOVE_RIGHT, SP_TURN_LEFT, SP_TURN_RIGHT
+} SPAIMove;
+enum { SP_KEY_ARROW_LEFT = 128, SP_KEY_ARROW_RIGHT = 129 };
 
 static inline uint8_t sp_ai_movement_bindings(const uint8_t *packet, unsigned length) {
-    return length >= 8 && packet[6] == 'K' ? packet[7] & 63 : 0;
+    return length >= 8 && packet[6] == 'K' ? packet[7] : 0;
 }
 
-static inline char sp_ai_movement_key(SPAIMove move, uint8_t bindings) {
+static inline uint8_t sp_ai_movement_key(SPAIMove move, uint8_t bindings) {
     switch (move) {
         case SP_MOVE_FORWARD: return (bindings & 1) ? 'w' : 0;
         case SP_MOVE_BACK: return (bindings & 2) ? 's' : 0;
         case SP_MOVE_LEFT: return (bindings & 4) ? 'q' : (bindings & 8) ? 'a' : 0;
         case SP_MOVE_RIGHT: return (bindings & 16) ? 'e' : (bindings & 32) ? 'd' : 0;
+        case SP_TURN_LEFT: return (bindings & 64) ? SP_KEY_ARROW_LEFT : 0;
+        case SP_TURN_RIGHT: return (bindings & 128) ? SP_KEY_ARROW_RIGHT : 0;
         default: return 0;
     }
 }
@@ -64,6 +69,14 @@ enum {
 static inline uint8_t sp_ai_corpse_evidence(const uint8_t *packet, unsigned length) {
     if (length < 12 || packet[8] != 'F' || (packet[2] & (4|16)) != (4|16)) return 0;
     return packet[11] & 62;
+}
+
+typedef struct { uint8_t count; bool known; } SPAIOwnHit;
+
+static inline SPAIOwnHit sp_ai_own_hit(const uint8_t *packet, unsigned length) {
+    if (length < 18 || packet[8] != 'F' || packet[12] != 'N' || !packet[13] ||
+        (packet[17] & 192) != 192) return (SPAIOwnHit){0};
+    return (SPAIOwnHit){packet[11] >> 6, true};
 }
 
 static inline bool sp_ai_farm_progress(SPAIFarmFeedback start, SPAIFarmFeedback current) {
@@ -180,6 +193,19 @@ static inline SPAINavOutcome sp_ai_nav_outcome(SPAINavPulse pulse, SPAINavSample
         pulse.before.column && after.column) ? SP_NAV_NO_PROGRESS : SP_NAV_DISPLACED;
 }
 
+static inline SPAINavOutcome sp_ai_nav_observe(SPAINavPulse pulse, SPAINavSample *after, double now,
+    SPAINavSample *lastInWindow) {
+    if (after->at >= pulse.endedAt && after->at <= pulse.deadline && sp_ai_sample_fresh(after->at, now))
+        *lastInWindow = *after;
+    if (after->at > pulse.deadline && sp_ai_sample_fresh(after->at, now) && sp_ai_sample_fresh(lastInWindow->at, now)) {
+        if (after->evidence.target != pulse.before.evidence.target ||
+            (after->evidence.position && after->evidence.position != pulse.before.evidence.position))
+            return SP_NAV_CONTEXT_CHANGED;
+        *after = *lastInWindow;
+    }
+    return sp_ai_nav_outcome(pulse, *after, now);
+}
+
 static inline bool sp_ai_forward_probe_ready(SPAINavSample sample, uint8_t flags, uint8_t movementKeys, double now) {
     // Leave an eight-yard margin in this test. Distance is in quarter yards.
     return sp_ai_sample_fresh(sample.at, now) && (flags & (1|2|4|8|16|32|64)) == (1|4|8) &&
@@ -225,6 +251,7 @@ typedef struct {
     uint8_t lastHP, probeHP;
     double observedAt, probedAt;
     bool measured;
+    SPAIOwnHit lastOwnHit;
 } SPAICombatEvidence;
 
 static inline void sp_ai_accept_probe(SPAICombatEvidence *combat, double at) {
@@ -243,8 +270,16 @@ static inline bool sp_ai_observe_damage(SPAICombatEvidence *combat, uint8_t hp, 
         if (!sp_ai_hp_known(hp)) combat->probeHP = 255;
         combat->measured = sp_ai_hp_known(combat->probeHP) && sp_ai_hp_known(hp);
     }
-    if (decreased) combat->attacks = 0;
     return decreased;
+}
+
+static inline bool sp_ai_observe_own_damage(SPAICombatEvidence *combat, SPAIOwnHit hit, double at) {
+    if (!hit.known) return false;
+    bool changed = combat->lastOwnHit.known && hit.count != combat->lastOwnHit.count;
+    combat->lastOwnHit = hit;
+    if (!changed || !combat->attacks || at <= combat->probedAt) return false;
+    combat->attacks = 0;
+    return true;
 }
 
 static inline bool sp_ai_combat_budget_open(SPAICombatEvidence combat) {
@@ -282,11 +317,46 @@ static inline void sp_ai_learn_approach(SPAIApproachExamples *examples, SPAIMove
     if (*count < 100) ++*count;
 }
 
-static inline SPAIMove sp_ai_apply_approach(const SPAIApproachExamples *examples, SPAIMove side, bool combat) {
-    if (combat || (side != SP_MOVE_LEFT && side != SP_MOVE_RIGHT)) return side;
-    unsigned index = side == SP_MOVE_RIGHT;
-    return examples->forward[index] >= 4 && examples->forward[index] >= 2 * examples->lateral[index] + 2 ?
-        SP_MOVE_FORWARD : side;
+// Two contexts, two candidate moves. Counts represent only measured outcomes.
+typedef struct {
+    uint16_t trials[2][2], progress[2][2];
+} SPAIApproachModel;
+
+static inline bool sp_ai_approach_model_context(SPAINavSample sample) {
+    return sample.evidence.target && sample.evidence.position && sample.motion.source == SP_MOTION_POSITION &&
+           sample.evidence.distance >= 32 && sample.evidence.distance <= 200 &&
+           (sample.column == 6 || sample.column == 10);
+}
+
+static inline bool sp_ai_train_approach(SPAIApproachModel *model, SPAINavSample before,
+    SPAIMove move, SPAINavOutcome outcome) {
+    if (!sp_ai_approach_model_context(before)) return false;
+    bool progress = outcome == SP_NAV_CLOSER || outcome == SP_NAV_ALIGNED;
+    if (!progress && outcome != SP_NAV_STALLED && outcome != SP_NAV_NO_PROGRESS) return false;
+    unsigned side = before.column == 10;
+    if (move != SP_MOVE_FORWARD && move != (side ? SP_MOVE_RIGHT : SP_MOVE_LEFT)) return false;
+    unsigned choice = move != SP_MOVE_FORWARD;
+    uint16_t *trials = &model->trials[side][choice], *wins = &model->progress[side][choice];
+    if (*trials >= 100) {
+        *trials /= 2;
+        *wins /= 2;
+    }
+    ++*trials;
+    if (progress) ++*wins;
+    return true;
+}
+
+static inline SPAIMove sp_ai_predict_approach(const SPAIApproachModel *model, SPAINavSample sample,
+    SPAIMove proposed, bool combat) {
+    if (combat || !sp_ai_approach_model_context(sample)) return proposed;
+    unsigned side = sample.column == 10;
+    if (proposed != (side ? SP_MOVE_RIGHT : SP_MOVE_LEFT)) return proposed;
+    unsigned forward = model->trials[side][0], lateral = model->trials[side][1];
+    if (forward < 6 || lateral < 6) return proposed;
+    unsigned forwardWeight = (model->progress[side][0] + 1) * (lateral + 2);
+    unsigned lateralWeight = (model->progress[side][1] + 1) * (forward + 2);
+    return 4 * forwardWeight >= 4 * lateralWeight + (forward + 2) * (lateral + 2)
+        ? SP_MOVE_FORWARD : proposed;
 }
 
 #endif

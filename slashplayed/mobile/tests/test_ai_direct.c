@@ -1,6 +1,9 @@
 #include <assert.h>
 #include <string.h>
 #include "../ai-encounter.h"
+#include "../ai-navigation.h"
+#include "../ai-progression.h"
+#include "../ai-health-vision.h"
 
 typedef struct {
     const char *lastAction;
@@ -12,7 +15,8 @@ typedef struct {
 static bool test_submit(void *context, const char *action, SPAINavSample sample, double hold) {
     SPTestAdapter *mock = context;
     bool movement = strcmp(action, "FORWARD") == 0 || strncmp(action, "STRAFE_", 7) == 0;
-    assert(sample.at > 0 && hold == (movement ? 0.60 : 0));
+    bool turn = !strncmp(action, "TURN_", 5);
+    assert(sample.at > 0 && (turn ? (hold == 0.10 || hold == 0.28) : hold == (movement ? 0.60 : 0)));
     mock->lastAction = action;
     ++mock->submissions;
     return mock->accept;
@@ -67,6 +71,7 @@ static void test_encounter_adapter(void) {
     observation.sample.at = 5.5;
     observation.flags = 45;
     observation.targetHP = 50;
+    observation.ownHit = (SPAIOwnHit){1, true};
     assert(strcmp(sp_ai_advance(&planner, observation, 5.5, false, &examples, adapter), "IN COMBAT") == 0);
     assert(strcmp(mock.lastAction, "ATTACK") == 0);
     observation.flags = 149;
@@ -76,6 +81,8 @@ static void test_encounter_adapter(void) {
     observation.corpseEvidence = SP_CORPSE_RANGE_OUT | SP_CORPSE_LOOT_AVAILABLE;
     assert(strcmp(sp_ai_advance(&planner, observation, 6.5, false, &examples, adapter), "LOOT RANGE") == 0);
     assert(planner.lootAttempts == 0 && strcmp(mock.lastAction, "ATTACK") == 0);
+    observation.corpseEvidence = SP_CORPSE_LOOT_AVAILABLE;
+    assert(strcmp(sp_ai_advance(&planner, observation, 6.5, false, &examples, adapter), "LOOT UNKNOWN") == 0);
     observation.corpseEvidence = SP_CORPSE_RANGE_IN | SP_CORPSE_LOOT_AVAILABLE;
     observation.sample.at = 6.75;
     assert(strcmp(sp_ai_advance(&planner, observation, 6.75, false, &examples, adapter), "LOOT CHECK") == 0);
@@ -87,10 +94,38 @@ static void test_encounter_adapter(void) {
     observation.sample.at = 7.5;
     assert(strcmp(sp_ai_advance(&planner, observation, 7.5, false, &examples, adapter), "RECOVER") == 0);
     observation.hp = 50;
+    observation.sample.motion.lootConfirmed = false;
     observation.sample.at = 8;
     assert(strcmp(sp_ai_advance(&planner, observation, 8, false, &examples, adapter), "SEARCH") == 0);
     assert(strcmp(mock.lastAction, "TARGET") == 0);
     assert(mock.submissions == 7);
+}
+
+static void test_loot_wait_and_empty_corpse(void) {
+    SPAIEncounter planner = {.combatEvidence.lastHP = 255};
+    SPTestAdapter mock = {.accept = true};
+    SPAIEncounterAdapter adapter = {&mock, test_submit, test_release, test_outcome, NULL};
+    SPAIApproachExamples examples = {0};
+    SPAIEncounterObservation corpse = {
+        .sample = {10, {SP_MOTION_POSITION, 7, false}, {1, 2, SP_AI_TAB_BOUND, 12}, 0},
+        .flags = 149, .hp = 80, .meta = 133,
+        .corpseEvidence = SP_CORPSE_RANGE_IN | SP_CORPSE_LOOT_AVAILABLE
+    };
+    assert(strcmp(sp_ai_advance(&planner, corpse, 10, false, &examples, adapter), "LOOT CHECK") == 0);
+    corpse.sample.at = 11.5;
+    assert(strcmp(sp_ai_advance(&planner, corpse, 11.5, false, &examples, adapter), "LOOT CHECK") == 0);
+    corpse.sample.at = 12;
+    corpse.corpseEvidence = SP_CORPSE_LOOT_NONE;
+    assert(strcmp(sp_ai_advance(&planner, corpse, 12, false, &examples, adapter), "LOOT CHECK") == 0);
+    corpse.sample.at = 13;
+    assert(strcmp(sp_ai_advance(&planner, corpse, 13, false, &examples, adapter), "LOOT UNCONF") == 0);
+    assert(mock.submissions == 2 && !strcmp(mock.lastAction, "LOOT"));
+
+    corpse.sample.at = 14;
+    ++corpse.sample.evidence.target;
+    corpse.meta = 128;
+    assert(strcmp(sp_ai_advance(&planner, corpse, 14, false, &examples, adapter), "SEARCH") == 0);
+    assert(mock.submissions == 3 && !strcmp(mock.lastAction, "TARGET"));
 }
 
 static void test_encounter_stops(void) {
@@ -224,6 +259,10 @@ static void test_combat_feedback(void) {
     assert(!sp_ai_combat_budget_open(combat));
     assert(!sp_ai_observe_damage(&combat, 89, 8));
     assert(sp_ai_observe_damage(&combat, 89, 9));
+    assert(!sp_ai_combat_budget_open(combat));
+    assert(!sp_ai_observe_own_damage(&combat, (SPAIOwnHit){1, true}, 9));
+    assert(!sp_ai_observe_own_damage(&combat, (SPAIOwnHit){1, true}, 9.5));
+    assert(sp_ai_observe_own_damage(&combat, (SPAIOwnHit){2, true}, 10));
     assert(sp_ai_combat_budget_open(combat));
 }
 
@@ -285,9 +324,250 @@ static void test_forward_probe(void) {
     assert(!sp_ai_forward_probe_ready(sample, 13, 1, 10.1));
 }
 
+static void test_manual_takeover_preserves_encounter(void) {
+    SPAIEncounter planner = {.target = 9, .searchAttempts = 2, .lootAttempts = 1,
+        .combatEvidence.lastHP = 43, .pulse.deadline = 12, .nextAction = 11,
+        .lastDamageAt = 9.5, .navBudget.pulses = 4};
+    SPTestAdapter mock = {0};
+    SPAIEncounterAdapter adapter = {&mock, test_submit, test_release, test_outcome, NULL};
+    sp_ai_suspend_encounter(&planner, adapter);
+    assert(mock.releases == 1 && mock.submissions == 0);
+    assert(!planner.pulse.deadline && !planner.lastDamageAt && planner.combatEvidence.lastHP == 255);
+    assert(planner.target == 9 && planner.searchAttempts == 2 && planner.lootAttempts == 1);
+    assert(planner.navBudget.pulses == 4);
+}
+
+static void test_approach_model_requires_measured_benefit(void) {
+    SPAIApproachModel model = {0};
+    SPAINavSample sample = {1, {SP_MOTION_POSITION, 2, false}, {9, 7, 0, 60}, 6};
+    assert(sp_ai_predict_approach(&model, sample, SP_MOVE_LEFT, false) == SP_MOVE_LEFT);
+    for (int i = 0; i < 6; ++i) {
+        assert(sp_ai_train_approach(&model, sample, SP_MOVE_FORWARD, SP_NAV_CLOSER));
+        assert(sp_ai_train_approach(&model, sample, SP_MOVE_LEFT, SP_NAV_STALLED));
+    }
+    assert(sp_ai_predict_approach(&model, sample, SP_MOVE_LEFT, false) == SP_MOVE_FORWARD);
+    assert(sp_ai_predict_approach(&model, sample, SP_MOVE_LEFT, true) == SP_MOVE_LEFT);
+    assert(!sp_ai_train_approach(&model, sample, SP_MOVE_FORWARD, SP_NAV_NO_SAMPLE));
+    sample.evidence.distance = SP_AI_DISTANCE_UNKNOWN;
+    assert(sp_ai_predict_approach(&model, sample, SP_MOVE_LEFT, false) == SP_MOVE_LEFT);
+    assert(!sp_ai_train_approach(&model, sample, SP_MOVE_FORWARD, SP_NAV_CLOSER));
+}
+
+static void test_route_stops_when_pose_disappears(void) {
+    SPAIEncounter planner = {0};
+    SPAIWorldPose begin = {.valid = true, .headingKnown = true, .epoch = 1, .sequence = 1, .observedAt = 4};
+    SPAIWorldPose end = begin;
+    end.firstQ4 = 40;
+    assert(sp_ai_route_append(&planner.route, begin, end));
+    SPTestAdapter mock = {.accept = true};
+    SPAIEncounterAdapter adapter = {&mock, test_submit, test_release, test_outcome, NULL};
+    SPAIEncounterObservation observation = {.pose = begin, .sample.at = 4, .movementKeys = 1};
+    assert(strcmp(sp_ai_follow_route(&planner, observation, 4, false, adapter), "ROUTE") == 0);
+    assert(mock.submissions == 1 && !mock.releases);
+    observation.pose.valid = false;
+    observation.sample.at = 4.4;
+    assert(strcmp(sp_ai_follow_route(&planner, observation, 4.4, false, adapter), "ROUTE DATA") == 0);
+    assert(mock.releases == 1 && mock.submissions == 1 && !planner.routeDeadline);
+}
+
+static void test_route_turn_requires_binding_and_confirmed_heading(void) {
+    SPAIEncounter planner = {0};
+    SPAIWorldPose begin = {.valid = true, .headingKnown = true, .heading = 64, .epoch = 1, .sequence = 1, .observedAt = 4};
+    SPAIWorldPose end = begin;
+    end.secondQ4 = 40;
+    assert(sp_ai_route_append(&planner.route, begin, end));
+    SPTestAdapter mock = {.accept = true};
+    SPAIEncounterAdapter adapter = {&mock, test_submit, test_release, test_outcome, NULL};
+    SPAIEncounterObservation observation = {.pose = begin, .sample.at = 4, .movementKeys = 1};
+    observation.pose.heading = 0;
+    assert(strcmp(sp_ai_follow_route(&planner, observation, 4, false, adapter), "TURN BIND") == 0);
+    assert(!mock.submissions);
+    observation.movementKeys |= 64 | 128;
+    assert(strcmp(sp_ai_follow_route(&planner, observation, 4, false, adapter), "TURN ROUTE") == 0);
+    assert(mock.submissions == 1 && !strcmp(mock.lastAction, "TURN_LEFT"));
+    SPAIEncounter interrupted = planner;
+    SPTestAdapter interruptedMock = {.accept = true};
+    SPAIEncounterAdapter interruptedAdapter = {&interruptedMock, test_submit, test_release, test_outcome, NULL};
+    observation.pose.valid = false;
+    observation.pose.observedAt = observation.sample.at = 4.4;
+    assert(strcmp(sp_ai_follow_route(&interrupted, observation, 4.4, false, interruptedAdapter), "ROUTE DATA") == 0);
+    observation.pose.valid = true;
+    observation.pose.heading = 64;
+    observation.pose.sequence = 2;
+    observation.pose.observedAt = observation.sample.at = 4.8;
+    sp_ai_follow_route(&interrupted, observation, 4.8, false, interruptedAdapter);
+    sp_ai_follow_route(&interrupted, observation, 5.2, false, interruptedAdapter);
+    assert(interruptedMock.submissions == 0 && interruptedMock.releases == 1);
+    observation.pose.sequence = 3;
+    observation.pose.observedAt = observation.sample.at = 5.3;
+    assert(strcmp(sp_ai_follow_route(&interrupted, observation, 5.3, false, interruptedAdapter), "ROUTE") == 0);
+    assert(interruptedMock.submissions == 1 && !strcmp(interruptedMock.lastAction, "FORWARD"));
+
+    SPAIEncounter unsafe = planner;
+    observation.pose.secondQ4 = 4;
+    observation.pose.observedAt = observation.sample.at = 4.4;
+    assert(strcmp(sp_ai_follow_route(&unsafe, observation, 4.4, false, adapter), "ROUTE BLOCK") == 0);
+    assert(mock.releases == 1 && mock.submissions == 1);
+    observation.pose.secondQ4 = 0;
+    observation.pose.heading = 64;
+    observation.pose.sequence = 2;
+    observation.pose.observedAt = observation.sample.at = 4.5;
+    assert(strcmp(sp_ai_follow_route(&planner, observation, 4.5, false, adapter), "TURN ROUTE") == 0);
+    assert(mock.submissions == 1);
+    observation.pose.sequence = 3;
+    observation.pose.observedAt = observation.sample.at = 5;
+    assert(strcmp(sp_ai_follow_route(&planner, observation, 5, false, adapter), "ROUTE") == 0);
+    assert(mock.submissions == 2 && !strcmp(mock.lastAction, "FORWARD"));
+    assert(sp_ai_heading_error(4, 250) == 10);
+    assert(sp_ai_heading_error(250, 4) == -10);
+}
+
 int main(void) {
+    SPHealthReference hp[] = {{1.0, 27}, {1.5, 27}};
+    uint8_t actual = 255;
+    assert(sp_ai_compare_visible_health(hp, 1, 1.25, 90, 1.5, &actual) == SP_HEALTH_COMPARE_PENDING);
+    assert(sp_ai_compare_visible_health(hp, 2, 1.25, 90, 1.5, &actual) == SP_HEALTH_COMPARE_PAIRED && actual == 27);
+    assert(sp_ai_compare_visible_health(hp, 2, 1.25, 255, 1.5, &actual) == SP_HEALTH_COMPARE_UNREADABLE && actual == 27);
+    hp[1].hp = 70;
+    assert(sp_ai_compare_visible_health(hp, 2, 1.25, 90, 1.5, &actual) == SP_HEALTH_COMPARE_CHANGING);
+    hp[1].hp = 255;
+    assert(sp_ai_compare_visible_health(hp, 2, 1.25, 90, 1.5, &actual) == SP_HEALTH_COMPARE_UNKNOWN);
+    assert(sp_ai_compare_visible_health(hp, 1, 1.25, 90, 2.2, &actual) == SP_HEALTH_COMPARE_UNBRACKETED);
+    SPHealthReference sameTime[] = {{1, 80}, {1.25, 25}, {1.5, 80}};
+    assert(sp_ai_compare_visible_health(sameTime, 3, 1.25, 80, 1.5, &actual) == SP_HEALTH_COMPARE_CHANGING);
+    SPAIRoute calibrated = {0};
+    SPAIWorldPose axisA = {.map = 7, .valid = true, .headingKnown = true, .epoch = 1};
+    SPAIWorldPose joint = axisA;
+    joint.firstQ4 = 24;
+    assert(sp_ai_route_append(&calibrated, axisA, joint));
+    joint.heading = 64;
+    SPAIWorldPose axisB = joint;
+    axisB.secondQ4 = -24;
+    assert(sp_ai_route_append(&calibrated, joint, axisB));
+    SPAIWorldPose selected = axisA;
+    selected.targetKnown = true;
+    selected.targetFirstQ4 = 30;
+    selected.targetSecondQ4 = -30;
+    uint8_t desired = 0;
+    assert(!sp_ai_target_heading(&calibrated, selected, &desired));
+    axisA.observedAt = joint.observedAt = 1;
+    SPAIWorldPose firstEnd = calibrated.legs[0].end;
+    firstEnd.observedAt = axisB.observedAt = 2;
+    sp_ai_route_calibrate_leg(&calibrated.legs[0], axisA, firstEnd);
+    SPAIWorldPose turnedMidLeg = joint;
+    turnedMidLeg.heading = 128;
+    sp_ai_route_calibrate_leg(&calibrated.legs[1], turnedMidLeg, axisB);
+    assert(!sp_ai_target_heading(&calibrated, selected, &desired));
+    sp_ai_route_calibrate_leg(&calibrated.legs[1], joint, axisB);
+    assert(sp_ai_target_heading(&calibrated, selected, &desired) && desired == 32);
+    assert(!sp_ai_target_in_recorded_corridor(&calibrated, selected));
+    SPAIWorldPose onLeg = selected;
+    onLeg.targetFirstQ4 = 20;
+    onLeg.targetSecondQ4 = 0;
+    assert(sp_ai_target_in_recorded_corridor(&calibrated, onLeg));
+    selected.targetFirstQ4 = -30;
+    assert(sp_ai_target_heading(&calibrated, selected, &desired) && desired == 96);
+    selected.map = 8;
+    assert(!sp_ai_target_heading(&calibrated, selected, &desired));
+    selected.map = 7;
+    calibrated.legs[1].start.heading = 15;
+    assert(!sp_ai_target_heading(&calibrated, selected, &desired));
+    uint8_t targetPosePacket[] = {65, 80, 2, 7, 0, 0, 255, 255, 251, 0, 0, 8, 0, 12, 255, 240, 64, 7};
+    SPAIWorldPose decodedTarget = sp_ai_world_pose(targetPosePacket, sizeof targetPosePacket);
+    assert(decodedTarget.valid && decodedTarget.targetKnown && decodedTarget.firstQ4 == -5 &&
+        decodedTarget.secondQ4 == 8 && decodedTarget.targetFirstQ4 == 12 && decodedTarget.targetSecondQ4 == -16);
+    selected = axisA;
+    selected.targetKnown = true;
+    selected.targetFirstQ4 = 44;
+    SPAIWorldPose onFoot = selected;
+    onFoot.observedAt = selected.observedAt + 1;
+    onFoot.firstQ4 += 4;
+    assert(sp_ai_projected_approach(selected, onFoot));
+    onFoot.firstQ4 -= 4;
+    onFoot.secondQ4 += 20;
+    assert(!sp_ai_projected_approach(selected, onFoot));
+    onFoot.firstQ4 -= 4;
+    assert(!sp_ai_projected_approach(selected, onFoot));
+    test_route_turn_requires_binding_and_confirmed_heading();
+    uint8_t health[3][64][4] = {0};
+    for (unsigned row = 0; row < 3; ++row)
+        for (unsigned x = 0; x < 64; ++x) {
+            health[row][x][0] = 29;
+            health[row][x][1] = x < 40 ? 170 : 29;
+            health[row][x][2] = 29;
+        }
+    assert(sp_ai_visible_health(&health[0][0][0], 64, 64 * 4, true) == 63);
+    memset(health[1], 255, sizeof health[1]);
+    assert(sp_ai_visible_health(&health[0][0][0], 64, 64 * 4, true) == SP_VISUAL_HP_UNKNOWN);
+    uint8_t region[] = {65, 72, 1, 1, 0, 10, 0, 20, 0, 150, 0, 75, 0, 0, 0, 0, 0, 0};
+    assert(sp_ai_health_region(region, sizeof region) == UINT64_C(0x000a00140096004b));
+    region[3] = 0;
+    assert(sp_ai_health_region(region, sizeof region) == 0);
+    memset(health, 0, sizeof health);
+    assert(sp_ai_visible_health(&health[0][0][0], 64, 64 * 4, true) == SP_VISUAL_HP_UNKNOWN);
+    test_route_stops_when_pose_disappears();
+    test_approach_model_requires_measured_benefit();
+    uint8_t xpPacket[] = {65, 88, 1, 3, 0, 0, 3, 82, 0, 0, 4, 176, 0, 6, 0, 4, 0, 0};
+    SPAIProgression xp = sp_ai_progression(xpPacket, sizeof xpPacket);
+    assert(xp.xpKnown && xp.questCountKnown && xp.level == 6 && xp.xp == 850 && xp.maximum == 1200 && xp.quests == 4);
+    assert(sp_ai_xp_outcome(xp, xp) == SP_XP_UNCHANGED);
+    SPAIProgression raised = xp;
+    ++raised.xp;
+    assert(sp_ai_xp_outcome(xp, raised) == SP_XP_GAINED);
+    --raised.xp;
+    ++raised.level;
+    raised.xp = 0;
+    assert(sp_ai_xp_outcome(xp, raised) == SP_XP_LEVEL_UP);
+    assert(sp_ai_xp_outcome(xp, sp_ai_progression(xpPacket, sizeof xpPacket - 1)) == SP_XP_UNVERIFIED);
+    xpPacket[3] = 2;
+    assert(!sp_ai_progression(xpPacket, sizeof xpPacket).xpKnown);
+    uint8_t posePacket[] = {65, 80, 1, 3, 0, 0, 0, 0, 255, 255, 255, 251, 0, 0, 0, 8, 64, 7};
+    SPAIWorldPose pose = sp_ai_world_pose(posePacket, sizeof posePacket);
+    assert(pose.valid && pose.headingKnown && pose.map == 0 && pose.firstQ4 == -5 && pose.secondQ4 == 8);
+    assert(pose.heading == 64 && pose.epoch == 7);
+    assert(!sp_ai_world_pose(posePacket, sizeof posePacket - 1).valid);
+    posePacket[3] = 1;
+    pose = sp_ai_world_pose(posePacket, sizeof posePacket);
+    assert(pose.valid && !pose.headingKnown);
+    posePacket[17] = 0;
+    assert(!sp_ai_world_pose(posePacket, sizeof posePacket).valid);
+    SPAIWorldPose start = {.map = 0, .heading = 64, .valid = true, .headingKnown = true, .epoch = 7};
+    SPAIWorldPose end = start;
+    end.secondQ4 = 40;
+    SPAIRoute route = {0};
+    assert(sp_ai_route_append(&route, start, end));
+    assert(sp_ai_route_probe(&route, start) == SP_ROUTE_FORWARD);
+    SPAIWorldPose moved = start;
+    moved.secondQ4 = 20;
+    assert(sp_ai_route_probe(&route, moved) == SP_ROUTE_FORWARD);
+    moved.secondQ4 = 31;
+    assert(sp_ai_route_hold(&route, moved) == 0.20);
+    moved.heading = 128;
+    assert(sp_ai_route_probe(&route, moved) == SP_ROUTE_FACE);
+    moved = end;
+    assert(sp_ai_route_probe(&route, moved) == SP_ROUTE_REACHED);
+    moved.map = 2;
+    assert(sp_ai_route_probe(&route, moved) == SP_ROUTE_OFF_ROUTE);
+    moved = start;
+    moved.firstQ4 = 16;
+    assert(sp_ai_route_probe(&route, moved) == SP_ROUTE_OFF_ROUTE);
+    moved = start;
+    moved.headingKnown = false;
+    assert(sp_ai_route_probe(&route, moved) == SP_ROUTE_UNKNOWN);
+    SPAIWorldPose next = end;
+    next.secondQ4 = 48;
+    next.heading = 0;
+    SPAIWorldPose nextEnd = next;
+    nextEnd.firstQ4 = 40;
+    assert(sp_ai_route_append(&route, next, nextEnd));
+    moved = end;
+    moved.secondQ4 = 32;
+    assert(sp_ai_route_probe(&route, moved) == SP_ROUTE_FORWARD);
+    assert(sp_ai_route_probe(&route, end) == SP_ROUTE_REACHED);
+    test_manual_takeover_preserves_encounter();
     test_forward_probe();
     test_encounter_adapter();
+    test_loot_wait_and_empty_corpse();
     test_encounter_stops();
     test_steering_observations();
     test_pulse_outcomes();
@@ -322,17 +602,12 @@ int main(void) {
     assert(sp_ai_visible_approach(129 + 8 * 8, 2, true, true) == SP_MOVE_NONE);
     SPAIApproachExamples examples = {0};
     for (unsigned i = 0; i < 3; ++i) sp_ai_learn_approach(&examples, SP_MOVE_LEFT, SP_MOVE_FORWARD);
-    assert(sp_ai_apply_approach(&examples, SP_MOVE_LEFT, false) == SP_MOVE_LEFT);
     sp_ai_learn_approach(&examples, SP_MOVE_LEFT, SP_MOVE_FORWARD);
-    assert(sp_ai_apply_approach(&examples, SP_MOVE_LEFT, false) == SP_MOVE_FORWARD);
-    assert(sp_ai_apply_approach(&examples, SP_MOVE_RIGHT, false) == SP_MOVE_RIGHT);
-    assert(sp_ai_apply_approach(&examples, SP_MOVE_LEFT, true) == SP_MOVE_LEFT);
-    assert(sp_ai_apply_approach(&examples, SP_MOVE_NONE, false) == SP_MOVE_NONE);
     sp_ai_learn_approach(&examples, SP_MOVE_LEFT, SP_MOVE_RIGHT);
     assert(examples.lateral[0] == 0);
     sp_ai_learn_approach(&examples, SP_MOVE_LEFT, SP_MOVE_LEFT);
     sp_ai_learn_approach(&examples, SP_MOVE_LEFT, SP_MOVE_LEFT);
-    assert(sp_ai_apply_approach(&examples, SP_MOVE_LEFT, false) == SP_MOVE_LEFT);
+    assert(examples.forward[0] == 4 && examples.lateral[0] == 2);
     const uint8_t packet[] = {'A', 'I', 1, 100, 0, 128, 'K', 1|8|16};
     assert(sp_ai_movement_bindings(packet, 6) == 0);
     assert(sp_ai_movement_bindings(packet, 8) == (1|8|16));

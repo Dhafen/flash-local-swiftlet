@@ -23,7 +23,15 @@ assert 'SPH_MAX_RECTS * 6 + 18' in (root / "shims/appkit/sphoverstrip.h").read_t
 assert '.. spLastAIState' in (root / "addon/SPHover/SPHover.lua").read_text()
 assert 'local function aiHeartbeat()' in (root / "addon/SPHover/SPHover.lua").read_text()
 assert 'showChunk(aiFrame)' in (root / "addon/SPHover/SPHover.lua").read_text()
+assert b"\x00" not in (root / "addon/SPHover/SPHover.lua").read_bytes()
 assert 'sp_ai_heartbeat(frame[2], frame + 5, SPH_PAYLOAD_BYTES, observedAt)' in (root / "shims/appkit/sphover.m").read_text()
+assert 'sp_ai_pose_heartbeat(frame[2], frame + 5, SPH_PAYLOAD_BYTES, observedAt)' in (root / "shims/appkit/sphover.m").read_text()
+assert 'sp_ai_xp_heartbeat(frame[2], frame + 5, SPH_PAYLOAD_BYTES, observedAt)' in (root / "shims/appkit/sphover.m").read_text()
+hover = (root / "shims/appkit/sphover.m").read_text()
+assert 'sp_ai_health_heartbeat(frame[2], frame + 5, SPH_PAYLOAD_BYTES, observedAt)' in hover
+assert 'sourceSize:MTLSizeMake(width,SP_HEALTH_SCAN_ROWS,1)' in hover
+encounter_advance = event.split('- (NSString *)advance:(SPAINavSample)sample', 1)[1].split('\n}', 1)[0]
+assert 'sp_ai_health_visual_result' not in encounter_advance
 assert 'seq == sp_ai_heartbeat_seq' in event
 assert '[_mobileAI stop];' in event
 assert 'sp_mobile_emit_rotation()' in event
@@ -55,6 +63,9 @@ assert 'AI MODEL!' in event and 'AI CAP!' in event
 assert 'sp_mobile_ai_release_key' in event and 'sp_mobile_ai_hold_axis:' in event
 assert '[_mobileStick driveAI:axis]' in event and 'Test AI movement (forward)' in event
 assert 'AI input: Tactara F12 rotation' in event and 'sp_mobile_emit_rotation();' in event
+manual_rotation = event.split('- (void)sp_mobile_rotation:(UIButton *)button {', 1)[1].split('\n}', 1)[0]
+assert 'sp_mobile_emit_rotation();' in manual_rotation
+assert 'if ([action isEqualToString:@"ATTACK"]) {\n            sp_mobile_emit_rotation();' in event
 assert 'VIS SLOW' in event
 assert 'NSProcessInfo.processInfo.systemUptime - captured <= 8.0' in event
 assert 'input->_mobileAIManualUntil' in event
@@ -86,9 +97,10 @@ assert '_mobileSpeed.hidden = _mobileReset.hidden = compact || !_mobileEditing;'
 assert '_mobileJump.hidden = compact && ![prefs boolForKey:@"sp_wolkara_show_jump"];' in event
 assert '_softToggle.menu = [self sp_mobile_compact_menu];' in event
 assert '_mobileAIButton.menu = [self sp_mobile_ai_menu];' in event
-assert '_mobileAIButton.showsMenuAsPrimaryAction = NO;' in event
-assert 'input->_mobileAIButton.menu = input->_mobileAI.active ? nil : [input sp_mobile_ai_menu];' in event
-ai_menu = event.split('- (UIMenu *)sp_mobile_ai_menu {', 1)[1].split('\n}', 1)[0]
+assert '_mobileAIButton.showsMenuAsPrimaryAction = YES;' in event
+assert 'input->_mobileAIButton.showsMenuAsPrimaryAction = NO;' in event
+assert 'input->_mobileAIButton.menu = input->_mobileAI.active && !input->_mobileAI.manualPaused ? nil : [input sp_mobile_ai_menu];' in event
+ai_menu = event.split('- (UIMenu *)sp_mobile_ai_options {', 1)[1].split('\n}', 1)[0]
 assert 'Test AI movement (forward)' in ai_menu
 assert 'Test approach (authorized realm, face selected target)' in ai_menu
 assert '[input sp_mobile_ai_test:3]' in ai_menu
@@ -249,17 +261,24 @@ if sys.platform == "darwin" and len(sys.argv) == 2:
 
 assert 'local hp, hpReason = spReadHealthPercent("player")' in (root / "addon/SPHover/SPHover.lua").read_text()
 assert 'sp_ai_health_status(data' in event and '"HP UNKNOWN"' in event and '"HP SECRET"' in event
-assert 'sp_ai_nav_outcome(encounter->pulse, sample, now)' in event
-assert 'sp_ai_confirm_steering(&encounter->steering, move, sample.at)' in event
+assert 'sp_ai_nav_observe(encounter->pulse, &outcomeSample, now, &encounter->lastPulseSample)' in event
+assert 'sp_ai_confirm_steering(&encounter->steering, move, useBearing ? observation.pose.observedAt : sample.at)' in event
+assert 'sp_ai_route_calibrate_leg(leg, _recordedFirstMotion, _recordedLastMotion)' in event
+assert 'sp_ai_projected_approach(encounter->targetWalkBefore, pose)' in event
 assert 'sp_ai_advance(&_encounter, observation, now, reduced, &_approachExamples, adapter)' in event
 assert 'sp_mobile_ai_yield:' in event and 'UIControlEventTouchDown' in event
 yield_method = event.split('- (void)sp_mobile_ai_yield:(id)sender {', 1)[1].split('\n}', 1)[0]
 assert '[self sp_mobile_ai_release_key]' in yield_method and '[_mobileAI yieldToManualInput]' in yield_method
 manual_takeover = event.split('- (void)yieldToManualInput {', 1)[1].split('\n}', 1)[0]
-assert 'if (self.autonomousTest || self.modelDiagnostics || _starting || _ownsCapture) [self stop]' in manual_takeover
+assert 'sp_ai_suspend_encounter(&_encounter, adapter)' in manual_takeover
+assert '_manualPaused = YES' in manual_takeover and '[self showPhase:@"AI PAUSED"]' in manual_takeover
 poll = event.split('- (void)pollDirect:(NSUInteger)run {', 1)[1].split('\n}', 1)[0]
 assert 'self.modelDiagnostics && !self.autonomousTest' in poll
-assert 'diagnosticsRequested && thermal == NSProcessInfoThermalStateNominal' in poll
+assert 'diagnosticsRequested && !paused && thermal == NSProcessInfoThermalStateNominal' in poll
+assert 'sample.at <= _manualResumeAt' in poll and 'if (paused)' in poll
+assert 'self.autonomousTest && now - _lastFreshGameAt >= 6.0' in poll
+assert '[_mobilePhysicalKeys addIndex:p.key.keyCode]' in event
+assert '[_mobilePhysicalKeys removeIndex:p.key.keyCode]' in event
 assert 'if (thermal == NSProcessInfoThermalStateCritical) { [self fail:@"AI HEAT"]; return; }' in poll
 assert 'interval = reduced ? 0.8 : 0.4' in poll
 assert 'sp_p2p_enable(preview &&' in poll and '[self previewP2P:run]' in poll.split('} else if (preview) {', 1)[1]
@@ -269,10 +288,15 @@ assert 'input->_mobileAI.autonomousTest' in event and '_mobileAI.autonomousTest 
 
 start_method = event.split("- (void)sp_mobile_ai_toggle:(UIButton *)button {", 1)[1].split("\n}", 1)[0]
 assert "dispatch_async(dispatch_get_main_queue()" in start_method
+assert start_method.index('[self sp_mobile_ai_release_key]') < start_method.index('++_mobileAIKeyGeneration')
 assert "input->_mobileAIKeyGeneration != generation" in start_method
 manual_button_group = next(line for line in event.splitlines() if "@[_mobileRotation, _mobileUI, _mobileEdit" in line)
 assert "_mobileAIButton" not in manual_button_group
 
 assert 'sp_mobile_ai_movement_key(_mobileAIKeyboardHeld, YES)' in event
 assert 'sp_mobile_ai_movement_key(_mobileAIKeyboardHeld, NO)' in event
+turn_method = event.split('- (BOOL)sp_mobile_ai_hold_turn:(SPAIMove)move duration:(NSTimeInterval)duration {', 1)[1].split('\n}', 1)[0]
+assert 'sp_ai_movement_key(move, sp_ai_game_move_keys)' in turn_method
+assert 'driveAI:' not in turn_method and '[self sp_mobile_ai_schedule_release:duration]' in turn_method
+assert 'left || right ? SPFunction | SPNumericPad : 0' in event
 assert 'pressed ? SPKeyDown : SPKeyUp' in event

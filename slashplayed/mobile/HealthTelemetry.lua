@@ -61,6 +61,8 @@ local function spAIMovementBindings()
     elseif spAIBinding("A") == "STRAFELEFT" then bits = bits + 8 end
     if spAIBinding("E") == "STRAFERIGHT" then bits = bits + 16
     elseif spAIBinding("D") == "STRAFERIGHT" then bits = bits + 32 end
+    if spAIBinding("LEFT") == "TURNLEFT" then bits = bits + 64 end
+    if spAIBinding("RIGHT") == "TURNRIGHT" then bits = bits + 128 end
     return bits
 end
 
@@ -103,6 +105,7 @@ local function spAIIdentity(unit)
 end
 
 local spAICombatTarget, spAILootedTarget
+local spAIHitTarget, spAIHitCount, spAIHitAt = nil, 0, nil
 local spAIPlayerKill, spAIPlayerKillAt
 local spAIPreviousTarget, spAITargetEpoch = nil, 0
 local spAILootSlots = {}
@@ -134,11 +137,33 @@ end
 
 -- Track only a slot whose entire reported source is the selected corpse.
 -- A closed loot window by itself carries no success signal.
+local function spAICombatLog(_, kind, _, source, _, _, _, destination, _, _, _, ...)
+    if not spAIReadable(kind) or not spAIReadable(source) or not spAIReadable(destination)
+        or type(kind) ~= "string" or type(source) ~= "string" or type(destination) ~= "string" then return end
+    local amount
+    if kind == "SWING_DAMAGE" then amount = ...
+    elseif kind == "SPELL_DAMAGE" or kind == "RANGE_DAMAGE" or kind == "SPELL_PERIODIC_DAMAGE" then
+        amount = select(4, ...)
+    else return end
+    if not spAIReadable(amount) or type(amount) ~= "number" or not (amount > 0 and amount < math.huge) then return end
+    local now = spAIClock()
+    if not now or source ~= spAIIdentity("player") or destination ~= spAIIdentity("target") then return end
+    if spAIHitTarget ~= destination then spAIHitCount = 0 end
+    spAIHitTarget, spAIHitCount, spAIHitAt = destination, (spAIHitCount + 1) % 4, now
+end
+
 local function spAILootEvent(_, event, first, second)
     if event == "PLAYER_TARGET_CHANGED" then
         spAICombatTarget, spAIPlayerKill, spAIPlayerKillAt = nil, nil, nil
         spAIPreviousTarget = nil
+        spAIHitTarget, spAIHitCount, spAIHitAt = nil, 0, nil
         spAILootSlots = {}
+        return
+    end
+    if event == "COMBAT_LOG_EVENT_UNFILTERED" then
+        if type(CombatLogGetCurrentEventInfo) == "function" then
+            pcall(function() spAICombatLog(CombatLogGetCurrentEventInfo()) end)
+        end
         return
     end
     if event == "PARTY_KILL" then
@@ -179,7 +204,8 @@ end
 
 if type(CreateFrame) == "function" then
     local frame = CreateFrame("Frame")
-    for _, event in ipairs({"LOOT_OPENED", "LOOT_SLOT_CLEARED", "LOOT_CLOSED", "PARTY_KILL", "PLAYER_TARGET_CHANGED"}) do
+    for _, event in ipairs({"LOOT_OPENED", "LOOT_SLOT_CLEARED", "LOOT_CLOSED", "PARTY_KILL",
+        "PLAYER_TARGET_CHANGED", "COMBAT_LOG_EVENT_UNFILTERED"}) do
         pcall(frame.RegisterEvent, frame, event)
     end
     frame:SetScript("OnEvent", function(...) pcall(spAILootEvent, ...) end)
@@ -192,16 +218,88 @@ local function spAIFinite(value)
         and value ~= math.huge and value ~= -math.huge
 end
 
+local function spAIU32(value)
+    return string.char(math.floor(value / 16777216) % 256, math.floor(value / 65536) % 256,
+        math.floor(value / 256) % 256, value % 256)
+end
+
+local function spAIPublicInteger(value, minimum, maximum)
+    return spAIFinite(value) and value >= minimum and value <= maximum and value % 1 == 0
+end
+
+local function spAIProgression()
+    local xp, capacity, level, quests, flags = 0, 0, 0, 0, 0
+    local xpOK, a, b, c = pcall(function()
+        return UnitXP("player"), UnitXPMax("player"), UnitLevel("player")
+    end)
+    if xpOK and spAIPublicInteger(a, 0, 4294967295) and spAIPublicInteger(b, 1, 4294967295) and a <= b
+        and spAIPublicInteger(c, 1, 65535) then xp, capacity, level, flags = a, b, c, 1 end
+    if C_QuestLog and type(C_QuestLog.GetNumQuestLogEntries) == "function" then
+        local ok, _, count = pcall(C_QuestLog.GetNumQuestLogEntries)
+        if ok and spAIPublicInteger(count, 0, 65535) then quests, flags = count, flags + 2 end
+    end
+    if flags == 0 then return end
+    return string.char(65, 88, 1, flags) .. spAIU32(xp) .. spAIU32(capacity)
+        .. string.char(math.floor(level / 256), level % 256, math.floor(quests / 256), quests % 256, 0, 0)
+end
+
+local function spAIVisibleHealthBounds()
+    local ok, bounds = pcall(function()
+        local player = _G.WolkaraMobilePlayer
+        local bar = player and player.health
+        if not bar or bar:IsForbidden() or not bar:IsVisible() or bar:GetEffectiveAlpha() < 0.8 then return end
+        local left, bottom, width, height = bar:GetRect()
+        local rootScale, scale = UIParent:GetEffectiveScale(), bar:GetEffectiveScale()
+        local w, h = UIParent:GetWidth() * rootScale, UIParent:GetHeight() * rootScale
+        if not spAIFinite(left) or not spAIFinite(bottom) or not spAIFinite(width) or not spAIFinite(height) or
+            not spAIFinite(scale) or not spAIFinite(w) or not spAIFinite(h) or
+            scale <= 0 or w <= 0 or h <= 0 or width <= 0 or height <= 0 then return end
+        local l, t = left * scale / w, 1 - (bottom + height) * scale / h
+        local r, b = (left + width) * scale / w, 1 - bottom * scale / h
+        if l < 0 or t < 0 or r > 1 or b > 1 then return end
+        local function q12(value)
+            local q = math.floor(4095 * value + 0.5)
+            return string.char(math.floor(q / 256), q % 256)
+        end
+        return string.char(65, 72, 1, 1) .. q12(l) .. q12(t) .. q12(r) .. q12(b) .. string.rep("\0", 6)
+    end)
+    return ok and bounds or nil
+end
+
+local function spAIPlayerPose(first, second, map, epoch, targetFirst, targetSecond)
+    if not spAIFinite(first) or not spAIFinite(second) or not spAIFinite(map) or epoch == 0
+        or map < 0 or map >= 4294967296 or map % 1 ~= 0 then return end
+    local a, b = math.floor(first * 4 + 0.5), math.floor(second * 4 + 0.5)
+    if a < -2147483648 or a > 2147483647 or b < -2147483648 or b > 2147483647 then return end
+    local flags, heading = 1, 0
+    if type(GetPlayerFacing) == "function" then
+        local ok, facing = pcall(GetPlayerFacing)
+        if ok and spAIFinite(facing) and facing >= 0 and facing <= 2 * math.pi then
+            flags, heading = 3, math.floor(facing * 128 / math.pi + 0.5) % 256
+        end
+    end
+    if map <= 65535 and a >= -8388608 and a <= 8388607 and b >= -8388608 and b <= 8388607
+        and spAIFinite(targetFirst) and spAIFinite(targetSecond) then
+        local dx, dy = math.floor(targetFirst * 4 + 0.5), math.floor(targetSecond * 4 + 0.5)
+        if dx >= -32768 and dx <= 32767 and dy >= -32768 and dy <= 32767 then
+            return string.char(65, 80, 2, flags + 4) .. spAIU32(map):sub(3) .. spAIU32(a):sub(2)
+                .. spAIU32(b):sub(2) .. spAIU32(dx):sub(3) .. spAIU32(dy):sub(3) .. string.char(heading, epoch)
+        end
+    end
+    return string.char(65, 80, 1, flags) .. spAIU32(map) .. spAIU32(a) .. spAIU32(b) .. string.char(heading, epoch)
+end
+
 local function spAIPosition(unit)
     if type(UnitPosition) ~= "function" then return end
     local ok, x, y, _, map = pcall(UnitPosition, unit)
     if ok and spAIFinite(x) and spAIFinite(y) and spAIFinite(map) then return x, y, map end
 end
 
-local function spAIMotion(foeID)
+local function spAIMotion(foeID, liveHostile)
     local source = 0
     local distance = 65535
     local x, y, map = spAIPosition("player")
+    local targetFirst, targetSecond
     if map then
         source = 1
         if spAIAnchorMap ~= map then
@@ -220,7 +318,8 @@ local function spAIMotion(foeID)
         if foeID then
             local tx, ty, targetMap = spAIPosition("target")
             if map == targetMap then
-                local dx, dy = x-tx, y-ty
+                local dx, dy = tx-x, ty-y
+                if liveHostile then targetFirst, targetSecond = dx, dy end
                 distance = math.min(65534, math.floor(4 * math.sqrt(dx*dx + dy*dy) + 0.5))
             end
         end
@@ -238,7 +337,8 @@ local function spAIMotion(foeID)
         end
     end
     spAIMotionSource = source
-    return source, spAIMotionCounter, source == 1 and spAIPositionEpoch or 0, distance
+    local epoch = source == 1 and spAIPositionEpoch or 0
+    return source, spAIMotionCounter, epoch, distance, spAIPlayerPose(x, y, map, epoch, targetFirst, targetSecond)
 end
 
 -- Health is optional. All decision flags must be public and known.
@@ -247,10 +347,10 @@ local function spAIState()
     if not SPPhoneTouchRects then return "" end
     local stage = 1
     local function unavailable(code) return string.char(65, 73, 0, code, 0, 0, 75, 0, 70, 0, 0, 0, 78, 0, 0, 255, 255, 0) end
-    local function boolValue(value)
+    local function boolValue(value, absentIsFalse)
         if type(issecretvalue) == "function" and issecretvalue(value) then error("restricted value") end
         if type(canaccessvalue) == "function" and not canaccessvalue(value) then error("restricted value") end
-        if value == nil then return false end
+        if value == nil and absentIsFalse then return false end
         if type(value) == "boolean" then return value end
         if type(value) == "number" and (value == 0 or value == 1) then return value == 1 end
         error("unexpected boolean")
@@ -262,14 +362,14 @@ local function spAIState()
         end
         error("death API unavailable")
     end
-    local ok, state = pcall(function()
+    local ok, state, pose = pcall(function()
         if not boolValue(UnitExists("player")) then return unavailable(1) end
         local flags = 1
         stage = 4
         if dead("player") then flags = flags + 2 end
         stage = 5
         local hostile, targetDead, foeID = false, false, nil
-        local hasTarget = boolValue(UnitExists("target"))
+        local hasTarget = boolValue(UnitExists("target"), true)
         if hasTarget then
             flags = flags + 4
             stage = 6
@@ -320,7 +420,7 @@ local function spAIState()
             spAITargetEpoch = spAITargetEpoch % 255 + 1
             spAIPreviousTarget = foeID
         end
-        local motionSource, motionCounter, positionEpoch, distance = spAIMotion(foeID)
+        local motionSource, motionCounter, positionEpoch, distance, worldPose = spAIMotion(foeID, hostile and not targetDead)
         local bindings = (spAIBinding("TAB") == "TARGETNEARESTENEMY" and 1 or 0)
             + (rotation == "CLICK TactaraMainButton:LeftButton" and 2 or 0)
         local looted = targetDead and foeID and foeID == spAILootedTarget and 1 or 0
@@ -330,10 +430,15 @@ local function spAIState()
                 + 4 * spAICorpseQuery(UnitHasLootInteraction) + 16 * spAICorpseQuery(UnitIsInInteractRange)
         end
         local healthStatus = 64 + spAIHealthStatus(hp, hpReason) * 4 + targetHealth * 16
+        local hitClock = spAIHitAt and spAIClock()
+        if foeID and spAIHitTarget == foeID and hitClock and hitClock >= spAIHitAt and hitClock - spAIHitAt < 1 then
+            corpseEvidence = corpseEvidence + 64 * spAIHitCount
+            healthStatus = healthStatus + 128
+        end
         return string.char(65, 73, flags, hp or 255, targetHP, meta, 75, spAIMovementBindings(),
             70, motionSource, motionCounter, corpseEvidence, 78, foeID and spAITargetEpoch or 0, positionEpoch,
-            math.floor(distance / 256), distance % 256, bindings + healthStatus)
+            math.floor(distance / 256), distance % 256, bindings + healthStatus), worldPose
     end)
     if not ok then spAICombatTarget = nil; spAIPreviousTarget = nil; return unavailable(stage) end
-    return state
+    return state, pose
 end

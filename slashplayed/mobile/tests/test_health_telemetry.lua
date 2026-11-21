@@ -2,7 +2,8 @@ local path = assert(arg[1])
 local f = assert(io.open(path, "r"))
 local source = f:read("*a")
 f:close()
-local read = assert(loadstring(source .. "\nreturn spReadHealthPercent"))()
+local read, playerPose, progression, healthBounds = assert(loadstring(source ..
+    "\nreturn spReadHealthPercent, spAIPlayerPose, spAIProgression, spAIVisibleHealthBounds"))()
 local secret = {}
 issecretvalue = function(value) return value == secret end
 canaccessvalue = function(value) return value ~= secret end
@@ -29,6 +30,39 @@ reset(val(0/0), val(-1), val(100)); check(nil, "unavailable")
 issecretvalue = nil
 reset(val(secret), val(secret), val(100)); check(nil, "restricted")
 print("health telemetry tests passed")
+GetPlayerFacing = val(math.pi / 2)
+local pose = assert(playerPose(-1.25, 2, 0, 7))
+local expected = string.char(65, 80, 1, 3, 0, 0, 0, 0, 255, 255, 255, 251, 0, 0, 0, 8, 64, 7)
+assert(pose == expected, "signed position, map zero and heading must survive encoding")
+local targetPose = assert(playerPose(-1.25, 2, 0, 7, 3, -4))
+assert(targetPose == string.char(65, 80, 2, 7, 0, 0, 255, 255, 251, 0, 0, 8, 0, 12, 255, 240, 64, 7))
+GetPlayerFacing = val(secret)
+-- Retain coordinates if only the heading is restricted.
+issecretvalue = function(value) return value == secret end
+assert(assert(playerPose(0, 0, 1, 7)):byte(4) == 1)
+assert(playerPose(secret, 0, 1, 7) == nil)
+assert(playerPose(0, 0, 0, 0) == nil)
+UnitXP = val(850)
+UnitXPMax = val(1200)
+UnitLevel = val(6)
+C_QuestLog = {GetNumQuestLogEntries = function() return 12, 4 end}
+local progress = assert(progression())
+assert(progress == string.char(65, 88, 1, 3, 0, 0, 3, 82, 0, 0, 4, 176, 0, 6, 0, 4, 0, 0))
+UnitXP = val(secret)
+assert(progression():byte(4) == 2)
+C_QuestLog = {GetNumQuestLogEntries = function() error("not available") end}
+assert(progression() == nil)
+print("optional public XP and quest count tests passed")
+UIParent = {GetWidth = val(1000), GetHeight = val(500), GetEffectiveScale = val(1)}
+WolkaraMobilePlayer = {health = {IsForbidden = val(false), IsVisible = val(true), GetEffectiveAlpha = val(1),
+    GetEffectiveScale = val(1), GetRect = function() return 100, 400, 200, 25 end}}
+assert(assert(healthBounds()):sub(1, 4) == string.char(65, 72, 1, 1))
+WolkaraMobilePlayer.health.IsVisible = val(false)
+assert(healthBounds() == nil)
+WolkaraMobilePlayer.health.IsVisible = val(true)
+WolkaraMobilePlayer.health.GetRect = function() return secret, 400, 200, 25 end
+assert(healthBounds() == nil)
+print("visible player health geometry tests passed")
 
 -- Flags must survive protected health but protected attackability must fail closed.
 local state = assert(loadstring(source .. "\nreturn spAIState"))()
@@ -61,6 +95,11 @@ assert(packet:byte(18) == 64 + 3 * 16)
 reset(nil, nil, nil)
 assert(state():byte(18) == 64 + 1 * 4 + 3 * 16, "missing and restricted are distinct")
 print("partial public game-state tests passed")
+local setupNPC = UnitIsPlayer
+UnitIsPlayer = val(nil)
+UnitExists = val(true)
+assert(state():byte(3) == 0 and state():byte(4) == 6)
+UnitIsPlayer = setupNPC
 
 GetBindingAction = function(key, checkOverride)
     assert(checkOverride)
@@ -249,3 +288,39 @@ corpseEvent(nil, "PARTY_KILL", "test-player", selected)
 GetTime = val(28)
 assert(corpseState():byte(3) == 21)
 print("public kill attribution and corpse interaction evidence passed")
+
+targetDead = false
+UnitCanAttack = val(true)
+local attacker, victim, amount = "other-player", selected, 40
+CombatLogGetCurrentEventInfo = function()
+    return 29, "SPELL_DAMAGE", false, attacker, nil, 0, 0, victim, nil, 0, 0, 100, "test", 1, amount
+end
+corpseEvent(nil, "COMBAT_LOG_EVENT_UNFILTERED")
+assert(corpseState():byte(18) < 128)
+attacker = "test-player"
+victim = "other-foe"
+corpseEvent(nil, "COMBAT_LOG_EVENT_UNFILTERED")
+assert(corpseState():byte(18) < 128)
+victim, amount = selected, secret
+corpseEvent(nil, "COMBAT_LOG_EVENT_UNFILTERED")
+assert(corpseState():byte(18) < 128)
+amount = 40
+corpseEvent(nil, "COMBAT_LOG_EVENT_UNFILTERED")
+assert(corpseState():byte(18) >= 128 and math.floor(corpseState():byte(12) / 64) == 1)
+GetTime = val(30)
+assert(corpseState():byte(18) < 128)
+corpseEvent(nil, "PLAYER_TARGET_CHANGED")
+assert(corpseState():byte(18) < 128)
+print("public selected-target local damage evidence passed")
+
+GetBindingAction = function(key)
+    if key == "LEFT" then return "TURNLEFT" end
+    if key == "RIGHT" then return "STRAFERIGHT" end
+end
+assert(corpseState():byte(8) == 64, "A strafe bound to the right arrow must not authorize turning")
+GetBindingAction = function(key)
+    if key == "LEFT" then return secret end
+    if key == "RIGHT" then return "TURNRIGHT" end
+end
+assert(corpseState():byte(8) == 128, "A protected turn binding must not authorize turning")
+print("verified left and right turn bindings passed")

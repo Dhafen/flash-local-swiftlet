@@ -3,7 +3,7 @@
 Kör från roten med C11-kompilator och Lua 5.1. GitHub Actions kör motsvarande tester i combat-addon-tests och stagningen i keyboard-device-kit.
 
 ~~~bash
-cc -std=c11 -Wall -Wextra -Werror slashplayed/mobile/tests/test_ai_direct.c -o /tmp/sp-ai-direct
+cc -std=c11 -Wall -Wextra -Werror slashplayed/mobile/tests/test_ai_direct.c -lm -o /tmp/sp-ai-direct
 /tmp/sp-ai-direct
 lua5.1 slashplayed/mobile/tests/test_health_telemetry.lua slashplayed/mobile/HealthTelemetry.lua
 cc -std=c11 -Wall -Wextra -Werror slashplayed/mobile/tests/test_touch_zone.c -o /tmp/sp-touch-zone

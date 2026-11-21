@@ -7,8 +7,53 @@
 #include <stdatomic.h>
 #include <stdbool.h>
 #include "ai-encounter.h"
+#include "ai-progression.h"
+#include "ai-health-vision.h"
 
 static atomic_bool sp_p2p_capture_enabled;
+static atomic_bool sp_ai_health_capture_enabled;
+static atomic_uint sp_ai_health_capture_epoch;
+static _Atomic(uint64_t) sp_ai_health_bounds, sp_ai_health_bounds_ms;
+static uint8_t sp_ai_health_visual_result = SP_VISUAL_HP_UNKNOWN;
+static NSTimeInterval sp_ai_health_visual_at;
+static SPHealthReference sp_ai_health_reference[4];
+static unsigned sp_ai_health_reference_count;
+static BOOL sp_ai_health_comparison_pending;
+static void sp_ai_clear_health_comparison(void) {
+    sp_ai_health_reference_count = 0;
+    sp_ai_health_comparison_pending = NO;
+}
+static void sp_ai_finish_health_comparison(NSTimeInterval now) {
+    if (!sp_ai_health_comparison_pending) return;
+    uint8_t reference;
+    SPHealthComparison result = sp_ai_compare_visible_health(sp_ai_health_reference, sp_ai_health_reference_count,
+        sp_ai_health_visual_at, sp_ai_health_visual_result, now, &reference);
+    if (result == SP_HEALTH_COMPARE_PENDING) return;
+    sp_ai_health_comparison_pending = NO;
+    static const char *const status[] = {"pending", "paired", "unreadable", "changing", "unknown", "unbracketed"};
+    sp_stub_log([[NSString stringWithFormat:@"AI health validation: %s visual=%u public=%u", status[result],
+        (unsigned)sp_ai_health_visual_result, (unsigned)reference] UTF8String]);
+}
+static void sp_ai_record_health_reference(NSTimeInterval at, uint8_t hp) {
+    if (!atomic_load(&sp_ai_health_capture_enabled)) return;
+    unsigned count = sp_ai_health_reference_count;
+    if (count && at <= sp_ai_health_reference[count - 1].at) return;
+    if (count == sizeof sp_ai_health_reference / sizeof sp_ai_health_reference[0]) {
+        --count;
+        memmove(sp_ai_health_reference, sp_ai_health_reference + 1, count * sizeof sp_ai_health_reference[0]);
+    }
+    sp_ai_health_reference[count] = (SPHealthReference){at, hp};
+    sp_ai_health_reference_count = count + 1;
+    sp_ai_finish_health_comparison(at);
+}
+static void sp_ai_health_enable(BOOL enabled) {
+    if (atomic_load(&sp_ai_health_capture_enabled) == enabled) return;
+    atomic_fetch_add(&sp_ai_health_capture_epoch, 1);
+    atomic_store(&sp_ai_health_capture_enabled, enabled);
+    sp_ai_health_visual_result = SP_VISUAL_HP_UNKNOWN;
+    sp_ai_health_visual_at = 0;
+    sp_ai_clear_health_comparison();
+}
 static atomic_uint sp_p2p_capture_epoch;
 static NSData *sp_p2p_latest_frame;
 static NSTimeInterval sp_p2p_latest_at;
@@ -25,6 +70,8 @@ static SPAIMove sp_ai_move(NSString *move) {
     if ([move isEqualToString:@"BACK"]) return SP_MOVE_BACK;
     if ([move isEqualToString:@"LEFT"] || [move isEqualToString:@"STRAFE_LEFT"]) return SP_MOVE_LEFT;
     if ([move isEqualToString:@"RIGHT"] || [move isEqualToString:@"STRAFE_RIGHT"]) return SP_MOVE_RIGHT;
+    if ([move isEqualToString:@"TURN_LEFT"]) return SP_TURN_LEFT;
+    if ([move isEqualToString:@"TURN_RIGHT"]) return SP_TURN_RIGHT;
     return SP_MOVE_NONE;
 }
 
@@ -32,6 +79,7 @@ static SPAIMove sp_ai_move(NSString *move) {
 static uint8_t sp_ai_game_flags, sp_ai_game_hp, sp_ai_game_target_hp, sp_ai_game_meta, sp_ai_game_move_keys;
 static SPAIFarmFeedback sp_ai_game_feedback;
 static uint8_t sp_ai_game_corpse;
+static SPAIOwnHit sp_ai_game_hit;
 static SPAINavEvidence sp_ai_game_evidence;
 static SPAIHealthStatus sp_ai_player_health = SP_HEALTH_UNSPECIFIED;
 static SPAIHealthStatus sp_ai_target_health = SP_HEALTH_UNSPECIFIED;
@@ -45,6 +93,23 @@ static const char *sp_ai_nav_outcome_name(SPAINavOutcome outcome) {
         "displacement-only", "target-closer", "plate-centered", "no-target-progress"};
     return names[outcome];
 }
+
+static NSString *const sp_ai_approach_model_key = @"sp_wolkara_approach_feedback_v1";
+static SPAIApproachModel sp_ai_load_approach_model(void) {
+    SPAIApproachModel model = {0};
+    NSData *data = [NSUserDefaults.standardUserDefaults dataForKey:sp_ai_approach_model_key];
+    if (data.length != sizeof model) return model;
+    [data getBytes:&model length:sizeof model];
+    for (unsigned side = 0; side < 2; ++side)
+        for (unsigned move = 0; move < 2; ++move)
+            if (model.trials[side][move] > 100 || model.progress[side][move] > model.trials[side][move])
+                return (SPAIApproachModel){0};
+    return model;
+}
+static void sp_ai_save_approach_model(SPAIApproachModel model) {
+    NSData *data = [NSData dataWithBytes:&model length:sizeof model];
+    [NSUserDefaults.standardUserDefaults setObject:data forKey:sp_ai_approach_model_key];
+}
 static BOOL sp_ai_heartbeat_seen;
 static BOOL sp_ai_health_known(uint8_t value) { return sp_ai_hp_known(value); }
 static SPAIDecision sp_ai_current_decision(NSTimeInterval now) {
@@ -52,6 +117,51 @@ static SPAIDecision sp_ai_current_decision(NSTimeInterval now) {
         sp_ai_game_flags,sp_ai_game_hp,sp_ai_game_target_hp,sp_ai_game_meta);
 }
 static uint8_t sp_ai_heartbeat_seq;
+static uint8_t sp_ai_pose_seq;
+static uint8_t sp_ai_xp_seq;
+static SPAIWorldPose sp_ai_pose;
+static SPAIProgression sp_ai_progress;
+static NSTimeInterval sp_ai_pose_at;
+static NSTimeInterval sp_ai_xp_at;
+static uint8_t sp_ai_health_seq;
+static NSTimeInterval sp_ai_health_at;
+static void sp_ai_pose_heartbeat(uint8_t seq, const uint8_t *data, unsigned length, NSTimeInterval observedAt) {
+    if (observedAt <= sp_ai_pose_at || (sp_ai_pose_at > 0 && observedAt - sp_ai_pose_at < 1.0 && seq == sp_ai_pose_seq)) return;
+    sp_ai_pose = sp_ai_world_pose(data, length);
+    sp_ai_pose.observedAt = observedAt;
+    sp_ai_pose.sequence = seq;
+    sp_ai_pose_seq = seq;
+    sp_ai_pose_at = observedAt;
+}
+
+static SPAIWorldPose sp_ai_game_pose(SPAINavSample sample) {
+    if (sp_ai_pose_seq == sp_ai_heartbeat_seq && sp_ai_pose.epoch == sample.evidence.position &&
+        fabs(sp_ai_pose_at - sample.at) < 0.4) return sp_ai_pose;
+    return (SPAIWorldPose){0};
+}
+
+static void sp_ai_xp_heartbeat(uint8_t seq, const uint8_t *data, unsigned length, NSTimeInterval observedAt) {
+    if (observedAt <= sp_ai_xp_at || (sp_ai_xp_at > 0 && observedAt - sp_ai_xp_at < 2.0 && seq == sp_ai_xp_seq)) return;
+    sp_ai_progress = sp_ai_progression(data, length);
+    sp_ai_xp_seq = seq;
+    sp_ai_xp_at = observedAt;
+}
+
+static void sp_ai_health_heartbeat(uint8_t seq, const uint8_t *data, unsigned length, NSTimeInterval observedAt) {
+    if (observedAt <= sp_ai_health_at || (sp_ai_health_at > 0 && observedAt - sp_ai_health_at < 2.0 && seq == sp_ai_health_seq))
+        return;
+    sp_ai_health_seq = seq;
+    sp_ai_health_at = observedAt;
+    uint64_t bounds = sp_ai_health_region(data, length);
+    if (atomic_exchange(&sp_ai_health_bounds, bounds) != bounds) {
+        atomic_fetch_add(&sp_ai_health_capture_epoch, 1);
+        sp_ai_health_visual_result = SP_VISUAL_HP_UNKNOWN;
+        sp_ai_health_visual_at = 0;
+        sp_ai_clear_health_comparison();
+    }
+    atomic_store(&sp_ai_health_bounds_ms, (uint64_t)(observedAt * 1000));
+}
+
 static int sp_ai_payload_status = -1, sp_ai_state_reason = -1;
 static void sp_ai_game_update(const uint8_t *data, size_t length, NSTimeInterval observedAt) {
     if (observedAt <= sp_ai_game_at) return;
@@ -71,8 +181,10 @@ static void sp_ai_game_update(const uint8_t *data, size_t length, NSTimeInterval
         sp_ai_game_move_keys = 0;
         sp_ai_game_feedback = (SPAIFarmFeedback){0};
         sp_ai_game_corpse = 0;
+        sp_ai_game_hit = (SPAIOwnHit){0};
         sp_ai_game_evidence = (SPAINavEvidence){0, 0, 0, SP_AI_DISTANCE_UNKNOWN};
         sp_ai_player_health = sp_ai_target_health = SP_HEALTH_UNSPECIFIED;
+        sp_ai_record_health_reference(observedAt, SP_VISUAL_HP_UNKNOWN);
         return;
     }
     if (sp_ai_game_at <= 0 || sp_ai_packet_at - sp_ai_game_at >= 6.0 ||
@@ -89,6 +201,7 @@ static void sp_ai_game_update(const uint8_t *data, size_t length, NSTimeInterval
     sp_ai_game_move_keys = sp_ai_movement_bindings(data, (unsigned)length);
     sp_ai_game_feedback = sp_ai_farm_feedback(data, (unsigned)length);
     sp_ai_game_corpse = sp_ai_corpse_evidence(data, (unsigned)length);
+    sp_ai_game_hit = sp_ai_own_hit(data, (unsigned)length);
     sp_ai_game_evidence = sp_ai_nav_evidence(data, (unsigned)length);
     SPAIHealthStatus player = sp_ai_health_status(data, (unsigned)length, false);
     SPAIHealthStatus target = sp_ai_health_status(data, (unsigned)length, true);
@@ -99,6 +212,7 @@ static void sp_ai_game_update(const uint8_t *data, size_t length, NSTimeInterval
     sp_ai_player_health = player;
     sp_ai_target_health = target;
     sp_ai_game_at = observedAt;
+    sp_ai_record_health_reference(observedAt, player == SP_HEALTH_PUBLIC ? sp_ai_game_hp : SP_VISUAL_HP_UNKNOWN);
 }
 
 static void sp_ai_heartbeat(uint8_t seq, const uint8_t *data, size_t length, NSTimeInterval observedAt) {
@@ -115,14 +229,21 @@ static void sp_ai_heartbeat(uint8_t seq, const uint8_t *data, size_t length, NST
 @interface SPGameAIController : NSObject
 @property(nonatomic, readonly) BOOL active;
 @property(nonatomic, readonly) BOOL starting;
+@property(nonatomic, readonly) BOOL manualPaused;
 @property(nonatomic) BOOL autonomousTest;
+@property(nonatomic) BOOL observationSelected;
 @property(nonatomic) BOOL modelDiagnostics;
+@property(nonatomic) BOOL healthDiagnostics;
 @property(nonatomic, copy) BOOL (^action)(NSString *, CGPoint, NSTimeInterval, NSTimeInterval);
 @property(nonatomic, copy) void (^releaseInput)(void);
 @property(nonatomic, copy) void (^status)(NSString *);
 - (void)start;
 - (void)stop;
 - (void)yieldToManualInput;
+- (void)resumeFromManualInput;
+- (void)recordRouteMark;
+- (void)clearGrindRoute;
+- (void)recordManualProbe:(SPAINavPulse)pulse outcome:(SPAINavOutcome)outcome;
 - (void)invalidateDecision;
 - (void)toggleTeaching;
 - (void)recordManualSteering:(CGPoint)delta;
@@ -155,13 +276,24 @@ static void sp_ai_note_event(void *context, const char *message) {
 
 @implementation SPGameAIController {
     BOOL _active, _starting, _stopping, _ownsCapture;
+    BOOL _manualPaused;
+    NSTimeInterval _manualResumeAt;
+    NSTimeInterval _lastFreshGameAt;
     NSUInteger _run, _captureRun;
     BOOL _busy;
     NSTimeInterval _nextFrame, _lastFrame;
     BOOL _layaEnabled, _layaPending;
     NSString *_layaState, *_lastPhase;
     NSString *_lastWorldSummary;
+    NSString *_lastProgressSummary;
+    SPAIProgression _lastProgress;
+    NSTimeInterval _lastProgressAt;
     SPAIEncounter _encounter;
+    SPAIRoute _grindRoute;
+    SPAIWorldPose _recordedLegStart;
+    SPAIWorldPose _recordedFirstMotion, _recordedLastMotion;
+    BOOL _recordedForward, _recordedOtherDirection;
+    NSUInteger _routeRecordingGeneration;
     NSProcessInfoThermalState _lastThermal;
     SPAIApproachExamples _approachExamples;
     BOOL _teaching;
@@ -177,9 +309,85 @@ static void sp_ai_note_event(void *context, const char *message) {
 }
 - (BOOL)active { return _active; }
 - (BOOL)starting { return _starting && _active; }
+- (BOOL)manualPaused { return _manualPaused; }
 
 - (void)yieldToManualInput {
-    if (self.autonomousTest || self.modelDiagnostics || _starting || _ownsCapture) [self stop];
+    if (!_active) return;
+    if (_starting || _ownsCapture) { [self stop]; return; }
+    if (_manualPaused || (!self.autonomousTest && !self.modelDiagnostics)) return;
+    _manualPaused = YES;
+    SPAIEncounterAdapter adapter = {(__bridge void *)self, sp_ai_submit_input, sp_ai_release_input,
+        sp_ai_navigation_outcome, sp_ai_note_event};
+    sp_ai_suspend_encounter(&_encounter, adapter);
+    sp_p2p_enable(NO);
+    sp_ai_health_enable(NO);
+    [self invalidateDecision];
+    [self showPhase:@"AI PAUSED"];
+}
+
+- (void)resumeFromManualInput {
+    if (!_active || !_manualPaused) return;
+    _manualResumeAt = NSProcessInfo.processInfo.systemUptime + 1.0;
+    _manualPaused = NO;
+}
+
+- (void)sampleRecordedLeg:(NSUInteger)generation {
+    if (generation != _routeRecordingGeneration || !_recordedLegStart.valid || _active) return;
+    SPAIWorldPose pose = sp_ai_game_pose(sp_ai_game_sample());
+    if (pose.valid && pose.headingKnown && sp_ai_sample_fresh(pose.observedAt, NSProcessInfo.processInfo.systemUptime)) {
+        if (pose.map != _recordedLegStart.map || pose.epoch != _recordedLegStart.epoch ||
+            sp_ai_heading_delta(pose.heading, _recordedLegStart.heading) > 5) {
+            _recordedOtherDirection = YES;
+        } else {
+            if (!_recordedFirstMotion.valid) _recordedFirstMotion = pose;
+            _recordedLastMotion = pose;
+        }
+    }
+    __weak SPGameAIController *weak = self;
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, NSEC_PER_SEC / 4), dispatch_get_main_queue(),
+        ^{ [weak sampleRecordedLeg:generation]; });
+}
+
+- (void)recordRouteMark {
+    if (_active) return;
+    SPAINavSample sample = sp_ai_game_sample();
+    SPAIWorldPose pose = sp_ai_game_pose(sample);
+    NSString *status;
+    if (!sp_ai_sample_fresh(sample.at, NSProcessInfo.processInfo.systemUptime) || !pose.valid || !pose.headingKnown) {
+        status = @"ROUTE DATA";
+    } else if (!_recordedLegStart.valid) {
+        _recordedLegStart = pose;
+        _recordedFirstMotion = _recordedLastMotion = (SPAIWorldPose){0};
+        _recordedForward = _recordedOtherDirection = NO;
+        status = @"LEG START";
+        [self sampleRecordedLeg:++_routeRecordingGeneration];
+    } else {
+        BOOL added = _recordedForward && !_recordedOtherDirection && sp_ai_route_append(&_grindRoute, _recordedLegStart, pose);
+        if (added) {
+            SPAIRouteLeg *leg = &_grindRoute.legs[_grindRoute.count - 1];
+            sp_ai_route_calibrate_leg(leg, _recordedFirstMotion, _recordedLastMotion);
+            status = leg->calibrated ? [NSString stringWithFormat:@"LEGS %u", _grindRoute.count] : @"LEG NO CAL";
+        } else {
+            status = @"LEG INVALID";
+        }
+        _recordedLegStart = (SPAIWorldPose){0};
+        ++_routeRecordingGeneration;
+    }
+    if (self.status) self.status(status);
+}
+
+- (void)clearGrindRoute {
+    if (_active) return;
+    _grindRoute = (SPAIRoute){0};
+    _recordedLegStart = (SPAIWorldPose){0};
+    ++_routeRecordingGeneration;
+    if (self.status) self.status(@"ROUTE EMPTY");
+}
+
+- (void)recordManualProbe:(SPAINavPulse)pulse outcome:(SPAINavOutcome)outcome {
+    if (_active || (sp_ai_game_flags & (2|32|64))) return;
+    SPAIApproachModel model = sp_ai_load_approach_model();
+    if (sp_ai_train_approach(&model, pulse.before, pulse.move, outcome)) sp_ai_save_approach_model(model);
 }
 
 - (void)toggleTeaching {
@@ -204,6 +412,13 @@ static void sp_ai_note_event(void *context, const char *message) {
 }
 
 - (void)recordManualSteering:(CGPoint)delta {
+    if (_recordedLegStart.valid && hypot(delta.x, delta.y) >= 12) {
+        if (-delta.y >= 12 && fabs(delta.x) <= -delta.y * 0.25) {
+            _recordedForward = YES;
+        } else {
+            _recordedOtherDirection = YES;
+        }
+    }
     if (!_teaching || _active || _teachingSamples >= 60) return;
     NSTimeInterval now = NSProcessInfo.processInfo.systemUptime;
     if (now-sp_ai_game_at >= 0.85 || sp_ai_game_at <= _lastTeachingPacket ||
@@ -276,10 +491,13 @@ static NSArray<NSNumber *> *sp_ai_luminance(CVPixelBufferRef buffer) {
 - (void)stop {
     if (!_active) return;
     _active = NO;
+    _manualPaused = NO;
+    _manualResumeAt = 0;
     _visualPreviewMode = NO;
     _visualPreviewStatus = nil;
     _visualPreviewAt = 0;
     sp_p2p_enable(NO);
+    sp_ai_health_enable(NO);
     ++_run;
     @synchronized(self) { _captureRun = 0; _busy = NO; }
     if (self.releaseInput) self.releaseInput();
@@ -468,8 +686,9 @@ static NSArray<NSNumber *> *sp_ai_luminance(CVPixelBufferRef buffer) {
     NSString *direction = !sample.column ? @"unknown" : sample.column <= 6 ? @"left" : sample.column >= 10 ? @"right" : @"center";
     unsigned loot = sp_ai_game_corpse & (SP_CORPSE_LOOT_NONE|SP_CORPSE_LOOT_AVAILABLE);
     unsigned range = sp_ai_game_corpse & (SP_CORPSE_RANGE_OUT|SP_CORPSE_RANGE_IN);
+    SPAIWorldPose pose = sp_ai_game_pose(sample);
     NSString *summary = [NSString stringWithFormat:
-        @"target=%@ identity=%@ plate=%@ position=%@ distance=%@ combat=%@ tab=%@ f12=%@ kill=%@ loot=%@ interact-range=%@",
+        @"target=%@ identity=%@ plate=%@ position=%@ distance=%@ combat=%@ tab=%@ f12=%@ kill=%@ loot=%@ interact-range=%@ pose=%@ heading=%@ target-vector=%@",
         target, sample.evidence.target ? @"public" : @"unknown", direction,
         sample.evidence.position && sample.motion.source == SP_MOTION_POSITION ? @"public" : @"unknown",
         sample.evidence.distance == SP_AI_DISTANCE_UNKNOWN ? @"unknown" : @"public",
@@ -478,20 +697,42 @@ static NSArray<NSNumber *> *sp_ai_luminance(CVPixelBufferRef buffer) {
         (sample.evidence.bindings & SP_AI_ROTATION_BOUND) ? @"verified" : @"unknown",
         (sp_ai_game_corpse & SP_CORPSE_LOCAL_KILL) ? @"player-or-pet" : @"unknown",
         loot == SP_CORPSE_LOOT_AVAILABLE ? @"available" : loot == SP_CORPSE_LOOT_NONE ? @"none" : @"unknown",
-        range == SP_CORPSE_RANGE_IN ? @"in" : range == SP_CORPSE_RANGE_OUT ? @"out" : @"unknown"];
+        range == SP_CORPSE_RANGE_IN ? @"in" : range == SP_CORPSE_RANGE_OUT ? @"out" : @"unknown",
+        pose.valid ? @"public" : @"unknown", pose.valid && pose.headingKnown ? @"public" : @"unknown",
+        pose.valid && pose.targetKnown ? @"public" : @"unknown"];
     if ([_lastWorldSummary isEqualToString:summary]) return;
     _lastWorldSummary = summary;
     sp_stub_log([[@"AI world: " stringByAppendingString:summary] UTF8String]);
 }
 
+- (void)observeProgression:(NSTimeInterval)now {
+    SPAIProgression current = now - sp_ai_xp_at < 2.5 ? sp_ai_progress : (SPAIProgression){0};
+    NSString *xp = current.xpKnown ? [NSString stringWithFormat:@"%u/%u level=%u",
+        current.xp, current.maximum, (unsigned)current.level] : @"unknown";
+    NSString *quests = current.questCountKnown ? [NSString stringWithFormat:@"%u", (unsigned)current.quests] : @"unknown";
+    NSString *summary = [NSString stringWithFormat:@"xp=%@ quests=%@", xp, quests];
+    BOOL continuous = _lastProgressAt > 0 && sp_ai_xp_at - _lastProgressAt < 2.5;
+    SPAIXPOutcome outcome = continuous ? sp_ai_xp_outcome(_lastProgress, current) : SP_XP_UNVERIFIED;
+    _lastProgressAt = (current.xpKnown || current.questCountKnown) ? sp_ai_xp_at : 0;
+    _lastProgress = current;
+    if ([_lastProgressSummary isEqualToString:summary]) return;
+    const char *change = outcome == SP_XP_GAINED ? "gain" : outcome == SP_XP_LEVEL_UP ? "level-up" : "snapshot";
+    sp_stub_log([[NSString stringWithFormat:@"AI progression: %s %@", change, summary] UTF8String]);
+    _lastProgressSummary = summary;
+}
+
 - (BOOL)submit:(NSString *)action forSample:(SPAINavSample)sample hold:(NSTimeInterval)hold {
-    BOOL accepted = self.autonomousTest && self.action && self.action(action, CGPointZero, sample.at, hold);
+    BOOL accepted = self.autonomousTest && !_manualPaused && self.action && self.action(action, CGPointZero, sample.at, hold);
     sp_stub_log([[NSString stringWithFormat:@"AI action: rules %@ observation %.3f adapter %@",
         action, sample.at, accepted ? @"accepted" : @"rejected"] UTF8String]);
     return accepted;
 }
 
 - (void)recordNavigation:(SPAINavOutcome)outcome before:(SPAINavSample)before after:(SPAINavSample)after {
+    if (_encounter.approachModelDirty) {
+        sp_ai_save_approach_model(_encounter.approachModel);
+        _encounter.approachModelDirty = NO;
+    }
     const char *name = sp_ai_nav_outcome_name(outcome);
     sp_stub_log([[NSString stringWithFormat:
         @"AI navigation: %s target %u/%u position %u/%u counter %u/%u column %u/%u distance-q4 %u/%u",
@@ -516,7 +757,7 @@ static NSArray<NSNumber *> *sp_ai_luminance(CVPixelBufferRef buffer) {
         return sp_ai_state_reason > 0 ? [NSString stringWithFormat:@"AI DATA %d", sp_ai_state_reason] : @"AI STALE";
     }
     SPAIEncounterObservation observation = {sample, sp_ai_game_flags, sp_ai_game_hp, sp_ai_game_target_hp,
-        sp_ai_game_meta, sp_ai_game_move_keys, sp_ai_game_corpse, sp_ai_player_health};
+        sp_ai_game_meta, sp_ai_game_move_keys, sp_ai_game_corpse, sp_ai_player_health, sp_ai_game_pose(sample), sp_ai_game_hit};
     const char *phase = sp_ai_advance(&_encounter, observation, now, reduced, &_approachExamples, adapter);
     return [NSString stringWithUTF8String:phase];
 }
@@ -528,7 +769,20 @@ static NSArray<NSNumber *> *sp_ai_luminance(CVPixelBufferRef buffer) {
     NSProcessInfoThermalState thermal = process.thermalState;
     BOOL reduced = thermal >= NSProcessInfoThermalStateSerious;
     BOOL diagnosticsRequested = self.modelDiagnostics && !self.autonomousTest;
-    BOOL preview = diagnosticsRequested && thermal == NSProcessInfoThermalStateNominal;
+    SPAINavSample sample = sp_ai_game_sample();
+    BOOL fresh = sp_ai_sample_fresh(sample.at, now);
+    if (fresh) _lastFreshGameAt = now;
+    else if (self.autonomousTest && now - _lastFreshGameAt >= 6.0) {
+        self.autonomousTest = NO;
+        [self fail:@"AI MODE"];
+        return;
+    }
+    BOOL paused = _manualPaused || (_manualResumeAt > 0 && (!fresh || sample.at <= _manualResumeAt));
+    if (!paused) _manualResumeAt = 0;
+    BOOL preview = diagnosticsRequested && !paused && thermal == NSProcessInfoThermalStateNominal;
+    BOOL healthDiag = self.healthDiagnostics && !self.autonomousTest;
+    BOOL healthPreview = healthDiag && !paused && fresh && thermal == NSProcessInfoThermalStateNominal;
+    sp_ai_health_enable(healthPreview);
     NSTimeInterval interval = reduced ? 0.8 : 0.4;
     if (thermal != _lastThermal || !_lastPhase) {
         _lastThermal = thermal;
@@ -541,17 +795,27 @@ static NSArray<NSNumber *> *sp_ai_luminance(CVPixelBufferRef buffer) {
         }
     }
     if (thermal == NSProcessInfoThermalStateCritical) { [self fail:@"AI HEAT"]; return; }
-    SPAINavSample sample = sp_ai_game_sample();
-    BOOL fresh = sp_ai_sample_fresh(sample.at, now);
-    if (fresh) [self observeWorld:sample];
+    if (fresh) {
+        [self observeWorld:sample];
+        [self observeProgression:now];
+    }
 
     if (preview != _visualPreviewMode) {
         [self invalidateDecision];
         _visualPreviewMode = preview;
     }
     sp_p2p_enable(preview && _p2pAvailable && !_visualPreviewError);
-    if (self.autonomousTest) {
+    if (paused) {
+        [self showPhase:@"AI PAUSED"];
+    } else if (self.autonomousTest) {
         [self showPhase:[self advance:sample now:now reduced:reduced]];
+    } else if (healthDiag) {
+        sp_ai_finish_health_comparison(now);
+        NSString *status = !healthPreview ? (fresh ? @"HP PAUSED" : @"AI STALE") : @"HP NO VIEW";
+        if (healthPreview && sp_ai_health_visual_at > 0 && now - sp_ai_health_visual_at < 2.0 &&
+            sp_ai_health_visual_result != SP_VISUAL_HP_UNKNOWN)
+            status = [NSString stringWithFormat:@"HP≈%u%%", (unsigned)sp_ai_health_visual_result];
+        [self showPhase:status];
     } else if (preview) {
         if (fresh) {
             SPAIDecision decision = sp_ai_current_decision(now);
@@ -572,6 +836,8 @@ static NSArray<NSNumber *> *sp_ai_luminance(CVPixelBufferRef buffer) {
 }
 - (void)start {
     if (_active || _starting || _stopping) return;
+    _recordedLegStart = (SPAIWorldPose){0};
+    ++_routeRecordingGeneration;
     if (_teaching) [self toggleTeaching];
     NSArray *examples = [NSUserDefaults.standardUserDefaults arrayForKey:@"sp_wolkara_approach_examples_v1"];
     _approachExamples = (SPAIApproachExamples){0};
@@ -592,8 +858,16 @@ static NSArray<NSNumber *> *sp_ai_luminance(CVPixelBufferRef buffer) {
     _visualPreviewStatus = nil;
     _visualPreviewAt = 0;
     _lastPhase = nil;
+    _manualPaused = NO;
+    _manualResumeAt = 0;
+    _lastFreshGameAt = NSProcessInfo.processInfo.systemUptime;
     _lastWorldSummary = nil;
+    _lastProgressSummary = nil;
+    _lastProgress = (SPAIProgression){0};
+    _lastProgressAt = 0;
     _encounter = (SPAIEncounter){.combatEvidence.lastHP = 255};
+    _encounter.route = _grindRoute;
+    _encounter.approachModel = sp_ai_load_approach_model();
     Class p2p = NSClassFromString(@"SPP2PBridge");
     SEL available = NSSelectorFromString(@"available");
     _p2pAvailable = [p2p respondsToSelector:available] && ((BOOL (*)(id,SEL))objc_msgSend)(p2p,available);

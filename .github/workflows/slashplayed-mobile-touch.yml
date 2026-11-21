@@ -9,6 +9,7 @@ on:
   push:
     branches: [experiment/slashplayed-floating-controls, experiment/slashplayed-laya-p2p]
   workflow_dispatch:
+  workflow_call:
 
 permissions:
   contents: read
@@ -31,13 +32,16 @@ jobs:
           lua5.1 slashplayed/mobile/tests/test_phone_layout.lua slashplayed/mobile/PhoneLayout.lua
           luac5.1 -p slashplayed/mobile/HealthTelemetry.lua
           lua5.1 slashplayed/mobile/tests/test_health_telemetry.lua slashplayed/mobile/HealthTelemetry.lua
+          PYTHONPATH=slashplayed/mobile python3 slashplayed/mobile/tests/test_health_validation_report.py
           luac5.1 -p slashplayed/mobile/HealthDisplay.lua
           lua5.1 slashplayed/mobile/tests/test_health_display.lua slashplayed/mobile/HealthDisplay.lua
           lua5.1 slashplayed/mobile/tests/test_wolkara_setup.lua slashplayed/mobile/WolkaraSetup.lua
           cc -Wall -Wextra -Werror -o "$RUNNER_TEMP/touch-zone" slashplayed/mobile/tests/test_touch_zone.c
           "$RUNNER_TEMP/touch-zone"
-          cc -Wall -Wextra -Werror -o "$RUNNER_TEMP/ai-direct" slashplayed/mobile/tests/test_ai_direct.c
+          cc -Wall -Wextra -Werror -o "$RUNNER_TEMP/ai-direct" slashplayed/mobile/tests/test_ai_direct.c -lm
           "$RUNNER_TEMP/ai-direct"
+          cc -std=c11 -Wall -Wextra -Werror -o "$RUNNER_TEMP/levelbot-simulator" slashplayed/mobile/tests/test_levelbot_simulator.c -lm
+          "$RUNNER_TEMP/levelbot-simulator"
 
   keyboard-device-kit:
     runs-on: xcode-27
