@@ -1,5 +1,123 @@
 #include <assert.h>
-#include "../ai-direct.h"
+#include <string.h>
+#include "../ai-encounter.h"
+
+typedef struct {
+    const char *lastAction;
+    unsigned submissions, releases, outcomes;
+    SPAINavOutcome outcome;
+    bool accept;
+} SPTestAdapter;
+
+static bool test_submit(void *context, const char *action, SPAINavSample sample, double hold) {
+    SPTestAdapter *mock = context;
+    bool movement = strcmp(action, "FORWARD") == 0 || strncmp(action, "STRAFE_", 7) == 0;
+    assert(sample.at > 0 && hold == (movement ? 0.60 : 0));
+    mock->lastAction = action;
+    ++mock->submissions;
+    return mock->accept;
+}
+
+static void test_release(void *context) {
+    SPTestAdapter *mock = context;
+    ++mock->releases;
+}
+
+static void test_outcome(void *context, SPAINavOutcome outcome, SPAINavSample before, SPAINavSample after) {
+    SPTestAdapter *mock = context;
+    assert(before.at > 0 && after.at >= before.at);
+    ++mock->outcomes;
+    mock->outcome = outcome;
+}
+
+static void test_encounter_adapter(void) {
+    SPAIEncounter planner = {.combatEvidence.lastHP = 255};
+    SPTestAdapter mock = {.accept = false};
+    SPAIEncounterAdapter adapter = {&mock, test_submit, test_release, test_outcome, NULL};
+    SPAIEncounterObservation observation = {
+        .sample = {1, {SP_MOTION_POSITION, 7, false}, {0, 2, 3, SP_AI_DISTANCE_UNKNOWN}, 0},
+        .flags = 1, .hp = 80, .meta = 129, .movementKeys = 1
+    };
+    SPAIApproachExamples examples = {0};
+    assert(strcmp(sp_ai_advance(&planner, observation, 1, false, &examples, adapter), "AI INPUT") == 0);
+    assert(planner.searchAttempts == 0 && mock.submissions == 1);
+    mock.accept = true;
+    observation.sample.at = 2;
+    assert(strcmp(sp_ai_advance(&planner, observation, 2, false, &examples, adapter), "SEARCH") == 0);
+    assert(planner.searchAttempts == 1 && strcmp(mock.lastAction, "TARGET") == 0);
+    observation.flags = 13;
+    observation.targetHP = 100;
+    observation.meta = 193;
+    observation.sample = (SPAINavSample){2.5, {SP_MOTION_POSITION, 7, false}, {1, 2, 3, 70}, 8};
+    assert(strcmp(sp_ai_advance(&planner, observation, 2.5, false, &examples, adapter), "ENGAGE") == 0);
+    assert(strcmp(mock.lastAction, "ATTACK") == 0);
+    observation.sample.at = 3.5;
+    sp_ai_advance(&planner, observation, 3.5, false, &examples, adapter);
+    observation.sample.at = 4;
+    assert(strcmp(sp_ai_advance(&planner, observation, 4, false, &examples, adapter), "APPROACH") == 0);
+    assert(strcmp(mock.lastAction, "FORWARD") == 0);
+    observation.sample.at = 4.5;
+    sp_ai_advance(&planner, observation, 4.5, false, &examples, adapter);
+    assert(mock.outcomes == 0 && mock.submissions == 4);
+    observation.sample.at = 5;
+    ++observation.sample.motion.counter;
+    observation.sample.evidence.distance = 14;
+    sp_ai_advance(&planner, observation, 5, false, &examples, adapter);
+    assert(mock.outcomes == 1 && mock.outcome == SP_NAV_CLOSER);
+    observation.sample.at = 5.5;
+    observation.flags = 45;
+    observation.targetHP = 50;
+    assert(strcmp(sp_ai_advance(&planner, observation, 5.5, false, &examples, adapter), "IN COMBAT") == 0);
+    assert(strcmp(mock.lastAction, "ATTACK") == 0);
+    observation.flags = 149;
+    observation.meta = 133;
+    observation.targetHP = 0;
+    observation.sample.at = 6.5;
+    assert(strcmp(sp_ai_advance(&planner, observation, 6.5, false, &examples, adapter), "LOOT CHECK") == 0);
+    assert(strcmp(mock.lastAction, "LOOT") == 0);
+    observation.sample.motion.lootConfirmed = true;
+    observation.sample.at = 7;
+    assert(strcmp(sp_ai_advance(&planner, observation, 7, false, &examples, adapter), "LOOT OK") == 0);
+    observation.hp = 30;
+    observation.sample.at = 7.5;
+    assert(strcmp(sp_ai_advance(&planner, observation, 7.5, false, &examples, adapter), "RECOVER") == 0);
+    observation.hp = 50;
+    observation.sample.at = 8;
+    assert(strcmp(sp_ai_advance(&planner, observation, 8, false, &examples, adapter), "SEARCH") == 0);
+    assert(strcmp(mock.lastAction, "TARGET") == 0);
+    assert(mock.submissions == 7);
+}
+
+static void test_encounter_stops(void) {
+    SPAIEncounter planner = {.combatEvidence.lastHP = 255};
+    SPTestAdapter mock = {.accept = true};
+    SPAIEncounterAdapter adapter = {&mock, test_submit, test_release, test_outcome, NULL};
+    SPAIEncounterObservation observation = {
+        .sample = {10, {SP_MOTION_POSITION, 7, false}, {1, 2, 3, 70}, 8},
+        .flags = 13, .hp = 255, .targetHP = 100, .meta = 193, .movementKeys = 1,
+        .playerHealth = SP_HEALTH_RESTRICTED
+    };
+    SPAIApproachExamples examples = {0};
+    assert(strcmp(sp_ai_advance(&planner, observation, 10, false, &examples, adapter), "HP SECRET") == 0);
+    assert(mock.submissions == 0);
+    observation.hp = 85;
+    observation.sample.at = 10.5;
+    sp_ai_advance(&planner, observation, 10.5, false, &examples, adapter);
+    observation.sample.at = 11;
+    sp_ai_advance(&planner, observation, 11, false, &examples, adapter);
+    observation.sample.at = 11.5;
+    sp_ai_advance(&planner, observation, 11.5, false, &examples, adapter);
+    assert(mock.submissions == 2 && strcmp(mock.lastAction, "FORWARD") == 0);
+    unsigned releases = mock.releases;
+    assert(strcmp(sp_ai_advance(&planner, observation, 13, false, &examples, adapter), "AI STALE") == 0);
+    assert(mock.submissions == 2 && mock.releases == releases + 1);
+    assert(mock.outcomes == 1 && mock.outcome == SP_NAV_NO_SAMPLE && !planner.pulse.deadline);
+    observation.sample.at = 13;
+    ++observation.sample.evidence.target;
+    observation.sample.evidence.bindings = SP_AI_TAB_BOUND;
+    assert(strcmp(sp_ai_advance(&planner, observation, 13, false, &examples, adapter), "F12 BIND") == 0);
+    assert(mock.submissions == 2);
+}
 
 static void test_steering_observations(void) {
     SPAISteering steering = {0};
@@ -147,6 +265,8 @@ static void test_simulated_encounter(void) {
 }
 
 int main(void) {
+    test_encounter_adapter();
+    test_encounter_stops();
     test_steering_observations();
     test_pulse_outcomes();
     test_bounded_retries();

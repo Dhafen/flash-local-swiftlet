@@ -6,7 +6,7 @@
 #import <ImageIO/ImageIO.h>
 #include <stdatomic.h>
 #include <stdbool.h>
-#include "ai-direct.h"
+#include "ai-encounter.h"
 
 static atomic_bool sp_p2p_capture_enabled;
 static atomic_uint sp_p2p_capture_epoch;
@@ -124,6 +124,31 @@ static void sp_ai_heartbeat(uint8_t seq, const uint8_t *data, size_t length, NST
 - (void)recordManualSteering:(CGPoint)delta;
 @end
 
+@interface SPGameAIController (EncounterAdapter)
+- (BOOL)submit:(NSString *)action forSample:(SPAINavSample)sample hold:(NSTimeInterval)hold;
+- (void)recordNavigation:(SPAINavOutcome)outcome before:(SPAINavSample)before after:(SPAINavSample)after;
+@end
+
+static bool sp_ai_submit_input(void *context, const char *action, SPAINavSample sample, double hold) {
+    SPGameAIController *controller = (__bridge SPGameAIController *)context;
+    return [controller submit:[NSString stringWithUTF8String:action] forSample:sample hold:hold];
+}
+
+static void sp_ai_release_input(void *context) {
+    SPGameAIController *controller = (__bridge SPGameAIController *)context;
+    if (controller.releaseInput) controller.releaseInput();
+}
+
+static void sp_ai_navigation_outcome(void *context, SPAINavOutcome outcome, SPAINavSample before, SPAINavSample after) {
+    SPGameAIController *controller = (__bridge SPGameAIController *)context;
+    [controller recordNavigation:outcome before:before after:after];
+}
+
+static void sp_ai_note_event(void *context, const char *message) {
+    (void)context;
+    sp_stub_log(message);
+}
+
 @implementation SPGameAIController {
     BOOL _active, _starting, _stopping, _ownsCapture;
     NSUInteger _run, _captureRun;
@@ -132,16 +157,7 @@ static void sp_ai_heartbeat(uint8_t seq, const uint8_t *data, size_t length, NST
     BOOL _layaEnabled, _layaPending;
     NSString *_layaState, *_lastPhase;
     NSString *_lastWorldSummary;
-    NSTimeInterval _directNextAction;
-    unsigned _lootAttempts, _searchAttempts;
-    SPAISteering _visibleSteering;
-    uint8_t _steeringPosition;
-    NSTimeInterval _lastMoveAt, _lastDamageAt;
-    SPAINavPulse _pulse;
-    SPAINavBudget _navBudget;
-    SPAICombatEvidence _combatEvidence;
-    uint8_t _encounter;
-    BOOL _recovering, _probeAfterMove;
+    SPAIEncounter _encounter;
     NSProcessInfoThermalState _lastThermal;
     SPAIApproachExamples _approachExamples;
     BOOL _teaching;
@@ -205,9 +221,8 @@ static void sp_ai_heartbeat(uint8_t seq, const uint8_t *data, size_t length, NST
     SEL selector = NSSelectorFromString(@"resetDecision");
     if ([bridge respondsToSelector:selector]) ((void (*)(id, SEL))objc_msgSend)(bridge, selector);
     ++_p2pGeneration;
-    if (_pulse.deadline) sp_stub_log("AI navigation: cancelled");
-    _pulse = (SPAINavPulse){0};
-    _visibleSteering = (SPAISteering){0};
+    if (_encounter.pulse.deadline) sp_stub_log("AI navigation: cancelled");
+    sp_ai_cancel_steering(&_encounter);
     // Keep single-flight ownership until the previous callback finishes.
     Class p2p = NSClassFromString(@"SPP2PBridge");
     SEL reset = NSSelectorFromString(@"resetHistory");
@@ -463,16 +478,14 @@ static NSArray<NSNumber *> *sp_ai_luminance(CVPixelBufferRef buffer) {
     return accepted;
 }
 
-- (void)recordNavigation:(SPAINavOutcome)outcome {
-    sp_ai_nav_resolve(&_navBudget, outcome);
+- (void)recordNavigation:(SPAINavOutcome)outcome before:(SPAINavSample)before after:(SPAINavSample)after {
     const char *name = sp_ai_nav_outcome_name(outcome);
-    SPAINavSample after = sp_ai_game_sample();
     sp_stub_log([[NSString stringWithFormat:
         @"AI navigation: %s target %u/%u position %u/%u counter %u/%u column %u/%u distance-q4 %u/%u",
-        name, (unsigned)_pulse.before.evidence.target, (unsigned)after.evidence.target,
-        (unsigned)_pulse.before.evidence.position, (unsigned)after.evidence.position,
-        (unsigned)_pulse.before.motion.counter, (unsigned)after.motion.counter,
-        _pulse.before.column, after.column, (unsigned)_pulse.before.evidence.distance,
+        name, (unsigned)before.evidence.target, (unsigned)after.evidence.target,
+        (unsigned)before.evidence.position, (unsigned)after.evidence.position,
+        (unsigned)before.motion.counter, (unsigned)after.motion.counter,
+        before.column, after.column, (unsigned)before.evidence.distance,
         (unsigned)after.evidence.distance] UTF8String]);
     NSUserDefaults *prefs = NSUserDefaults.standardUserDefaults;
     NSString *key = [@"sp_ai_navigation_count_" stringByAppendingString:[NSString stringWithUTF8String:name]];
@@ -481,140 +494,18 @@ static NSArray<NSNumber *> *sp_ai_luminance(CVPixelBufferRef buffer) {
 }
 
 - (NSString *)advance:(SPAINavSample)sample now:(NSTimeInterval)now reduced:(BOOL)reduced {
+    SPAIEncounterAdapter adapter = {(__bridge void *)self, sp_ai_submit_input, sp_ai_release_input,
+        sp_ai_navigation_outcome, sp_ai_note_event};
     if (!sp_ai_heartbeat_seen || !sp_ai_sample_fresh(sample.at, now)) {
-        _visibleSteering = (SPAISteering){0};
-        if (_pulse.deadline) {
-            [self recordNavigation:SP_NAV_NO_SAMPLE];
-            _pulse = (SPAINavPulse){0};
-        }
-        if (self.releaseInput) self.releaseInput();
+        sp_ai_stale_encounter(&_encounter, sample, adapter);
         if (sp_ai_strip_at <= 0 || now-sp_ai_strip_at >= 6.0) return @"AI STRIP";
         if (sp_ai_packet_at <= 0 || now-sp_ai_packet_at >= 6.0) return @"AI SYNC";
         return sp_ai_state_reason > 0 ? [NSString stringWithFormat:@"AI DATA %d", sp_ai_state_reason] : @"AI STALE";
     }
-
-    SPAIDecision decision = sp_ai_current_decision(now);
-    BOOL hostile = decision == SP_AI_ATTACK || decision == SP_AI_BIND;
-    uint8_t target = sample.evidence.target;
-    if (_encounter != target) {
-        if (_pulse.deadline) sp_stub_log("AI navigation: cancelled on target change");
-        if (self.releaseInput) self.releaseInput();
-        _directNextAction = _lastDamageAt = 0;
-        _visibleSteering = (SPAISteering){0};
-        _pulse = (SPAINavPulse){0};
-        _navBudget = (SPAINavBudget){0};
-        _combatEvidence = (SPAICombatEvidence){.lastHP = 255};
-        _probeAfterMove = NO;
-        _lootAttempts = 0;
-        if (hostile) _searchAttempts = 0;
-        _encounter = target;
-    }
-
-    bool recovering = _recovering;
-    SPAIReadiness readiness = sp_ai_readiness(sp_ai_game_flags, sp_ai_game_hp, &recovering);
-    _recovering = recovering;
-    if (readiness != SP_AI_READY) {
-        _visibleSteering = (SPAISteering){0};
-        if (_pulse.deadline) [self invalidateDecision];
-        if (self.releaseInput) self.releaseInput();
-        if (readiness == SP_AI_DEAD) return @"PLAYER DEAD";
-        if (readiness == SP_AI_MOUNTED) return @"MOUNTED";
-        if (readiness == SP_AI_RECOVER) return @"RECOVER";
-        return sp_ai_player_health == SP_HEALTH_RESTRICTED ? @"HP SECRET" : @"HP UNKNOWN";
-    }
-
-    if (_pulse.deadline) {
-        BOOL canContinue = hostile && target && sample.column && sp_ai_movement_key(_pulse.move, sp_ai_game_move_keys);
-        SPAINavOutcome outcome = sp_ai_nav_outcome(_pulse, sample, now);
-        if (!canContinue && (outcome == SP_NAV_PENDING || outcome == SP_NAV_NO_SAMPLE))
-            outcome = SP_NAV_CONTEXT_CHANGED;
-        if (outcome == SP_NAV_PENDING) return reduced ? @"HEAT WALK" : @"APPROACH";
-        if (self.releaseInput) self.releaseInput();
-        [self recordNavigation:outcome];
-        _probeAfterMove = _pulse.move == SP_MOVE_FORWARD && outcome == SP_NAV_DISPLACED;
-        _pulse = (SPAINavPulse){0};
-        _directNextAction = now + 0.4;
-    }
-
-    if (sample.motion.lootConfirmed && (sp_ai_game_flags & (16|128)) == (16|128) && target &&
-        (sp_ai_game_flags & 32) == 0 && _lootAttempts < 3) {
-        sp_stub_log("AI loot: selected corpse slot cleared");
-        _lootAttempts = 3;
-        _directNextAction = now + 0.4;
-        return @"LOOT OK";
-    }
-    decision = sp_ai_farm_decision(decision, sp_ai_game_flags, sp_ai_game_meta, _lootAttempts,
-        sample.motion.lootConfirmed);
-    if (decision == SP_AI_LOOT_BIND) return @"INTERACT BIND";
-    if (decision == SP_AI_LOOT_WAIT) return @"LOOT UNCONF";
-    if (decision == SP_AI_LOOT) {
-        if (!target) return @"LOOT UNKNOWN";
-        if (now >= _directNextAction) {
-            _directNextAction = now + 1.4;
-            if (![self submit:@"LOOT" forSample:sample hold:0]) return @"AI INPUT";
-            ++_lootAttempts;
-        }
-        return @"LOOT CHECK";
-    }
-    if (decision == SP_AI_TARGET) {
-        if (!(sample.evidence.bindings & SP_AI_TAB_BOUND)) return @"TAB BIND";
-        if (_searchAttempts >= 4) return @"NO TARGET";
-        if (now >= _directNextAction) {
-            _directNextAction = now + 1.0;
-            if (![self submit:@"TARGET" forSample:sample hold:0]) return @"AI INPUT";
-            ++_searchAttempts;
-        }
-        return reduced ? @"HEAT SEEK" : @"SEARCH";
-    }
-    if (decision == SP_AI_BIND) return @"F12 BIND";
-    if (!hostile) return @"AI WAIT";
-    if (!(sample.evidence.bindings & SP_AI_ROTATION_BOUND)) return @"F12 BIND";
-    if (!target) return @"TARGET UNKNOWN";
-
-    if (sp_ai_observe_damage(&_combatEvidence, sp_ai_game_target_hp, sample.at)) {
-        _lastDamageAt = now;
-        sp_stub_log("AI combat: selected target health decreased");
-    }
-    BOOL combat = (sp_ai_game_flags & 32) != 0;
-    BOOL recentDamage = _lastDamageAt > 0 && now - _lastDamageAt < 3.0;
-    SPAIMove move = sp_ai_visible_approach(sp_ai_game_meta, 2, false, false);
-    if (sample.evidence.distance != SP_AI_DISTANCE_UNKNOWN)
-        move = sp_ai_apply_approach(&_approachExamples, move, combat);
-    if (_steeringPosition != sample.evidence.position) {
-        _visibleSteering = (SPAISteering){0};
-        _steeringPosition = sample.evidence.position;
-    }
-    BOOL confirmed = sp_ai_confirm_steering(&_visibleSteering, move, sample.at);
-    if (now < _directNextAction) return combat ? @"IN COMBAT" : @"ENGAGE";
-    SPAIEngagement engagement = sp_ai_engagement(_combatEvidence, move, sample.evidence.distance,
-        recentDamage, _probeAfterMove);
-    if (engagement == SP_ENGAGE_NO_DAMAGE) return @"NO DAMAGE";
-    if (engagement == SP_ENGAGE_DAMAGE_UNKNOWN) return @"DAMAGE ?";
-
-    if (engagement == SP_ENGAGE_APPROACH) {
-        if (!sample.evidence.position || sample.motion.source != SP_MOTION_POSITION) return @"NAV POSITION";
-        if (!sp_ai_nav_budget_open(_navBudget, move)) return @"NAV BLOCK";
-        if (!sp_ai_movement_key(move, sp_ai_game_move_keys)) return @"MOVE BIND";
-        if (!confirmed || now - _lastMoveAt < (reduced ? 2.0 : 0.8))
-            return reduced ? @"HEAT WALK" : @"APPROACH";
-        NSString *key = move == SP_MOVE_LEFT ? @"STRAFE_LEFT" : move == SP_MOVE_RIGHT ? @"STRAFE_RIGHT" : @"FORWARD";
-        NSTimeInterval hold = 0.60; // cover the nominal 0.5s SPHover cadence
-        if (![self submit:key forSample:sample hold:hold]) {
-            _directNextAction = now + 0.8;
-            return @"NAV INPUT";
-        }
-        sp_ai_nav_accept(&_navBudget, move);
-        _visibleSteering = (SPAISteering){0};
-        _lastMoveAt = now;
-        _pulse = (SPAINavPulse){sample, move, now + hold, now + 1.8};
-        return reduced ? @"HEAT WALK" : @"APPROACH";
-    }
-
-    _directNextAction = now + 0.85;
-    if (![self submit:@"ATTACK" forSample:sample hold:0]) return @"AI INPUT";
-    sp_ai_accept_probe(&_combatEvidence, now);
-    _probeAfterMove = NO;
-    return combat ? @"IN COMBAT" : @"ENGAGE";
+    SPAIEncounterObservation observation = {sample, sp_ai_game_flags, sp_ai_game_hp, sp_ai_game_target_hp,
+        sp_ai_game_meta, sp_ai_game_move_keys, sp_ai_player_health};
+    const char *phase = sp_ai_advance(&_encounter, observation, now, reduced, &_approachExamples, adapter);
+    return [NSString stringWithUTF8String:phase];
 }
 
 - (void)pollDirect:(NSUInteger)run {
@@ -681,12 +572,7 @@ static NSArray<NSNumber *> *sp_ai_luminance(CVPixelBufferRef buffer) {
     _visualPreviewAt = 0;
     _lastPhase = nil;
     _lastWorldSummary = nil;
-    _directNextAction = _lastMoveAt = _lastDamageAt = 0;
-    _lootAttempts = _searchAttempts = 0;
-    _navBudget = (SPAINavBudget){0};
-    _combatEvidence = (SPAICombatEvidence){.lastHP = 255};
-    _encounter = 0;
-    _recovering = _probeAfterMove = NO;
+    _encounter = (SPAIEncounter){.combatEvidence.lastHP = 255};
     Class p2p = NSClassFromString(@"SPP2PBridge");
     SEL available = NSSelectorFromString(@"available");
     _p2pAvailable = [p2p respondsToSelector:available] && ((BOOL (*)(id,SEL))objc_msgSend)(p2p,available);

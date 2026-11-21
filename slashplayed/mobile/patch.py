@@ -26,6 +26,7 @@ def patch_input():
     source = Path(__file__).with_name("phone-input.m").read_text()
     source = source.replace('#include "touch-zone.h"', Path(__file__).with_name("touch-zone.h").read_text())
     source = source.replace('#include "game-ai.m"', Path(__file__).with_name("game-ai.m").read_text())
+    source = source.replace('#include "ai-encounter.h"', Path(__file__).with_name("ai-encounter.h").read_text())
     source = source.replace('#include "ai-direct.h"', Path(__file__).with_name("ai-direct.h").read_text())
     declarations, methods = source.split("// SPInputView methods follow.\n")
     require(path, ["SPSoftKeyboardField", "sp_press_soft_escape:"])
