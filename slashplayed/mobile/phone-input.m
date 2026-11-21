@@ -388,9 +388,8 @@ static UIButton *sp_mobile_button(NSString *title, NSString *label, id owner, SE
 
 - (void)sp_mobile_deactivate:(NSNotification *)notification {
     if (notification.object == self.window.windowScene) {
-        // A ReplayKit consent sheet may temporarily deactivate the scene.
         [self sp_mobile_cancel];
-        if (!_mobileAI.starting) [_mobileAI stop];
+        [_mobileAI stop];
     }
 }
 - (void)sp_mobile_background:(NSNotification *)notification {
@@ -705,56 +704,54 @@ static void sp_mobile_ai_movement_key(unsigned char key, BOOL pressed) {
 }
 
 - (void)sp_mobile_ai_release_key {
-    if (!_mobileAIKeyHeld) return;
-    _mobileAIKeyHeld = NO;
-    ++_mobileAIKeyGeneration;
-    if (_mobileAIKeyboardHeld) {
-        sp_mobile_ai_movement_key(_mobileAIKeyboardHeld, NO);
-        _mobileAIKeyboardHeld = 0;
-    } else [_mobileStick stop];
+    SPMovementCommand command = sp_movement_release(&_mobileAIMovement, 0);
+    if (!command.deadline) return;
+    if (command.key) sp_mobile_ai_movement_key(command.key, NO);
+    else [_mobileStick stop];
 }
 - (BOOL)sp_mobile_ai_hold_axis:(CGPoint)axis duration:(NSTimeInterval)duration {
-    [self sp_mobile_ai_release_key];
     SPAIMove move = axis.y > 0 ? SP_MOVE_FORWARD : axis.y < 0 ? SP_MOVE_BACK :
         axis.x < 0 ? SP_MOVE_LEFT : axis.x > 0 ? SP_MOVE_RIGHT : SP_MOVE_NONE;
     NSTimeInterval now = NSProcessInfo.processInfo.systemUptime;
-    if (sp_ai_game_at > 0 && now-sp_ai_game_at < 3.0)
-        _mobileAIKeyboardHeld = sp_ai_movement_key(move, sp_ai_game_move_keys);
-    if (_mobileAIKeyboardHeld) {
-        sp_mobile_ai_movement_key(_mobileAIKeyboardHeld, YES);
-        sp_stub_log([[NSString stringWithFormat:@"AI input: held verified key %c", _mobileAIKeyboardHeld] UTF8String]);
+    uint8_t key = sp_ai_sample_fresh(sp_ai_game_at, now) ? sp_ai_movement_key(move, sp_ai_game_move_keys) : 0;
+    if (move == SP_MOVE_NONE || !sp_movement_begin(&_mobileAIMovement, key, now, duration)) return NO;
+    if (key) {
+        sp_mobile_ai_movement_key(key, YES);
+        sp_stub_log([[NSString stringWithFormat:@"AI input: held verified key %c", key] UTF8String]);
     } else if ([_mobileStick driveAI:axis]) {
         sp_stub_log([[NSString stringWithFormat:@"AI input: virtual stick %.1f %.1f", axis.x, axis.y] UTF8String]);
     } else {
+        sp_movement_release(&_mobileAIMovement, 0);
         sp_stub_log("AI input: no verified key and virtual controller not ready");
         return NO;
     }
-    [self sp_mobile_ai_schedule_release:duration];
+    [self sp_mobile_ai_schedule_release:_mobileAIMovement.generation];
     return YES;
 }
 - (BOOL)sp_mobile_ai_hold_turn:(SPAIMove)move duration:(NSTimeInterval)duration {
-    [self sp_mobile_ai_release_key];
-    if (!sp_ai_sample_fresh(sp_ai_game_at, NSProcessInfo.processInfo.systemUptime)) return NO;
-    _mobileAIKeyboardHeld = sp_ai_movement_key(move, sp_ai_game_move_keys);
-    if (!_mobileAIKeyboardHeld) return NO;
-    sp_mobile_ai_movement_key(_mobileAIKeyboardHeld, YES);
+    NSTimeInterval now = NSProcessInfo.processInfo.systemUptime;
+    if (!sp_ai_sample_fresh(sp_ai_game_at, now)) return NO;
+    uint8_t key = sp_ai_movement_key(move, sp_ai_game_move_keys);
+    if (!key || !sp_movement_begin(&_mobileAIMovement, key, now, duration)) return NO;
+    sp_mobile_ai_movement_key(key, YES);
     sp_stub_log(move == SP_TURN_LEFT ? "AI input: held verified left-arrow turn" : "AI input: held verified right-arrow turn");
-    [self sp_mobile_ai_schedule_release:duration];
+    [self sp_mobile_ai_schedule_release:_mobileAIMovement.generation];
     return YES;
 }
-- (void)sp_mobile_ai_schedule_release:(NSTimeInterval)duration {
-    _mobileAIKeyHeld = YES;
-    NSUInteger generation = ++_mobileAIKeyGeneration;
+- (void)sp_mobile_ai_schedule_release:(uint64_t)generation {
+    NSTimeInterval remaining = _mobileAIMovement.deadline - NSProcessInfo.processInfo.systemUptime;
     __weak SPInputView *weakSelf = self;
-    NSTimeInterval hold = duration > 0 ? MIN(duration, 0.70) : 0.55;
-    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(hold * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(MAX(remaining, 0.001) * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
         SPInputView *input = weakSelf;
-        if (input && input->_mobileAIKeyGeneration == generation) [input sp_mobile_ai_release_key];
+        if (!input || !input->_mobileAIMovement.deadline || input->_mobileAIMovement.generation != generation) return;
+        if (sp_movement_due(&input->_mobileAIMovement, generation, NSProcessInfo.processInfo.systemUptime))
+            [input sp_mobile_ai_release_key];
+        else [input sp_mobile_ai_schedule_release:generation];
     });
 }
 - (void)sp_mobile_ai_check_test:(SPAINavPulse)pulse generation:(NSUInteger)generation
     remaining:(unsigned)remaining lastSample:(SPAINavSample)lastSample {
-    if (_mobileAIKeyGeneration != generation && _mobileAIKeyGeneration != generation + 1) return;
+    if (_mobileAIKeyGeneration != generation) return;
     if (_mobileAI.active || self.window.windowScene.activationState != UISceneActivationStateForegroundActive) return;
     NSTimeInterval now = NSProcessInfo.processInfo.systemUptime;
     SPAINavSample after = sp_ai_game_sample();

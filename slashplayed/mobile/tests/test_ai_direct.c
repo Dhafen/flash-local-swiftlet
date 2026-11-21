@@ -4,6 +4,36 @@
 #include "../ai-navigation.h"
 #include "../ai-progression.h"
 #include "../ai-health-vision.h"
+#include "../ai-strip.h"
+#include "../ai-movement.h"
+
+static void test_movement_ownership(void) {
+    SPMovementCommand command = {0};
+    assert(sp_movement_begin(&command, 'w', 5.0, 0.6));
+    uint64_t first = command.generation;
+    assert(!sp_movement_begin(&command, 'a', 5.2, 0.4));
+    assert(!sp_movement_due(&command, first, 5.5));
+    assert(sp_movement_due(&command, first, 5.7));
+    assert(sp_movement_release(&command, first).key == 'w');
+    assert(!sp_movement_release(&command, first).deadline);
+    assert(sp_movement_begin(&command, 0, 6.0, 0.2));
+    assert(!sp_movement_due(&command, first, 7.0));
+    assert(!sp_movement_release(&command, first).deadline && command.deadline > 6.0);
+    assert(sp_movement_release(&command, 0).deadline > 6.0 && !command.deadline);
+    assert(!sp_movement_begin(&command, 's', 7.0, 1.0));
+}
+
+static void test_padded_observation_strip(void) {
+    uint8_t pose[113] = {'A', 'P', 1, 3, 0, 0, 0, 7, 0, 0, 0, 8, 0, 0, 0, 9, 64, 1};
+    uint8_t xp[113] = {'A', 'X', 1, 1, 0, 0, 0, 15, 0, 0, 0, 40, 0, 12};
+    uint8_t health[113] = {'A', 'H', 1, 1, 0, 50, 0, 60, 0, 180, 0, 90};
+    assert(sp_ai_world_pose(pose, sp_ai_strip_payload_length(pose, sizeof pose)).headingKnown);
+    assert(sp_ai_progression(xp, sp_ai_strip_payload_length(xp, sizeof xp)).xpKnown);
+    assert(sp_ai_health_region(health, sp_ai_strip_payload_length(health, sizeof health)));
+    assert(!sp_ai_strip_payload_length(pose, 17));
+    pose[112] = 1;
+    assert(!sp_ai_strip_payload_length(pose, sizeof pose));
+}
 
 typedef struct {
     const char *lastAction;
@@ -423,6 +453,8 @@ static void test_route_turn_requires_binding_and_confirmed_heading(void) {
 }
 
 int main(void) {
+    test_movement_ownership();
+    test_padded_observation_strip();
     SPHealthReference hp[] = {{1.0, 27}, {1.5, 27}};
     uint8_t actual = 255;
     assert(sp_ai_compare_visible_health(hp, 1, 1.25, 90, 1.5, &actual) == SP_HEALTH_COMPARE_PENDING);

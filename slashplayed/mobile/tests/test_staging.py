@@ -24,11 +24,12 @@ assert '.. spLastAIState' in (root / "addon/SPHover/SPHover.lua").read_text()
 assert 'local function aiHeartbeat()' in (root / "addon/SPHover/SPHover.lua").read_text()
 assert 'showChunk(aiFrame)' in (root / "addon/SPHover/SPHover.lua").read_text()
 assert b"\x00" not in (root / "addon/SPHover/SPHover.lua").read_bytes()
-assert 'sp_ai_heartbeat(frame[2], frame + 5, SPH_PAYLOAD_BYTES, observedAt)' in (root / "shims/appkit/sphover.m").read_text()
-assert 'sp_ai_pose_heartbeat(frame[2], frame + 5, SPH_PAYLOAD_BYTES, observedAt)' in (root / "shims/appkit/sphover.m").read_text()
-assert 'sp_ai_xp_heartbeat(frame[2], frame + 5, SPH_PAYLOAD_BYTES, observedAt)' in (root / "shims/appkit/sphover.m").read_text()
+assert 'sp_ai_heartbeat(frame[2], frame + 5, aiLength, observedAt)' in (root / "shims/appkit/sphover.m").read_text()
+assert 'sp_ai_pose_heartbeat(frame[2], frame + 5, aiLength, observedAt)' in (root / "shims/appkit/sphover.m").read_text()
+assert 'sp_ai_xp_heartbeat(frame[2], frame + 5, aiLength, observedAt)' in (root / "shims/appkit/sphover.m").read_text()
 hover = (root / "shims/appkit/sphover.m").read_text()
-assert 'sp_ai_health_heartbeat(frame[2], frame + 5, SPH_PAYLOAD_BYTES, observedAt)' in hover
+assert 'sp_ai_strip_payload_length(frame + 5, SPH_PAYLOAD_BYTES)' in hover
+assert 'sp_ai_health_heartbeat(frame[2], frame + 5, aiLength, observedAt)' in hover
 assert 'sourceSize:MTLSizeMake(width,SP_HEALTH_SCAN_ROWS,1)' in hover
 encounter_advance = event.split('- (NSString *)advance:(SPAINavSample)sample', 1)[1].split('\n}', 1)[0]
 assert 'sp_ai_health_visual_result' not in encounter_advance
@@ -56,7 +57,7 @@ assert '120 * NSEC_PER_SEC' not in event
 assert 'AI OFF' in event and 'AI ON' in event
 assert 'sp_mobile_phone_zone(x, y, interface)' in event
 assert 'Restore floating joystick (Play)' in event
-assert 'if (!_mobileAI.starting) [_mobileAI stop];' in event
+assert 'RPScreenRecorder' not in event and 'startScreen' not in event and '_mobileAI.starting' not in event
 assert 'UISceneDidEnterBackgroundNotification' in event
 assert 'AI NO VID' in event and 'AI NO TEXT' in event and 'AI THINK' in event
 assert 'AI MODEL!' in event and 'AI CAP!' in event
@@ -72,7 +73,7 @@ assert 'input->_mobileAIManualUntil' in event
 assert 'SystemLanguageModel.default.isAvailable' in (root / "apps/client/spgameai.swift").read_text()
 assert 'spgameai.swift -o' in (root / "apps/client/build-launcher.sh").read_text()
 assert 'sp_game_ai_register();' in (root / "apps/client/launcher.m").read_text()
-assert '-framework Vision -framework ReplayKit -framework CoreMedia' in (root / "shims/generated/build.sh").read_text()
+assert '-framework ReplayKit' not in (root / "shims/generated/build.sh").read_text()
 assert 'SP_MOBILE_RIGHT_PRESS_SECONDS 0.45' in event
 assert 'sp_mobile_click(getenv("SP_PHONE_UI_RECTS") ? elapsed : 0,' in event
 assert 'sp_mouse_button(click, YES, position);' in event and 'sp_mouse_button(click, NO, position);' in event
@@ -293,10 +294,12 @@ assert "input->_mobileAIKeyGeneration != generation" in start_method
 manual_button_group = next(line for line in event.splitlines() if "@[_mobileRotation, _mobileUI, _mobileEdit" in line)
 assert "_mobileAIButton" not in manual_button_group
 
-assert 'sp_mobile_ai_movement_key(_mobileAIKeyboardHeld, YES)' in event
-assert 'sp_mobile_ai_movement_key(_mobileAIKeyboardHeld, NO)' in event
+assert 'sp_mobile_ai_movement_key(key, YES)' in event
+assert 'sp_mobile_ai_movement_key(command.key, NO)' in event
+assert 'sp_movement_due(&input->_mobileAIMovement, generation,' in event
+assert '_mobileAIKeyGeneration != generation + 1' not in event
 turn_method = event.split('- (BOOL)sp_mobile_ai_hold_turn:(SPAIMove)move duration:(NSTimeInterval)duration {', 1)[1].split('\n}', 1)[0]
 assert 'sp_ai_movement_key(move, sp_ai_game_move_keys)' in turn_method
-assert 'driveAI:' not in turn_method and '[self sp_mobile_ai_schedule_release:duration]' in turn_method
+assert 'driveAI:' not in turn_method and '[self sp_mobile_ai_schedule_release:_mobileAIMovement.generation]' in turn_method
 assert 'left || right ? SPFunction | SPNumericPad : 0' in event
 assert 'pressed ? SPKeyDown : SPKeyUp' in event

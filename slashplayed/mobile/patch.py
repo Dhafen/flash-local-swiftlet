@@ -31,6 +31,8 @@ def patch_input():
     source = source.replace('#include "ai-navigation.h"', Path(__file__).with_name("ai-navigation.h").read_text())
     source = source.replace('#include "ai-progression.h"', Path(__file__).with_name("ai-progression.h").read_text())
     source = source.replace('#include "ai-health-vision.h"', Path(__file__).with_name("ai-health-vision.h").read_text())
+    source = source.replace('#include "ai-strip.h"', Path(__file__).with_name("ai-strip.h").read_text())
+    source = source.replace('#include "ai-movement.h"', Path(__file__).with_name("ai-movement.h").read_text())
     declarations, methods = source.split("// SPInputView methods follow.\n")
     require(path, ["SPSoftKeyboardField", "sp_press_soft_escape:"])
     for phase in ("Began", "Moved", "Ended", "Cancelled"):
@@ -45,8 +47,7 @@ def patch_input():
     UIButton *_mobileEdit, *_mobileUI, *_mobileReset, *_mobileSpeed;
     UIButton *_mobileRotation, *_mobileAIButton;
     SPGameAIController *_mobileAI;
-    BOOL _mobileAIKeyHeld;
-    unsigned char _mobileAIKeyboardHeld;
+    SPMovementCommand _mobileAIMovement;
     NSUInteger _mobileAIKeyGeneration;
     NSMutableIndexSet *_mobilePhysicalKeys;
     NSTimeInterval _mobileAIManualUntil;
@@ -192,7 +193,7 @@ replace_once(launcher_main, "int main(int argc, char **argv) {",
              "extern void sp_game_ai_register(void);\nint main(int argc, char **argv) {\n    sp_game_ai_register();")
 shim_build = ROOT / "shims/generated/build.sh"
 replace_once(shim_build, '$CC -fobjc-arc -dynamiclib -O1 -Wno-objc-root-class libspAppKit.m',
-             'AI_FRAMEWORKS=""\nif [ "$PLATFORM" = ios ]; then AI_FRAMEWORKS="-framework Vision -framework ReplayKit -framework CoreMedia -framework CoreVideo"; fi\n'
+             'AI_FRAMEWORKS=""\nif [ "$PLATFORM" = ios ]; then AI_FRAMEWORKS="-framework CoreVideo"; fi\n'
              '$CC $AI_FRAMEWORKS -fobjc-arc -dynamiclib -O1 -Wno-objc-root-class libspAppKit.m')
 
 # Extend the existing pixel-strip message; don't request ReplayKit permission for
@@ -346,10 +347,13 @@ replace_once(hover_native, "    static sph_rect rects[SPH_MAX_RECTS];",
     """    if (frame[0] == 'A' && (frame[1] == 'I' || frame[1] == 'P' || frame[1] == 'X' || frame[1] == 'H')) {
 #if !TARGET_OS_VISION
         if (getenv("SP_PHONE_UI_RECTS") && frame[3] == 0 && frame[4] == 1) {
-            if (frame[1] == 'P') sp_ai_pose_heartbeat(frame[2], frame + 5, SPH_PAYLOAD_BYTES, observedAt);
-            else if (frame[1] == 'X') sp_ai_xp_heartbeat(frame[2], frame + 5, SPH_PAYLOAD_BYTES, observedAt);
-            else if (frame[1] == 'H') sp_ai_health_heartbeat(frame[2], frame + 5, SPH_PAYLOAD_BYTES, observedAt);
-            else sp_ai_heartbeat(frame[2], frame + 5, SPH_PAYLOAD_BYTES, observedAt);
+            _Static_assert(SPH_PAYLOAD_BYTES >= SP_AI_STRIP_RECORD_BYTES, "AI record exceeds strip capacity");
+            unsigned aiLength = sp_ai_strip_payload_length(frame + 5, SPH_PAYLOAD_BYTES);
+            if (!aiLength) return;
+            if (frame[1] == 'P') sp_ai_pose_heartbeat(frame[2], frame + 5, aiLength, observedAt);
+            else if (frame[1] == 'X') sp_ai_xp_heartbeat(frame[2], frame + 5, aiLength, observedAt);
+            else if (frame[1] == 'H') sp_ai_health_heartbeat(frame[2], frame + 5, aiLength, observedAt);
+            else sp_ai_heartbeat(frame[2], frame + 5, aiLength, observedAt);
         }
 #endif
         return;
