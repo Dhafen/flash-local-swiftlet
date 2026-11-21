@@ -86,7 +86,7 @@ static inline const char *sp_ai_advance(SPAIEncounter *encounter, SPAIEncounterO
         return observation.playerHealth == SP_HEALTH_RESTRICTED ? "HP SECRET" : "HP UNKNOWN";
     }
 
-    const char *approach = reduced ? "HEAT WALK" : "APPROACH";
+    const char *approach = "APPROACH";
     if (encounter->pulse.deadline) {
         bool canContinue = hostile && target && sample.column &&
             sp_ai_movement_key(encounter->pulse.move, observation.movementKeys);
@@ -131,7 +131,7 @@ static inline const char *sp_ai_advance(SPAIEncounter *encounter, SPAIEncounterO
             if (!adapter.submit(adapter.context, "TARGET", sample, 0)) return "AI INPUT";
             ++encounter->searchAttempts;
         }
-        return reduced ? "HEAT SEEK" : "SEARCH";
+        return "SEARCH";
     }
     if (decision == SP_AI_BIND) return "F12 BIND";
     if (!hostile) return "AI WAIT";

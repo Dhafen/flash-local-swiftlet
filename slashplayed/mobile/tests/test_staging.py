@@ -222,7 +222,7 @@ assert 'predictFrame:completion:' in preview_source
 assert 'strong.action(' not in preview_source and 'recordMove:' not in preview_source
 assert 'SP_AI_ROTATION_BOUND' in event and 'F12 BIND' in event
 assert '@"ATTACK"' not in preview_source and '@"CLICK"' not in preview_source
-assert 'self.modelDiagnostics && !self.autonomousTest && !reduced' in event and 'MODEL FILE' in event
+assert 'MODEL FILE' in event
 assert 'now - captured > 3.0' in preview_source and 'MODEL ERROR' in event
 assert 'STRAFE_LEFT' in event and 'STRAFE_RIGHT' in event
 if sys.platform == "darwin" and len(sys.argv) == 2:
@@ -244,7 +244,14 @@ yield_method = event.split('- (void)sp_mobile_ai_yield:(id)sender {', 1)[1].spli
 assert '[self sp_mobile_ai_release_key]' in yield_method and '[_mobileAI yieldToManualInput]' in yield_method
 manual_takeover = event.split('- (void)yieldToManualInput {', 1)[1].split('\n}', 1)[0]
 assert 'if (self.autonomousTest || self.modelDiagnostics || _starting || _ownsCapture) [self stop]' in manual_takeover
-assert 'NSProcessInfoThermalStateCritical' in event and 'reduced ? 0.8 : 0.4' in event
+poll = event.split('- (void)pollDirect:(NSUInteger)run {', 1)[1].split('\n}', 1)[0]
+assert 'self.modelDiagnostics && !self.autonomousTest' in poll
+assert 'diagnosticsRequested && thermal == NSProcessInfoThermalStateNominal' in poll
+assert 'if (thermal == NSProcessInfoThermalStateCritical) { [self fail:@"AI HEAT"]; return; }' in poll
+assert 'interval = reduced ? 0.8 : 0.4' in poll
+assert 'sp_p2p_enable(preview &&' in poll and '[self previewP2P:run]' in poll.split('} else if (preview) {', 1)[1]
+assert '[self showPhase:fresh ? @"OBSERVING" : @"AI STALE"]' in poll
+assert not any(status in event for status in ('"HEAT PAUSE"', '"HEAT WALK"', '"HEAT SEEK"'))
 assert 'input->_mobileAI.autonomousTest' in event and '_mobileAI.autonomousTest = NO' in event
 
 start_method = event.split("- (void)sp_mobile_ai_toggle:(UIButton *)button {", 1)[1].split("\n}", 1)[0]

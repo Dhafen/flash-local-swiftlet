@@ -43,7 +43,7 @@ static void test_encounter_adapter(void) {
     assert(planner.searchAttempts == 0 && mock.submissions == 1);
     mock.accept = true;
     observation.sample.at = 2;
-    assert(strcmp(sp_ai_advance(&planner, observation, 2, false, &examples, adapter), "SEARCH") == 0);
+    assert(strcmp(sp_ai_advance(&planner, observation, 2, true, &examples, adapter), "SEARCH") == 0);
     assert(planner.searchAttempts == 1 && strcmp(mock.lastAction, "TARGET") == 0);
     observation.flags = 13;
     observation.targetHP = 100;
@@ -54,7 +54,7 @@ static void test_encounter_adapter(void) {
     observation.sample.at = 3.5;
     sp_ai_advance(&planner, observation, 3.5, false, &examples, adapter);
     observation.sample.at = 4;
-    assert(strcmp(sp_ai_advance(&planner, observation, 4, false, &examples, adapter), "APPROACH") == 0);
+    assert(strcmp(sp_ai_advance(&planner, observation, 4, true, &examples, adapter), "APPROACH") == 0);
     assert(strcmp(mock.lastAction, "FORWARD") == 0);
     observation.sample.at = 4.5;
     sp_ai_advance(&planner, observation, 4.5, false, &examples, adapter);

@@ -526,16 +526,25 @@ static NSArray<NSNumber *> *sp_ai_luminance(CVPixelBufferRef buffer) {
     NSProcessInfo *process = NSProcessInfo.processInfo;
     NSTimeInterval now = process.systemUptime;
     NSProcessInfoThermalState thermal = process.thermalState;
+    BOOL reduced = thermal >= NSProcessInfoThermalStateSerious;
+    BOOL diagnosticsRequested = self.modelDiagnostics && !self.autonomousTest;
+    BOOL preview = diagnosticsRequested && thermal == NSProcessInfoThermalStateNominal;
+    NSTimeInterval interval = reduced ? 0.8 : 0.4;
     if (thermal != _lastThermal || !_lastPhase) {
         _lastThermal = thermal;
-        sp_stub_log([[NSString stringWithFormat:@"AI thermal: %ld", (long)thermal] UTF8String]);
+        if (thermal == NSProcessInfoThermalStateCritical) {
+            sp_stub_log("AI thermal: critical, stopping");
+        } else {
+            NSString *diagnostics = preview ? @"allowed" : (diagnosticsRequested ? @"paused" : @"off");
+            sp_stub_log([[NSString stringWithFormat:@"AI thermal: %ld poll=%.1fs model-diagnostics=%@",
+                (long)thermal, interval, diagnostics] UTF8String]);
+        }
     }
     if (thermal == NSProcessInfoThermalStateCritical) { [self fail:@"AI HEAT"]; return; }
-    BOOL reduced = thermal >= NSProcessInfoThermalStateSerious;
     SPAINavSample sample = sp_ai_game_sample();
-    if (sp_ai_sample_fresh(sample.at, now)) [self observeWorld:sample];
+    BOOL fresh = sp_ai_sample_fresh(sample.at, now);
+    if (fresh) [self observeWorld:sample];
 
-    BOOL preview = self.modelDiagnostics && !self.autonomousTest && !reduced;
     if (preview != _visualPreviewMode) {
         [self invalidateDecision];
         _visualPreviewMode = preview;
@@ -544,7 +553,7 @@ static NSArray<NSNumber *> *sp_ai_luminance(CVPixelBufferRef buffer) {
     if (self.autonomousTest) {
         [self showPhase:[self advance:sample now:now reduced:reduced]];
     } else if (preview) {
-        if (sp_ai_sample_fresh(sample.at, now)) {
+        if (fresh) {
             SPAIDecision decision = sp_ai_current_decision(now);
             NSString *candidate = decision == SP_AI_TARGET ? @"TARGET" : decision == SP_AI_ATTACK ? @"ATTACK" : nil;
             [self evaluateLaya:candidate combat:(sp_ai_game_flags & 32) != 0 run:run];
@@ -554,12 +563,11 @@ static NSArray<NSNumber *> *sp_ai_luminance(CVPixelBufferRef buffer) {
             (_visualPreviewStatus && now-_visualPreviewAt < 5.0 ? _visualPreviewStatus : @"VIS LOAD");
         [self showPhase:status];
     } else {
-        [self showPhase:reduced ? @"HEAT PAUSE" :
-            (sp_ai_sample_fresh(sample.at, now) ? @"OBSERVING" : @"AI STALE")];
+        [self showPhase:fresh ? @"OBSERVING" : @"AI STALE"];
     }
 
     __weak SPGameAIController *weak = self;
-    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)((reduced ? 0.8 : 0.4) * NSEC_PER_SEC)),
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(interval * NSEC_PER_SEC)),
         dispatch_get_main_queue(), ^{ [weak pollDirect:run]; });
 }
 - (void)start {
