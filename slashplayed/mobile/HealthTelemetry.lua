@@ -61,6 +61,8 @@ local function spAIMovementBindings()
     elseif spAIBinding("A") == "STRAFELEFT" then bits = bits + 8 end
     if spAIBinding("E") == "STRAFERIGHT" then bits = bits + 16
     elseif spAIBinding("D") == "STRAFERIGHT" then bits = bits + 32 end
+    if spAIBinding("LEFT") == "TURNLEFT" then bits = bits + 64 end
+    if spAIBinding("RIGHT") == "TURNRIGHT" then bits = bits + 128 end
     return bits
 end
 

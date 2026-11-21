@@ -310,3 +310,15 @@ assert(corpseState():byte(18) < 128)
 corpseEvent(nil, "PLAYER_TARGET_CHANGED")
 assert(corpseState():byte(18) < 128)
 print("public selected-target local damage evidence passed")
+
+GetBindingAction = function(key)
+    if key == "LEFT" then return "TURNLEFT" end
+    if key == "RIGHT" then return "STRAFERIGHT" end
+end
+assert(corpseState():byte(8) == 64, "A strafe bound to the right arrow must not authorize turning")
+GetBindingAction = function(key)
+    if key == "LEFT" then return secret end
+    if key == "RIGHT" then return "TURNRIGHT" end
+end
+assert(corpseState():byte(8) == 128, "A protected turn binding must not authorize turning")
+print("verified left and right turn bindings passed")

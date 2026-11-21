@@ -49,6 +49,11 @@ static inline unsigned sp_ai_heading_delta(uint8_t a, uint8_t b) {
     return delta <= 128 ? delta : 256 - delta;
 }
 
+static inline int sp_ai_heading_error(uint8_t desired, uint8_t current) {
+    unsigned delta = (uint8_t)(desired - current);
+    return delta <= 128 ? (int)delta : (int)delta - 256;
+}
+
 static inline bool sp_ai_route_append(SPAIRoute *route, SPAIWorldPose start, SPAIWorldPose end) {
     if (route->count >= SP_ROUTE_MAX_LEGS || !start.valid || !end.valid ||
         !start.headingKnown || !end.headingKnown || start.map != end.map || start.epoch != end.epoch ||

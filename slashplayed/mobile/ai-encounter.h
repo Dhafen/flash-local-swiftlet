@@ -35,8 +35,10 @@ typedef struct {
     SPAIApproachModel approachModel;
     SPAIRoute route;
     double routeDeadline, routeProgress, routeStartedAt, routeHold;
-    unsigned routeFailures, routeMoves;
-    uint8_t routePositionEpoch, routeEvidenceSeq;
+    unsigned routeFailures, routeMoves, routeTurns;
+    uint8_t routeEvidenceSeq;
+    SPAIWorldPose routeBefore;
+    SPAIMove routeAction;
     bool routeEvidenceArmed;
 } SPAIEncounter;
 
@@ -88,11 +90,25 @@ static inline void sp_ai_stale_encounter(SPAIEncounter *encounter, SPAINavSample
 static inline const char *sp_ai_follow_route(SPAIEncounter *encounter, SPAIEncounterObservation observation,
     double now, bool reduced, SPAIEncounterAdapter adapter) {
     SPAIWorldPose pose = observation.pose;
+    if (!sp_ai_sample_fresh(pose.observedAt, now)) pose.valid = false;
     SPAIRoute *route = &encounter->route;
     SPAIRouteDecision decision = sp_ai_route_probe(route, pose);
     if (encounter->routeDeadline) {
-        if (decision == SP_ROUTE_OFF_ROUTE || decision == SP_ROUTE_FACE || decision == SP_ROUTE_UNKNOWN ||
-            (pose.valid && pose.epoch != encounter->routePositionEpoch)) {
+        bool turning = encounter->routeAction == SP_TURN_LEFT || encounter->routeAction == SP_TURN_RIGHT;
+        const char *status = turning ? "TURN ROUTE" : "ROUTE";
+        if (!sp_ai_movement_key(encounter->routeAction, observation.movementKeys)) {
+            adapter.release(adapter.context);
+            encounter->routeDeadline = 0;
+            return turning ? "TURN BIND" : "MOVE BIND";
+        }
+        if (turning && pose.valid && sp_ai_pose_distance2(pose, encounter->routeBefore) > 9) {
+            adapter.release(adapter.context);
+            encounter->routeDeadline = 0;
+            encounter->routeFailures = 2;
+            return "ROUTE BLOCK";
+        }
+        if (decision == SP_ROUTE_OFF_ROUTE || (!turning && decision == SP_ROUTE_FACE) ||
+            decision == SP_ROUTE_UNKNOWN || (pose.valid && pose.epoch != encounter->routeBefore.epoch)) {
             adapter.release(adapter.context);
             encounter->routeDeadline = 0;
             if (decision == SP_ROUTE_UNKNOWN) {
@@ -107,14 +123,19 @@ static inline const char *sp_ai_follow_route(SPAIEncounter *encounter, SPAIEncou
             encounter->routeEvidenceArmed = true;
             encounter->routeEvidenceSeq = pose.sequence;
         }
-        if (!newEvidence && now < encounter->routeDeadline) return "ROUTE";
+        if (!newEvidence && now < encounter->routeDeadline) return status;
         adapter.release(adapter.context);
         encounter->routeDeadline = 0;
         if (!newEvidence) {
             ++encounter->routeFailures;
             return "ROUTE DATA";
         }
-        if (sp_ai_pose_distance2(pose, route->legs[route->next].end) + 16 < encounter->routeProgress)
+        SPAIRouteLeg leg = route->legs[route->next];
+        bool progressed = turning
+            ? pose.headingKnown && (decision == SP_ROUTE_FORWARD ||
+                sp_ai_heading_delta(leg.start.heading, pose.heading) + 2 <= encounter->routeProgress)
+            : sp_ai_pose_distance2(pose, leg.end) + 16 < encounter->routeProgress;
+        if (progressed)
             encounter->routeFailures = 0;
         else ++encounter->routeFailures;
     }
@@ -122,29 +143,42 @@ static inline const char *sp_ai_follow_route(SPAIEncounter *encounter, SPAIEncou
         case SP_ROUTE_COMPLETE: return "ROUTE DONE";
         case SP_ROUTE_UNKNOWN: return "ROUTE DATA";
         case SP_ROUTE_OFF_ROUTE: return "ROUTE HOLD";
-        case SP_ROUTE_FACE: return "FACE ROUTE";
+        case SP_ROUTE_FACE: break;
         case SP_ROUTE_REACHED:
             ++route->next;
             encounter->searchAttempts = encounter->routeFailures = encounter->routeMoves = 0;
+            encounter->routeTurns = 0;
             return "WAYPOINT";
         case SP_ROUTE_FORWARD: break;
     }
-    if (encounter->routeFailures >= 2 || encounter->routeMoves >= 12) return "ROUTE BLOCK";
-    if (!sp_ai_movement_key(SP_MOVE_FORWARD, observation.movementKeys)) return "MOVE BIND";
-    if (now - encounter->routeStartedAt < (reduced ? 2.0 : 1.0)) return "ROUTE";
+    SPAIRouteLeg leg = route->legs[route->next];
+    bool turning = decision == SP_ROUTE_FACE;
+    if (encounter->routeFailures >= 2 || (turning ? encounter->routeTurns >= 8 : encounter->routeMoves >= 12))
+        return "ROUTE BLOCK";
+    if (turning && sp_ai_pose_distance2(pose, leg.start) > SP_ROUTE_RADIUS_Q4 * SP_ROUTE_RADIUS_Q4)
+        return "FACE ROUTE";
+    int error = sp_ai_heading_error(leg.start.heading, pose.heading);
+    SPAIMove action = turning ? (error > 0 ? SP_TURN_LEFT : SP_TURN_RIGHT) : SP_MOVE_FORWARD;
+    if (!sp_ai_movement_key(action, observation.movementKeys)) return turning ? "TURN BIND" : "MOVE BIND";
+    const char *status = turning ? "TURN ROUTE" : "ROUTE";
+    if (now - encounter->routeStartedAt < (reduced ? 2.0 : 1.0)) return status;
     encounter->routeStartedAt = now;
-    double hold = sp_ai_route_hold(route, pose);
-    if (!sp_ai_try_input(encounter, adapter, "FORWARD", observation.sample, hold)) {
+    unsigned headingError = sp_ai_heading_delta(leg.start.heading, pose.heading);
+    double hold = turning ? (headingError <= 24 ? 0.10 : 0.28) : sp_ai_route_hold(route, pose);
+    const char *command = action == SP_TURN_LEFT ? "TURN_LEFT" : action == SP_TURN_RIGHT ? "TURN_RIGHT" : "FORWARD";
+    if (!sp_ai_try_input(encounter, adapter, command, observation.sample, hold)) {
         ++encounter->routeFailures;
         return "NAV INPUT";
     }
-    encounter->routePositionEpoch = pose.epoch;
-    encounter->routeProgress = sp_ai_pose_distance2(pose, route->legs[route->next].end);
+    encounter->routeBefore = pose;
+    encounter->routeAction = action;
+    encounter->routeProgress = turning ? headingError : sp_ai_pose_distance2(pose, leg.end);
     encounter->routeHold = hold;
     encounter->routeEvidenceArmed = false;
     encounter->routeDeadline = now + 2.6;
-    ++encounter->routeMoves;
-    return "ROUTE";
+    if (turning) ++encounter->routeTurns;
+    else ++encounter->routeMoves;
+    return status;
 }
 
 static inline const char *sp_ai_advance(SPAIEncounter *encounter, SPAIEncounterObservation observation,

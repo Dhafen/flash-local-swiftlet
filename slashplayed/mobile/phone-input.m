@@ -334,6 +334,8 @@ static UIButton *sp_mobile_button(NSString *title, NSString *label, id owner, SE
             else sp_soft_emit([NSString stringWithFormat:@"%C", (unichar)0xF70D], 0x6D, NO);
             sp_stub_log("AI input: interact with selected corpse");
         }
+        else if ([action isEqualToString:@"TURN_LEFT"] || [action isEqualToString:@"TURN_RIGHT"])
+            return [input sp_mobile_ai_hold_turn:sp_ai_move(action) duration:duration];
         else if ([action isEqualToString:@"FORWARD"]) return [input sp_mobile_ai_hold_axis:CGPointMake(0,1) duration:duration];
         else if ([action isEqualToString:@"BACK"]) return [input sp_mobile_ai_hold_axis:CGPointMake(0,-1) duration:duration];
         else if ([action isEqualToString:@"LEFT"] || [action isEqualToString:@"STRAFE_LEFT"])
@@ -689,9 +691,10 @@ static UIButton *sp_mobile_button(NSString *title, NSString *label, id owner, SE
 }
 
 static void sp_mobile_ai_movement_key(unsigned char key, BOOL pressed) {
-    NSString *characters = [NSString stringWithFormat:@"%c", key];
+    BOOL left = key == SP_KEY_ARROW_LEFT, right = key == SP_KEY_ARROW_RIGHT;
+    NSString *characters = left ? @"\uf702" : right ? @"\uf703" : [NSString stringWithFormat:@"%c", key];
     SPEvent *event = sp_event(pressed ? SPKeyDown : SPKeyUp);
-    event->keyCode = sp_soft_mac_code(key);
+    event->keyCode = left ? 0x7B : right ? 0x7C : sp_soft_mac_code(key);
     event->characters = characters;
     event->charactersIgnoringModifiers = characters;
     event->modifierFlags = 0;
@@ -726,6 +729,20 @@ static void sp_mobile_ai_movement_key(unsigned char key, BOOL pressed) {
         sp_stub_log("AI input: no verified key and virtual controller not ready");
         return NO;
     }
+    [self sp_mobile_ai_schedule_release:duration];
+    return YES;
+}
+- (BOOL)sp_mobile_ai_hold_turn:(SPAIMove)move duration:(NSTimeInterval)duration {
+    [self sp_mobile_ai_release_key];
+    if (!sp_ai_sample_fresh(sp_ai_game_at, NSProcessInfo.processInfo.systemUptime)) return NO;
+    _mobileAIKeyboardHeld = sp_ai_movement_key(move, sp_ai_game_move_keys);
+    if (!_mobileAIKeyboardHeld) return NO;
+    sp_mobile_ai_movement_key(_mobileAIKeyboardHeld, YES);
+    sp_stub_log(move == SP_TURN_LEFT ? "AI input: held verified left-arrow turn" : "AI input: held verified right-arrow turn");
+    [self sp_mobile_ai_schedule_release:duration];
+    return YES;
+}
+- (void)sp_mobile_ai_schedule_release:(NSTimeInterval)duration {
     _mobileAIKeyHeld = YES;
     NSUInteger generation = ++_mobileAIKeyGeneration;
     __weak SPInputView *weakSelf = self;
@@ -734,7 +751,6 @@ static void sp_mobile_ai_movement_key(unsigned char key, BOOL pressed) {
         SPInputView *input = weakSelf;
         if (input && input->_mobileAIKeyGeneration == generation) [input sp_mobile_ai_release_key];
     });
-    return YES;
 }
 - (void)sp_mobile_ai_check_test:(SPAINavPulse)pulse generation:(NSUInteger)generation
     remaining:(unsigned)remaining lastSample:(SPAINavSample)lastSample {

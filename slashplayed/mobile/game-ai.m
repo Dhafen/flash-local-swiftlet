@@ -39,6 +39,8 @@ static SPAIMove sp_ai_move(NSString *move) {
     if ([move isEqualToString:@"BACK"]) return SP_MOVE_BACK;
     if ([move isEqualToString:@"LEFT"] || [move isEqualToString:@"STRAFE_LEFT"]) return SP_MOVE_LEFT;
     if ([move isEqualToString:@"RIGHT"] || [move isEqualToString:@"STRAFE_RIGHT"]) return SP_MOVE_RIGHT;
+    if ([move isEqualToString:@"TURN_LEFT"]) return SP_TURN_LEFT;
+    if ([move isEqualToString:@"TURN_RIGHT"]) return SP_TURN_RIGHT;
     return SP_MOVE_NONE;
 }
 

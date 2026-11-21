@@ -15,7 +15,8 @@ typedef struct {
 static bool test_submit(void *context, const char *action, SPAINavSample sample, double hold) {
     SPTestAdapter *mock = context;
     bool movement = strcmp(action, "FORWARD") == 0 || strncmp(action, "STRAFE_", 7) == 0;
-    assert(sample.at > 0 && hold == (movement ? 0.60 : 0));
+    bool turn = !strncmp(action, "TURN_", 5);
+    assert(sample.at > 0 && (turn ? (hold == 0.10 || hold == 0.28) : hold == (movement ? 0.60 : 0)));
     mock->lastAction = action;
     ++mock->submissions;
     return mock->accept;
@@ -343,7 +344,42 @@ static void test_route_stops_when_pose_disappears(void) {
     assert(mock.releases == 1 && mock.submissions == 1 && !planner.routeDeadline);
 }
 
+static void test_route_turn_requires_binding_and_confirmed_heading(void) {
+    SPAIEncounter planner = {0};
+    SPAIWorldPose begin = {.valid = true, .headingKnown = true, .heading = 64, .epoch = 1, .sequence = 1, .observedAt = 4};
+    SPAIWorldPose end = begin;
+    end.secondQ4 = 40;
+    assert(sp_ai_route_append(&planner.route, begin, end));
+    SPTestAdapter mock = {.accept = true};
+    SPAIEncounterAdapter adapter = {&mock, test_submit, test_release, test_outcome, NULL};
+    SPAIEncounterObservation observation = {.pose = begin, .sample.at = 4, .movementKeys = 1};
+    observation.pose.heading = 0;
+    assert(strcmp(sp_ai_follow_route(&planner, observation, 4, false, adapter), "TURN BIND") == 0);
+    assert(!mock.submissions);
+    observation.movementKeys |= 64 | 128;
+    assert(strcmp(sp_ai_follow_route(&planner, observation, 4, false, adapter), "TURN ROUTE") == 0);
+    assert(mock.submissions == 1 && !strcmp(mock.lastAction, "TURN_LEFT"));
+    SPAIEncounter unsafe = planner;
+    observation.pose.secondQ4 = 4;
+    observation.pose.observedAt = observation.sample.at = 4.4;
+    assert(strcmp(sp_ai_follow_route(&unsafe, observation, 4.4, false, adapter), "ROUTE BLOCK") == 0);
+    assert(mock.releases == 1 && mock.submissions == 1);
+    observation.pose.secondQ4 = 0;
+    observation.pose.heading = 64;
+    observation.pose.sequence = 2;
+    observation.pose.observedAt = observation.sample.at = 4.5;
+    assert(strcmp(sp_ai_follow_route(&planner, observation, 4.5, false, adapter), "TURN ROUTE") == 0);
+    assert(mock.submissions == 1);
+    observation.pose.sequence = 3;
+    observation.pose.observedAt = observation.sample.at = 5;
+    assert(strcmp(sp_ai_follow_route(&planner, observation, 5, false, adapter), "ROUTE") == 0);
+    assert(mock.submissions == 2 && !strcmp(mock.lastAction, "FORWARD"));
+    assert(sp_ai_heading_error(4, 250) == 10);
+    assert(sp_ai_heading_error(250, 4) == -10);
+}
+
 int main(void) {
+    test_route_turn_requires_binding_and_confirmed_heading();
     uint8_t health[3][64][4] = {0};
     for (unsigned row = 0; row < 3; ++row)
         for (unsigned x = 0; x < 64; ++x) {
