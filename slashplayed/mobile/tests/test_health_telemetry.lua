@@ -209,3 +209,43 @@ assert(lootState():byte(12) == 1)
 UnitGUID = val("another-foe")
 assert(lootState():byte(12) == 0)
 print("movement and matched corpse loot feedback passed")
+
+local corpseEvent, corpseState = assert(loadstring(source .. "\nreturn spAILootEvent, spAIState"))()
+local selected = "test-corpse"
+UnitGUID = function(unit)
+    if unit == "player" then return "test-player" end
+    if unit == "pet" then return "test-pet" end
+    return selected
+end
+UnitIsInInteractRange = val(false)
+UnitHasLootInteraction = val(true)
+corpseEvent(nil, "PARTY_KILL", "other-player", selected)
+assert(corpseState():byte(3) == 21)
+corpseEvent(nil, "PARTY_KILL", secret, selected)
+assert(corpseState():byte(3) == 21)
+corpseEvent(nil, "PARTY_KILL", "test-player", "other-corpse")
+assert(corpseState():byte(3) == 21)
+corpseEvent(nil, "PARTY_KILL", "test-player", selected)
+local corpse = corpseState()
+assert(corpse:byte(3) == 149 and corpse:byte(12) == 2 + 8 + 16)
+UnitIsInInteractRange = val(secret)
+UnitHasLootInteraction = val(false)
+assert(corpseState():byte(12) == 2 + 4)
+GetLootSourceInfo = function() return selected, 1 end
+corpseEvent(nil, "LOOT_OPENED")
+corpseEvent(nil, "LOOT_SLOT_CLEARED", 1)
+assert(corpseState():byte(12) == 1 + 2 + 4)
+corpseEvent(nil, "PLAYER_TARGET_CHANGED")
+local reselected = corpseState()
+assert(reselected:byte(3) == 21 and reselected:byte(14) ~= corpse:byte(14))
+selected = "pet-corpse"
+corpseEvent(nil, "PARTY_KILL", "test-pet", selected)
+assert(corpseState():byte(3) == 149)
+GetTime = val(15)
+assert(corpseState():byte(3) == 149, "observed selected corpse remains eligible out of range")
+corpseEvent(nil, "PLAYER_TARGET_CHANGED")
+selected = "never-observed-corpse"
+corpseEvent(nil, "PARTY_KILL", "test-player", selected)
+GetTime = val(28)
+assert(corpseState():byte(3) == 21)
+print("public kill attribution and corpse interaction evidence passed")

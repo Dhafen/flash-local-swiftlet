@@ -5,7 +5,7 @@
 
 typedef struct {
     SPAINavSample sample;
-    uint8_t flags, hp, targetHP, meta, movementKeys;
+    uint8_t flags, hp, targetHP, meta, movementKeys, corpseEvidence;
     SPAIHealthStatus playerHealth;
 } SPAIEncounterObservation;
 
@@ -114,6 +114,8 @@ static inline const char *sp_ai_advance(SPAIEncounter *encounter, SPAIEncounterO
     if (decision == SP_AI_LOOT_WAIT) return "LOOT UNCONF";
     if (decision == SP_AI_LOOT) {
         if (!target) return "LOOT UNKNOWN";
+        if ((observation.corpseEvidence & (SP_CORPSE_RANGE_OUT|SP_CORPSE_RANGE_IN)) == SP_CORPSE_RANGE_OUT)
+            return "LOOT RANGE";
         if (now >= encounter->nextAction) {
             encounter->nextAction = now + 1.4;
             if (!adapter.submit(adapter.context, "LOOT", sample, 0)) return "AI INPUT";

@@ -96,28 +96,75 @@ local function spAITargetColumn()
     return ok and column or 0
 end
 
-local function spAITargetIdentity()
+local function spAIIdentity(unit)
     if type(UnitGUID) ~= "function" then return nil end
-    local ok, value = pcall(UnitGUID, "target")
+    local ok, value = pcall(UnitGUID, unit)
     if ok and spAIReadable(value) and type(value) == "string" and value ~= "" then return value end
 end
 
 local spAICombatTarget, spAILootedTarget
+local spAIPlayerKill, spAIPlayerKillAt
+local spAIPreviousTarget, spAITargetEpoch = nil, 0
 local spAILootSlots = {}
+
+local function spAIClock()
+    if type(GetTime) ~= "function" then return end
+    local ok, time = pcall(GetTime)
+    if ok and spAIReadable(time) and type(time) == "number" and time >= 0 and time < math.huge then return time end
+end
+
+local function spAILocalKillMatches(target)
+    if not target or target ~= spAIPlayerKill then return false end
+    if spAIPlayerKillAt == nil then return true end -- already observed dead while selected
+    local now = spAIClock()
+    return now ~= nil and now >= spAIPlayerKillAt and now - spAIPlayerKillAt < 12
+end
+
+local function spAIMatchedCorpse(target)
+    return target and (target == spAICombatTarget or spAILocalKillMatches(target))
+end
+
+-- Encode public false and true separately; nil, restricted and failed calls are unknown.
+local function spAICorpseQuery(fn)
+    if type(fn) ~= "function" then return 0 end
+    local ok, value = pcall(fn, "target")
+    if not ok or not spAIReadable(value) or type(value) ~= "boolean" then return 0 end
+    return value and 2 or 1
+end
+
 -- Track only a slot whose entire reported source is the selected corpse.
 -- A closed loot window by itself carries no success signal.
-local function spAILootEvent(_, event, slot)
+local function spAILootEvent(_, event, first, second)
+    if event == "PLAYER_TARGET_CHANGED" then
+        spAICombatTarget, spAIPlayerKill, spAIPlayerKillAt = nil, nil, nil
+        spAIPreviousTarget = nil
+        spAILootSlots = {}
+        return
+    end
+    if event == "PARTY_KILL" then
+        if not spAIReadable(first) or not spAIReadable(second)
+            or type(first) ~= "string" or type(second) ~= "string" then return end
+        local ok, isPlayer = pcall(UnitIsPlayer, "target")
+        if not ok or not spAIReadable(isPlayer) or isPlayer ~= false then return end
+        local now = spAIClock()
+        if now and second == spAIIdentity("target") and
+            (first == spAIIdentity("player") or first == spAIIdentity("pet")) then
+            spAIPlayerKill, spAIPlayerKillAt = second, now
+        end
+        return
+    end
     if event == "LOOT_CLOSED" then spAILootSlots = {}; return end
     if event == "LOOT_SLOT_CLEARED" then
+        local slot = first
         if not spAIReadable(slot) or type(slot) ~= "number" then return end
         local source = spAILootSlots[slot]
-        if source and source == spAICombatTarget then spAILootedTarget = source end
+        if source and source == spAIIdentity("target") then spAILootedTarget = source end
         spAILootSlots[slot] = nil
         return
     end
     spAILootSlots = {}
-    local target = spAITargetIdentity()
-    if not target or target ~= spAICombatTarget or type(GetNumLootItems) ~= "function"
+    local target = spAIIdentity("target")
+    if not spAIMatchedCorpse(target) or type(GetNumLootItems) ~= "function"
         or type(GetLootSourceInfo) ~= "function" then return end
     local count = GetNumLootItems()
     if not spAIReadable(count) or type(count) ~= "number" then return end
@@ -132,7 +179,7 @@ end
 
 if type(CreateFrame) == "function" then
     local frame = CreateFrame("Frame")
-    for _, event in ipairs({"LOOT_OPENED", "LOOT_SLOT_CLEARED", "LOOT_CLOSED"}) do
+    for _, event in ipairs({"LOOT_OPENED", "LOOT_SLOT_CLEARED", "LOOT_CLOSED", "PARTY_KILL", "PLAYER_TARGET_CHANGED"}) do
         pcall(frame.RegisterEvent, frame, event)
     end
     frame:SetScript("OnEvent", function(...) pcall(spAILootEvent, ...) end)
@@ -140,7 +187,6 @@ end
 
 local spAIMotionCounter, spAIMotionSource, spAIPositionEpoch = 0, 0, 0
 local spAIAnchorX, spAIAnchorY, spAIAnchorMap
-local spAIPreviousTarget, spAITargetEpoch = nil, 0
 local function spAIFinite(value)
     return spAIReadable(value) and type(value) == "number" and value == value
         and value ~= math.huge and value ~= -math.huge
@@ -233,16 +279,22 @@ local function spAIState()
             stage = 7
             targetDead = dead("target")
             if targetDead then flags = flags + 16 end
-            if npc then foeID = spAITargetIdentity() end
+            if npc then foeID = spAIIdentity("target") end
         end
         stage = 9
         local combat = boolValue(UnitAffectingCombat("player"))
         if combat then flags = flags + 32 end
+        local ownKill = targetDead and spAILocalKillMatches(foeID)
+        if ownKill then
+            spAIPlayerKillAt = nil
+        elseif not targetDead and foeID == spAIPlayerKill and spAIPlayerKillAt == nil then
+            spAIPlayerKill = nil
+        end
         if not hasTarget or (not targetDead and not hostile) then spAICombatTarget = nil
         elseif not targetDead then
             if combat then spAICombatTarget = foeID
             elseif spAICombatTarget ~= foeID then spAICombatTarget = nil end
-        elseif foeID and foeID == spAICombatTarget then flags = flags + 128 end
+        elseif spAIMatchedCorpse(foeID) then flags = flags + 128 end
         stage = 10
         if type(IsMounted) ~= "function" then return unavailable(10) end
         if boolValue(IsMounted()) then flags = flags + 64 end
@@ -272,9 +324,14 @@ local function spAIState()
         local bindings = (spAIBinding("TAB") == "TARGETNEARESTENEMY" and 1 or 0)
             + (rotation == "CLICK TactaraMainButton:LeftButton" and 2 or 0)
         local looted = targetDead and foeID and foeID == spAILootedTarget and 1 or 0
+        local corpseEvidence = looted
+        if targetDead and foeID then
+            corpseEvidence = corpseEvidence + (ownKill and 2 or 0)
+                + 4 * spAICorpseQuery(UnitHasLootInteraction) + 16 * spAICorpseQuery(UnitIsInInteractRange)
+        end
         local healthStatus = 64 + spAIHealthStatus(hp, hpReason) * 4 + targetHealth * 16
         return string.char(65, 73, flags, hp or 255, targetHP, meta, 75, spAIMovementBindings(),
-            70, motionSource, motionCounter, looted, 78, foeID and spAITargetEpoch or 0, positionEpoch,
+            70, motionSource, motionCounter, corpseEvidence, 78, foeID and spAITargetEpoch or 0, positionEpoch,
             math.floor(distance / 256), distance % 256, bindings + healthStatus)
     end)
     if not ok then spAICombatTarget = nil; spAIPreviousTarget = nil; return unavailable(stage) end

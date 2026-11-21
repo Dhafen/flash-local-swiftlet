@@ -73,7 +73,12 @@ static void test_encounter_adapter(void) {
     observation.meta = 133;
     observation.targetHP = 0;
     observation.sample.at = 6.5;
-    assert(strcmp(sp_ai_advance(&planner, observation, 6.5, false, &examples, adapter), "LOOT CHECK") == 0);
+    observation.corpseEvidence = SP_CORPSE_RANGE_OUT | SP_CORPSE_LOOT_AVAILABLE;
+    assert(strcmp(sp_ai_advance(&planner, observation, 6.5, false, &examples, adapter), "LOOT RANGE") == 0);
+    assert(planner.lootAttempts == 0 && strcmp(mock.lastAction, "ATTACK") == 0);
+    observation.corpseEvidence = SP_CORPSE_RANGE_IN | SP_CORPSE_LOOT_AVAILABLE;
+    observation.sample.at = 6.75;
+    assert(strcmp(sp_ai_advance(&planner, observation, 6.75, false, &examples, adapter), "LOOT CHECK") == 0);
     assert(strcmp(mock.lastAction, "LOOT") == 0);
     observation.sample.motion.lootConfirmed = true;
     observation.sample.at = 7;
@@ -323,6 +328,12 @@ int main(void) {
     assert(sp_ai_farm_decision(SP_AI_TARGET, 149, 133, 1, true) == SP_AI_TARGET);
     const uint8_t feedbackPacket[] = {'A','I',149,100,0,133,'K',1,'F',SP_MOTION_POSITION,7,1};
     const SPAIFarmFeedback feedback = sp_ai_farm_feedback(feedbackPacket, sizeof feedbackPacket);
+    assert(sp_ai_corpse_evidence(feedbackPacket, sizeof feedbackPacket) == 0);
+    const uint8_t corpsePacket[] = {'A','I',149,100,0,133,'K',1,'F',SP_MOTION_POSITION,7,
+        1|SP_CORPSE_LOCAL_KILL|SP_CORPSE_LOOT_AVAILABLE|SP_CORPSE_RANGE_OUT};
+    assert(sp_ai_corpse_evidence(corpsePacket, sizeof corpsePacket) ==
+        (SP_CORPSE_LOCAL_KILL|SP_CORPSE_LOOT_AVAILABLE|SP_CORPSE_RANGE_OUT));
+    assert(sp_ai_farm_feedback(corpsePacket, sizeof corpsePacket).lootConfirmed);
     assert(sp_ai_nav_evidence(feedbackPacket, sizeof feedbackPacket).distance == SP_AI_DISTANCE_UNKNOWN);
     const uint8_t navPacket[] = {'A','I',13,100,100,193,'K',1,'F',SP_MOTION_POSITION,7,0,'N',23,8,1,7,3};
     SPAINavEvidence evidence = sp_ai_nav_evidence(navPacket, sizeof navPacket);

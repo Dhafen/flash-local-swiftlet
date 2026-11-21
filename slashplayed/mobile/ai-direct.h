@@ -56,6 +56,16 @@ static inline SPAIFarmFeedback sp_ai_farm_feedback(const uint8_t *packet, unsign
     return (SPAIFarmFeedback){packet[9], packet[10], (packet[11] & 1) != 0};
 }
 
+enum {
+    SP_CORPSE_LOCAL_KILL = 2, SP_CORPSE_LOOT_NONE = 4, SP_CORPSE_LOOT_AVAILABLE = 8,
+    SP_CORPSE_RANGE_OUT = 16, SP_CORPSE_RANGE_IN = 32
+};
+
+static inline uint8_t sp_ai_corpse_evidence(const uint8_t *packet, unsigned length) {
+    if (length < 12 || packet[8] != 'F' || (packet[2] & (4|16)) != (4|16)) return 0;
+    return packet[11] & 62;
+}
+
 static inline bool sp_ai_farm_progress(SPAIFarmFeedback start, SPAIFarmFeedback current) {
     return start.source == SP_MOTION_POSITION && current.source == SP_MOTION_POSITION && current.counter != start.counter;
 }

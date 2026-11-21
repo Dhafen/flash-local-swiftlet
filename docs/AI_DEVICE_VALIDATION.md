@@ -20,6 +20,7 @@ Verifierat den 21 november 2026 på iPhone 17 Pro Max med iOS 27.3 och device-ki
 2. Använd ett stillastående tydligt mål framför spelaren på fri mark. Första milstolpen kräver accepterad puls, färskt positionsutfall och observerat minskat målavstånd för samma mål. Jämför med det som faktiskt syns i spelet. Testa sedan ett hinder och verifiera att NAV BLOCK hindrar fortsatt rörelse.
 3. För farmingmilstolpen ska samma mål ge en faktisk spelträff med egen källa, död, matchad loot och inventarieändring, följt av SEARCH. Spara logg och tidsstämplar. F12, mål-HP och indikatorer ensamma räcker inte för bekräftelse av egen träff.
 4. Prova utebliven skada, fel bindning, inget mål och stängt lootfönster utan loot. Notera status, väntetid och antal accepterade försök.
+5. Kontrollera `kill=player-or-pet` efter ett manuellt dödsfall där rätt mål är valt. Den signalen bygger på offentlig angripar- och målidentitet i `PARTY_KILL`. `interact-range=out` ska ge `LOOT RANGE` och spara försöksbudgeten tills målet går att nå. `loot=available` anger möjlighet att interagera och den senare matchade slotkvittensen anger att en slot tömdes.
 
 ## Loggar och resursprov
 

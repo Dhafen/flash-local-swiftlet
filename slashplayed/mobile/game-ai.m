@@ -31,6 +31,7 @@ static SPAIMove sp_ai_move(NSString *move) {
 // State emitted by the game's own read-only addon API. Written and read on main.
 static uint8_t sp_ai_game_flags, sp_ai_game_hp, sp_ai_game_target_hp, sp_ai_game_meta, sp_ai_game_move_keys;
 static SPAIFarmFeedback sp_ai_game_feedback;
+static uint8_t sp_ai_game_corpse;
 static SPAINavEvidence sp_ai_game_evidence;
 static SPAIHealthStatus sp_ai_player_health = SP_HEALTH_UNSPECIFIED;
 static SPAIHealthStatus sp_ai_target_health = SP_HEALTH_UNSPECIFIED;
@@ -69,6 +70,7 @@ static void sp_ai_game_update(const uint8_t *data, size_t length, NSTimeInterval
         sp_ai_game_at = 0;
         sp_ai_game_move_keys = 0;
         sp_ai_game_feedback = (SPAIFarmFeedback){0};
+        sp_ai_game_corpse = 0;
         sp_ai_game_evidence = (SPAINavEvidence){0, 0, 0, SP_AI_DISTANCE_UNKNOWN};
         sp_ai_player_health = sp_ai_target_health = SP_HEALTH_UNSPECIFIED;
         return;
@@ -86,6 +88,7 @@ static void sp_ai_game_update(const uint8_t *data, size_t length, NSTimeInterval
     sp_ai_game_meta = data[5];
     sp_ai_game_move_keys = sp_ai_movement_bindings(data, (unsigned)length);
     sp_ai_game_feedback = sp_ai_farm_feedback(data, (unsigned)length);
+    sp_ai_game_corpse = sp_ai_corpse_evidence(data, (unsigned)length);
     sp_ai_game_evidence = sp_ai_nav_evidence(data, (unsigned)length);
     SPAIHealthStatus player = sp_ai_health_status(data, (unsigned)length, false);
     SPAIHealthStatus target = sp_ai_health_status(data, (unsigned)length, true);
@@ -458,14 +461,19 @@ static NSArray<NSNumber *> *sp_ai_luminance(CVPixelBufferRef buffer) {
     NSString *target = !(sp_ai_game_flags & 4) ? @"none" : (sp_ai_game_flags & 16) ? @"dead" :
         (sp_ai_game_flags & 8) ? @"hostile NPC" : @"other";
     NSString *direction = !sample.column ? @"unknown" : sample.column <= 6 ? @"left" : sample.column >= 10 ? @"right" : @"center";
+    unsigned loot = sp_ai_game_corpse & (SP_CORPSE_LOOT_NONE|SP_CORPSE_LOOT_AVAILABLE);
+    unsigned range = sp_ai_game_corpse & (SP_CORPSE_RANGE_OUT|SP_CORPSE_RANGE_IN);
     NSString *summary = [NSString stringWithFormat:
-        @"target=%@ identity=%@ plate=%@ position=%@ distance=%@ combat=%@ tab=%@ f12=%@",
+        @"target=%@ identity=%@ plate=%@ position=%@ distance=%@ combat=%@ tab=%@ f12=%@ kill=%@ loot=%@ interact-range=%@",
         target, sample.evidence.target ? @"public" : @"unknown", direction,
         sample.evidence.position && sample.motion.source == SP_MOTION_POSITION ? @"public" : @"unknown",
         sample.evidence.distance == SP_AI_DISTANCE_UNKNOWN ? @"unknown" : @"public",
         (sp_ai_game_flags & 32) ? @"yes" : @"no",
         (sample.evidence.bindings & SP_AI_TAB_BOUND) ? @"verified" : @"unknown",
-        (sample.evidence.bindings & SP_AI_ROTATION_BOUND) ? @"verified" : @"unknown"];
+        (sample.evidence.bindings & SP_AI_ROTATION_BOUND) ? @"verified" : @"unknown",
+        (sp_ai_game_corpse & SP_CORPSE_LOCAL_KILL) ? @"player-or-pet" : @"unknown",
+        loot == SP_CORPSE_LOOT_AVAILABLE ? @"available" : loot == SP_CORPSE_LOOT_NONE ? @"none" : @"unknown",
+        range == SP_CORPSE_RANGE_IN ? @"in" : range == SP_CORPSE_RANGE_OUT ? @"out" : @"unknown"];
     if ([_lastWorldSummary isEqualToString:summary]) return;
     _lastWorldSummary = summary;
     sp_stub_log([[@"AI world: " stringByAppendingString:summary] UTF8String]);
@@ -503,7 +511,7 @@ static NSArray<NSNumber *> *sp_ai_luminance(CVPixelBufferRef buffer) {
         return sp_ai_state_reason > 0 ? [NSString stringWithFormat:@"AI DATA %d", sp_ai_state_reason] : @"AI STALE";
     }
     SPAIEncounterObservation observation = {sample, sp_ai_game_flags, sp_ai_game_hp, sp_ai_game_target_hp,
-        sp_ai_game_meta, sp_ai_game_move_keys, sp_ai_player_health};
+        sp_ai_game_meta, sp_ai_game_move_keys, sp_ai_game_corpse, sp_ai_player_health};
     const char *phase = sp_ai_advance(&_encounter, observation, now, reduced, &_approachExamples, adapter);
     return [NSString stringWithUTF8String:phase];
 }
