@@ -2,7 +2,7 @@ local path = assert(arg[1])
 local f = assert(io.open(path, "r"))
 local source = f:read("*a")
 f:close()
-local read, playerPose = assert(loadstring(source .. "\nreturn spReadHealthPercent, spAIPlayerPose"))()
+local read, playerPose, progression = assert(loadstring(source .. "\nreturn spReadHealthPercent, spAIPlayerPose, spAIProgression"))()
 local secret = {}
 issecretvalue = function(value) return value == secret end
 canaccessvalue = function(value) return value ~= secret end
@@ -39,6 +39,17 @@ issecretvalue = function(value) return value == secret end
 assert(assert(playerPose(0, 0, 1, 7)):byte(4) == 1)
 assert(playerPose(secret, 0, 1, 7) == nil)
 assert(playerPose(0, 0, 0, 0) == nil)
+UnitXP = val(850)
+UnitXPMax = val(1200)
+UnitLevel = val(6)
+C_QuestLog = {GetNumQuestLogEntries = function() return 12, 4 end}
+local progress = assert(progression())
+assert(progress == string.char(65, 88, 1, 3, 0, 0, 3, 82, 0, 0, 4, 176, 0, 6, 0, 4, 0, 0))
+UnitXP = val(secret)
+assert(progression():byte(4) == 2)
+C_QuestLog = {GetNumQuestLogEntries = function() error("not available") end}
+assert(progression() == nil)
+print("optional public XP and quest count tests passed")
 
 -- Flags must survive protected health but protected attackability must fail closed.
 local state = assert(loadstring(source .. "\nreturn spAIState"))()

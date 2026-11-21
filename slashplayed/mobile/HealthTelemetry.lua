@@ -220,6 +220,26 @@ local function spAIU32(value)
         math.floor(value / 256) % 256, value % 256)
 end
 
+local function spAIPublicInteger(value, minimum, maximum)
+    return spAIFinite(value) and value >= minimum and value <= maximum and value % 1 == 0
+end
+
+local function spAIProgression()
+    local xp, capacity, level, quests, flags = 0, 0, 0, 0, 0
+    local xpOK, a, b, c = pcall(function()
+        return UnitXP("player"), UnitXPMax("player"), UnitLevel("player")
+    end)
+    if xpOK and spAIPublicInteger(a, 0, 4294967295) and spAIPublicInteger(b, 1, 4294967295) and a <= b
+        and spAIPublicInteger(c, 1, 65535) then xp, capacity, level, flags = a, b, c, 1 end
+    if C_QuestLog and type(C_QuestLog.GetNumQuestLogEntries) == "function" then
+        local ok, _, count = pcall(C_QuestLog.GetNumQuestLogEntries)
+        if ok and spAIPublicInteger(count, 0, 65535) then quests, flags = count, flags + 2 end
+    end
+    if flags == 0 then return end
+    return string.char(65, 88, 1, flags) .. spAIU32(xp) .. spAIU32(capacity)
+        .. string.char(math.floor(level / 256), level % 256, math.floor(quests / 256), quests % 256, 0, 0)
+end
+
 local function spAIPlayerPose(first, second, map, epoch)
     if not spAIFinite(first) or not spAIFinite(second) or not spAIFinite(map) or epoch == 0
         or map < 0 or map >= 4294967296 or map % 1 ~= 0 then return end

@@ -23,6 +23,7 @@ typedef struct {
 typedef struct {
     double nextAction, lastMoveAt, lastDamageAt;
     unsigned lootAttempts, searchAttempts;
+    unsigned inputFailures;
     SPAISteering steering;
     uint8_t steeringPosition, target;
     SPAINavPulse pulse;
@@ -42,6 +43,14 @@ static inline void sp_ai_note(SPAIEncounterAdapter adapter, const char *message)
     if (adapter.note) adapter.note(adapter.context, message);
 }
 
+static inline bool sp_ai_try_input(SPAIEncounter *encounter, SPAIEncounterAdapter adapter,
+    const char *action, SPAINavSample sample, double hold) {
+    bool accepted = adapter.submit(adapter.context, action, sample, hold);
+    if (accepted) encounter->inputFailures = 0;
+    else ++encounter->inputFailures;
+    return accepted;
+}
+
 static inline void sp_ai_cancel_steering(SPAIEncounter *encounter) {
     encounter->steering = (SPAISteering){0};
     encounter->pulse = (SPAINavPulse){0};
@@ -56,6 +65,7 @@ static inline void sp_ai_suspend_encounter(SPAIEncounter *encounter, SPAIEncount
     encounter->probeAfterMove = false;
     encounter->combatEvidence = (SPAICombatEvidence){.lastHP = 255};
     encounter->lastDamageAt = 0;
+    encounter->inputFailures = 0;
 }
 
 static inline void sp_ai_report_navigation(SPAIEncounter *encounter, SPAINavOutcome outcome,
@@ -116,7 +126,7 @@ static inline const char *sp_ai_follow_route(SPAIEncounter *encounter, SPAIEncou
     if (!sp_ai_movement_key(SP_MOVE_FORWARD, observation.movementKeys)) return "MOVE BIND";
     if (now - encounter->routeStartedAt < (reduced ? 2.0 : 1.0)) return "ROUTE";
     encounter->routeStartedAt = now;
-    if (!adapter.submit(adapter.context, "FORWARD", observation.sample, 0.60)) {
+    if (!sp_ai_try_input(encounter, adapter, "FORWARD", observation.sample, 0.60)) {
         ++encounter->routeFailures;
         return "NAV INPUT";
     }
@@ -152,6 +162,7 @@ static inline const char *sp_ai_advance(SPAIEncounter *encounter, SPAIEncounterO
         encounter->combatEvidence = (SPAICombatEvidence){.lastHP = 255};
         encounter->probeAfterMove = false;
         encounter->lootAttempts = 0;
+        encounter->inputFailures = 0;
         if (hostile) encounter->searchAttempts = 0;
         encounter->target = target;
     }
@@ -165,6 +176,10 @@ static inline const char *sp_ai_advance(SPAIEncounter *encounter, SPAIEncounterO
         if (readiness == SP_AI_MOUNTED) return "MOUNTED";
         if (readiness == SP_AI_RECOVER) return "RECOVER";
         return observation.playerHealth == SP_HEALTH_RESTRICTED ? "HP SECRET" : "HP UNKNOWN";
+    }
+    if (encounter->inputFailures >= 3) {
+        adapter.release(adapter.context);
+        return "INPUT BLOCK";
     }
 
     const char *approach = "APPROACH";
@@ -202,7 +217,7 @@ static inline const char *sp_ai_advance(SPAIEncounter *encounter, SPAIEncounterO
             return "LOOT RANGE";
         if (now >= encounter->nextAction) {
             encounter->nextAction = now + 1.4;
-            if (!adapter.submit(adapter.context, "LOOT", sample, 0)) return "AI INPUT";
+            if (!sp_ai_try_input(encounter, adapter, "LOOT", sample, 0)) return "AI INPUT";
             ++encounter->lootAttempts;
         }
         return "LOOT CHECK";
@@ -216,7 +231,7 @@ static inline const char *sp_ai_advance(SPAIEncounter *encounter, SPAIEncounterO
         }
         if (now >= encounter->nextAction) {
             encounter->nextAction = now + 1.0;
-            if (!adapter.submit(adapter.context, "TARGET", sample, 0)) return "AI INPUT";
+            if (!sp_ai_try_input(encounter, adapter, "TARGET", sample, 0)) return "AI INPUT";
             ++encounter->searchAttempts;
         }
         return "SEARCH";
@@ -259,7 +274,7 @@ static inline const char *sp_ai_advance(SPAIEncounter *encounter, SPAIEncounterO
         if (!confirmed || now - encounter->lastMoveAt < (reduced ? 2.0 : 0.8)) return approach;
         const char *key = move == SP_MOVE_LEFT ? "STRAFE_LEFT" : move == SP_MOVE_RIGHT ? "STRAFE_RIGHT" : "FORWARD";
         const double hold = 0.60; // cover the nominal 0.5s SPHover cadence
-        if (!adapter.submit(adapter.context, key, sample, hold)) {
+        if (!sp_ai_try_input(encounter, adapter, key, sample, hold)) {
             encounter->nextAction = now + 0.8;
             return "NAV INPUT";
         }
@@ -274,7 +289,7 @@ static inline const char *sp_ai_advance(SPAIEncounter *encounter, SPAIEncounterO
     }
 
     encounter->nextAction = now + 0.85;
-    if (!adapter.submit(adapter.context, "ATTACK", sample, 0)) return "AI INPUT";
+    if (!sp_ai_try_input(encounter, adapter, "ATTACK", sample, 0)) return "AI INPUT";
     sp_ai_accept_probe(&encounter->combatEvidence, now);
     encounter->probeAfterMove = false;
     return phase;

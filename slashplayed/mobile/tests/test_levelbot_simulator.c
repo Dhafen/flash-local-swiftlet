@@ -136,8 +136,8 @@ int main(void) {
     assert(noDamage.attacks == 4 && noDamage.hits == 0 && noDamage.lootCommands == 0);
 
     GameSimulator rejected = {.distance = 12, .playerHP = 100, .targetHP = 100, .rejectAttack = true};
-    run(&rejected, "AI INPUT", false);
-    assert(rejected.attacks == 1 && rejected.hits == 0);
+    run(&rejected, "INPUT BLOCK", false);
+    assert(rejected.attacks == 3 && rejected.hits == 0);
 
     GameSimulator protectedHealth = {.distance = 12, .playerHP = 255, .targetHP = 100};
     run(&protectedHealth, "HP SECRET", false);

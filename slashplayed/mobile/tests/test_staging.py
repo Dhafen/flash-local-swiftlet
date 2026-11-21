@@ -25,6 +25,7 @@ assert 'local function aiHeartbeat()' in (root / "addon/SPHover/SPHover.lua").re
 assert 'showChunk(aiFrame)' in (root / "addon/SPHover/SPHover.lua").read_text()
 assert 'sp_ai_heartbeat(frame[2], frame + 5, SPH_PAYLOAD_BYTES, observedAt)' in (root / "shims/appkit/sphover.m").read_text()
 assert 'sp_ai_pose_heartbeat(frame[2], frame + 5, SPH_PAYLOAD_BYTES, observedAt)' in (root / "shims/appkit/sphover.m").read_text()
+assert 'sp_ai_xp_heartbeat(frame[2], frame + 5, SPH_PAYLOAD_BYTES, observedAt)' in (root / "shims/appkit/sphover.m").read_text()
 assert 'seq == sp_ai_heartbeat_seq' in event
 assert '[_mobileAI stop];' in event
 assert 'sp_mobile_emit_rotation()' in event
@@ -56,6 +57,9 @@ assert 'AI MODEL!' in event and 'AI CAP!' in event
 assert 'sp_mobile_ai_release_key' in event and 'sp_mobile_ai_hold_axis:' in event
 assert '[_mobileStick driveAI:axis]' in event and 'Test AI movement (forward)' in event
 assert 'AI input: Tactara F12 rotation' in event and 'sp_mobile_emit_rotation();' in event
+manual_rotation = event.split('- (void)sp_mobile_rotation:(UIButton *)button {', 1)[1].split('\n}', 1)[0]
+assert 'sp_mobile_emit_rotation();' in manual_rotation
+assert 'if ([action isEqualToString:@"ATTACK"]) {\n            sp_mobile_emit_rotation();' in event
 assert 'VIS SLOW' in event
 assert 'NSProcessInfo.processInfo.systemUptime - captured <= 8.0' in event
 assert 'input->_mobileAIManualUntil' in event

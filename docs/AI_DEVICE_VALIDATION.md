@@ -34,6 +34,8 @@ För vägpunktstelemetri, kontrollera även `pose=public` och `heading=public` n
 
 Spela in en redan genomgången rak sträcka enligt installationsguiden. Återvänd till startpunkten, rikta spelaren åt det inspelade hållet och starta godkänt testläge utan valt mål. Förvänta `SEARCH → ROUTE → WAYPOINT → SEARCH` och att varje rörelse håller sig inom den inspelade korridoren. Upprepa med annan riktning, karta, ett ofarligt hinder och touch mitt i sträckan. Bekräfta att planeringen visar `FACE ROUTE` eller stoppar när riktningsdata saknas. Verifiera att `ROUTE BLOCK` stoppar upprepningar mot hindret. Kör samma väg med en fientlig NPC först vid slutpunkten för att verifiera att sökningen återupptas där.
 
+Jämför `AI progression` med spelets synliga XP och level före och efter en kill. Ett ökat XP-värde på samma level visas som `gain`. Ett levelbyte visas som `level-up`. Questfältet är det offentliga antalet quests i loggen. Det ger ännu ingen automatisk questplanering eller bevis för att en viss handling gav XP.
+
 Enhetsprov den 21 november 2026 på `910380a` visade `player=restricted` med `target=absent` före strid. Spelarposition var offentlig och Tab och F12 var verifierat bundna. På det bygget behöver du välja målet före AI-knappen, eftersom ett manuellt tryck annars stänger observationen.
 
 Enhetsloggen från samma dag visar att iOS gick från FAIR till SERIOUS mellan 12.57 och 13.03. AI visade tidigare HEAT PAUSE fast observationen fortsatte. WoW låg nära 60 FPS även före AI-start. Inga fångst- eller modellmätningar loggades runt övergången. Loggen visar temperaturförloppet men räcker inte för att fördela kostnaden mellan spelrendering och telemetri.

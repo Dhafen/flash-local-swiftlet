@@ -2,6 +2,7 @@
 #include <string.h>
 #include "../ai-encounter.h"
 #include "../ai-navigation.h"
+#include "../ai-progression.h"
 
 typedef struct {
     const char *lastAction;
@@ -320,6 +321,20 @@ static void test_approach_model_requires_measured_benefit(void) {
 
 int main(void) {
     test_approach_model_requires_measured_benefit();
+    uint8_t xpPacket[] = {65, 88, 1, 3, 0, 0, 3, 82, 0, 0, 4, 176, 0, 6, 0, 4, 0, 0};
+    SPAIProgression xp = sp_ai_progression(xpPacket, sizeof xpPacket);
+    assert(xp.xpKnown && xp.questCountKnown && xp.level == 6 && xp.xp == 850 && xp.maximum == 1200 && xp.quests == 4);
+    assert(sp_ai_xp_outcome(xp, xp) == SP_XP_UNCHANGED);
+    SPAIProgression raised = xp;
+    ++raised.xp;
+    assert(sp_ai_xp_outcome(xp, raised) == SP_XP_GAINED);
+    --raised.xp;
+    ++raised.level;
+    raised.xp = 0;
+    assert(sp_ai_xp_outcome(xp, raised) == SP_XP_LEVEL_UP);
+    assert(sp_ai_xp_outcome(xp, sp_ai_progression(xpPacket, sizeof xpPacket - 1)) == SP_XP_UNVERIFIED);
+    xpPacket[3] = 2;
+    assert(!sp_ai_progression(xpPacket, sizeof xpPacket).xpKnown);
     uint8_t posePacket[] = {65, 80, 1, 3, 0, 0, 0, 0, 255, 255, 255, 251, 0, 0, 0, 8, 64, 7};
     SPAIWorldPose pose = sp_ai_world_pose(posePacket, sizeof posePacket);
     assert(pose.valid && pose.headingKnown && pose.map == 0 && pose.firstQ4 == -5 && pose.secondQ4 == 8);

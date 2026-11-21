@@ -29,6 +29,7 @@ def patch_input():
     source = source.replace('#include "ai-encounter.h"', Path(__file__).with_name("ai-encounter.h").read_text())
     source = source.replace('#include "ai-direct.h"', Path(__file__).with_name("ai-direct.h").read_text())
     source = source.replace('#include "ai-navigation.h"', Path(__file__).with_name("ai-navigation.h").read_text())
+    source = source.replace('#include "ai-progression.h"', Path(__file__).with_name("ai-progression.h").read_text())
     declarations, methods = source.split("// SPInputView methods follow.\n")
     require(path, ["SPSoftKeyboardField", "sp_press_soft_escape:"])
     for phase in ("Began", "Moved", "Ended", "Cancelled"):
@@ -276,7 +277,7 @@ replace_once(hover_native, "    sp_hover_misses = 0;\n    sp_hover_crop(YES, hei
 # The regular UI rectangle transport remains unchanged for other platforms.
 replace_once(hover_lua, "local sinceScan = SCAN_INTERVAL",
     """local sinceScan = SCAN_INTERVAL
-local aiElapsed, aiBeat, aiFrame, aiPoseFrame, aiTick = 1, 0, nil, nil, 0
+local aiElapsed, aiBeat, aiFrame, aiPoseFrame, aiXPFrame, aiTick = 1, 0, nil, nil, nil, 0
 local function aiPacket(kind, payload)
     local b = {65, kind, aiBeat, 0, 1}
     for i = 1, PAYLOAD_BYTES do b[5+i] = payload:byte(i) or 0 end
@@ -288,7 +289,8 @@ local function aiHeartbeat()
     if #state ~= 18 then state = string.char(65, 73, 0, 0, 0, 0, 75, 0, 70, 0, 0, 0, 78, 0, 0, 255, 255, 0) end
     spLastAIState = state
     aiBeat = (aiBeat + 1) % 256
-    return aiPacket(73, state), pose and aiPacket(80, pose) or nil
+    local progression = aiBeat % 2 == 0 and spAIProgression() or nil
+    return aiPacket(73, state), pose and aiPacket(80, pose) or nil, progression and aiPacket(88, progression) or nil
 end""")
 replace_once(hover_lua, "    if #chunks > 0 and (#chunks > 1 or chunkIndex == 0) then",
     """    if SPPhoneTouchRects then
@@ -296,7 +298,7 @@ replace_once(hover_lua, "    if #chunks > 0 and (#chunks > 1 or chunkIndex == 0)
         aiTick = aiTick + 1
         if not aiFrame or aiElapsed >= 0.5 then
             aiElapsed = 0
-            aiFrame, aiPoseFrame = aiHeartbeat()
+            aiFrame, aiPoseFrame, aiXPFrame = aiHeartbeat()
         end
         if aiTick % 4 == 0 then
             showChunk(aiFrame)
@@ -306,18 +308,23 @@ replace_once(hover_lua, "    if #chunks > 0 and (#chunks > 1 or chunkIndex == 0)
             showChunk(aiPoseFrame)
             return
         end
+        if aiXPFrame and aiTick % 16 == 6 then
+            showChunk(aiXPFrame)
+            return
+        end
     end
     if #chunks > 0 and (#chunks > 1 or chunkIndex == 0) then""")
 # With single-chunk UI messages, redraw the rect strip after a heartbeat too.
 replace_once(hover_lua, "if #chunks > 0 and (#chunks > 1 or chunkIndex == 0) then",
     "if #chunks > 0 and (SPPhoneTouchRects or #chunks > 1 or chunkIndex == 0) then")
 replace_once(strip_header, "if (frame[0] != 'V' || frame[1] != 'W') return 0;",
-    "if (!((frame[0] == 'V' && frame[1] == 'W') || (frame[0] == 'A' && (frame[1] == 'I' || frame[1] == 'P')))) return 0;")
+    "if (!((frame[0] == 'V' && frame[1] == 'W') || (frame[0] == 'A' && (frame[1] == 'I' || frame[1] == 'P' || frame[1] == 'X')))) return 0;")
 replace_once(hover_native, "    static sph_rect rects[SPH_MAX_RECTS];",
-    """    if (frame[0] == 'A' && (frame[1] == 'I' || frame[1] == 'P')) {
+    """    if (frame[0] == 'A' && (frame[1] == 'I' || frame[1] == 'P' || frame[1] == 'X')) {
 #if !TARGET_OS_VISION
         if (getenv("SP_PHONE_UI_RECTS") && frame[3] == 0 && frame[4] == 1) {
             if (frame[1] == 'P') sp_ai_pose_heartbeat(frame[2], frame + 5, SPH_PAYLOAD_BYTES, observedAt);
+            else if (frame[1] == 'X') sp_ai_xp_heartbeat(frame[2], frame + 5, SPH_PAYLOAD_BYTES, observedAt);
             else sp_ai_heartbeat(frame[2], frame + 5, SPH_PAYLOAD_BYTES, observedAt);
         }
 #endif

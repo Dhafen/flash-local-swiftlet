@@ -7,6 +7,7 @@
 #include <stdatomic.h>
 #include <stdbool.h>
 #include "ai-encounter.h"
+#include "ai-progression.h"
 
 static atomic_bool sp_p2p_capture_enabled;
 static atomic_uint sp_p2p_capture_epoch;
@@ -71,8 +72,11 @@ static SPAIDecision sp_ai_current_decision(NSTimeInterval now) {
 }
 static uint8_t sp_ai_heartbeat_seq;
 static uint8_t sp_ai_pose_seq;
+static uint8_t sp_ai_xp_seq;
 static SPAIWorldPose sp_ai_pose;
+static SPAIProgression sp_ai_progress;
 static NSTimeInterval sp_ai_pose_at;
+static NSTimeInterval sp_ai_xp_at;
 static void sp_ai_pose_heartbeat(uint8_t seq, const uint8_t *data, unsigned length, NSTimeInterval observedAt) {
     if (observedAt <= sp_ai_pose_at || (sp_ai_pose_at > 0 && observedAt - sp_ai_pose_at < 1.0 && seq == sp_ai_pose_seq)) return;
     sp_ai_pose = sp_ai_world_pose(data, length);
@@ -85,6 +89,13 @@ static SPAIWorldPose sp_ai_game_pose(SPAINavSample sample) {
     if (sp_ai_pose_seq == sp_ai_heartbeat_seq && sp_ai_pose.epoch == sample.evidence.position &&
         fabs(sp_ai_pose_at - sample.at) < 0.4) return sp_ai_pose;
     return (SPAIWorldPose){0};
+}
+
+static void sp_ai_xp_heartbeat(uint8_t seq, const uint8_t *data, unsigned length, NSTimeInterval observedAt) {
+    if (observedAt <= sp_ai_xp_at || (sp_ai_xp_at > 0 && observedAt - sp_ai_xp_at < 2.0 && seq == sp_ai_xp_seq)) return;
+    sp_ai_progress = sp_ai_progression(data, length);
+    sp_ai_xp_seq = seq;
+    sp_ai_xp_at = observedAt;
 }
 
 static int sp_ai_payload_status = -1, sp_ai_state_reason = -1;
@@ -206,6 +217,9 @@ static void sp_ai_note_event(void *context, const char *message) {
     BOOL _layaEnabled, _layaPending;
     NSString *_layaState, *_lastPhase;
     NSString *_lastWorldSummary;
+    NSString *_lastProgressSummary;
+    SPAIProgression _lastProgress;
+    NSTimeInterval _lastProgressAt;
     SPAIEncounter _encounter;
     SPAIRoute _grindRoute;
     SPAIWorldPose _recordedLegStart;
@@ -582,6 +596,22 @@ static NSArray<NSNumber *> *sp_ai_luminance(CVPixelBufferRef buffer) {
     sp_stub_log([[@"AI world: " stringByAppendingString:summary] UTF8String]);
 }
 
+- (void)observeProgression:(NSTimeInterval)now {
+    SPAIProgression current = now - sp_ai_xp_at < 2.5 ? sp_ai_progress : (SPAIProgression){0};
+    NSString *xp = current.xpKnown ? [NSString stringWithFormat:@"%u/%u level=%u",
+        current.xp, current.maximum, (unsigned)current.level] : @"unknown";
+    NSString *quests = current.questCountKnown ? [NSString stringWithFormat:@"%u", (unsigned)current.quests] : @"unknown";
+    NSString *summary = [NSString stringWithFormat:@"xp=%@ quests=%@", xp, quests];
+    BOOL continuous = _lastProgressAt > 0 && sp_ai_xp_at - _lastProgressAt < 2.5;
+    SPAIXPOutcome outcome = continuous ? sp_ai_xp_outcome(_lastProgress, current) : SP_XP_UNVERIFIED;
+    _lastProgressAt = (current.xpKnown || current.questCountKnown) ? sp_ai_xp_at : 0;
+    _lastProgress = current;
+    if ([_lastProgressSummary isEqualToString:summary]) return;
+    const char *change = outcome == SP_XP_GAINED ? "gain" : outcome == SP_XP_LEVEL_UP ? "level-up" : "snapshot";
+    sp_stub_log([[NSString stringWithFormat:@"AI progression: %s %@", change, summary] UTF8String]);
+    _lastProgressSummary = summary;
+}
+
 - (BOOL)submit:(NSString *)action forSample:(SPAINavSample)sample hold:(NSTimeInterval)hold {
     BOOL accepted = self.autonomousTest && !_manualPaused && self.action && self.action(action, CGPointZero, sample.at, hold);
     sp_stub_log([[NSString stringWithFormat:@"AI action: rules %@ observation %.3f adapter %@",
@@ -647,7 +677,10 @@ static NSArray<NSNumber *> *sp_ai_luminance(CVPixelBufferRef buffer) {
         }
     }
     if (thermal == NSProcessInfoThermalStateCritical) { [self fail:@"AI HEAT"]; return; }
-    if (fresh) [self observeWorld:sample];
+    if (fresh) {
+        [self observeWorld:sample];
+        [self observeProgression:now];
+    }
 
     if (preview != _visualPreviewMode) {
         [self invalidateDecision];
@@ -701,6 +734,9 @@ static NSArray<NSNumber *> *sp_ai_luminance(CVPixelBufferRef buffer) {
     _manualPaused = NO;
     _manualResumeAt = 0;
     _lastWorldSummary = nil;
+    _lastProgressSummary = nil;
+    _lastProgress = (SPAIProgression){0};
+    _lastProgressAt = 0;
     _encounter = (SPAIEncounter){.combatEvidence.lastHP = 255};
     _encounter.route = _grindRoute;
     _encounter.approachModel = sp_ai_load_approach_model();
