@@ -36,6 +36,7 @@ jobs:
       - name: Build Windows installer
         run: |
           set -euo pipefail
+          scripts/fetch-font.sh
           (cd apps/companion-rs && rustup toolchain install)
           scripts/build-zsign.sh source
           (cd apps/companion-rs && cargo build --release --locked --target x86_64-pc-windows-msvc)
