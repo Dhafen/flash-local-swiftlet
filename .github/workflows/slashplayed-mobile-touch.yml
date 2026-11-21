@@ -39,6 +39,8 @@ jobs:
           "$RUNNER_TEMP/touch-zone"
           cc -Wall -Wextra -Werror -o "$RUNNER_TEMP/ai-direct" slashplayed/mobile/tests/test_ai_direct.c
           "$RUNNER_TEMP/ai-direct"
+          cc -std=c11 -Wall -Wextra -Werror -o "$RUNNER_TEMP/levelbot-simulator" slashplayed/mobile/tests/test_levelbot_simulator.c
+          "$RUNNER_TEMP/levelbot-simulator"
 
   keyboard-device-kit:
     runs-on: xcode-27

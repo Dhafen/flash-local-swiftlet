@@ -704,16 +704,17 @@ static void sp_mobile_ai_movement_key(unsigned char key, BOOL pressed) {
     });
     return YES;
 }
-- (void)sp_mobile_ai_check_test:(SPAINavPulse)pulse generation:(NSUInteger)generation remaining:(unsigned)remaining {
+- (void)sp_mobile_ai_check_test:(SPAINavPulse)pulse generation:(NSUInteger)generation
+    remaining:(unsigned)remaining lastSample:(SPAINavSample)lastSample {
     if (_mobileAIKeyGeneration != generation && _mobileAIKeyGeneration != generation + 1) return;
     if (_mobileAI.active || self.window.windowScene.activationState != UISceneActivationStateForegroundActive) return;
     NSTimeInterval now = NSProcessInfo.processInfo.systemUptime;
     SPAINavSample after = sp_ai_game_sample();
-    SPAINavOutcome outcome = sp_ai_nav_outcome(pulse, after, now);
+    SPAINavOutcome outcome = sp_ai_nav_observe(pulse, &after, now, &lastSample);
     if (outcome == SP_NAV_PENDING) {
         __weak SPInputView *weakSelf = self;
         dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.2 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
-            [weakSelf sp_mobile_ai_check_test:pulse generation:generation remaining:remaining];
+            [weakSelf sp_mobile_ai_check_test:pulse generation:generation remaining:remaining lastSample:lastSample];
         });
         return;
     }
@@ -780,7 +781,7 @@ static void sp_mobile_ai_movement_key(unsigned char key, BOOL pressed) {
         [input->_mobileAIButton setTitle:sent ? @"TEST ACCEPT" : @"TEST INPUT" forState:UIControlStateNormal];
         sp_stub_log(sent ? "AI movement diagnostic: adapter accepted" : "AI movement diagnostic: adapter rejected");
         if (sent) [input sp_mobile_ai_check_test:(SPAINavPulse){before, SP_MOVE_FORWARD, now+hold, now+1.8}
-            generation:input->_mobileAIKeyGeneration remaining:remaining];
+            generation:input->_mobileAIKeyGeneration remaining:remaining lastSample:(SPAINavSample){0}];
     });
 }
 - (void)sp_mobile_ai_toggle:(UIButton *)button {

@@ -180,6 +180,19 @@ static inline SPAINavOutcome sp_ai_nav_outcome(SPAINavPulse pulse, SPAINavSample
         pulse.before.column && after.column) ? SP_NAV_NO_PROGRESS : SP_NAV_DISPLACED;
 }
 
+static inline SPAINavOutcome sp_ai_nav_observe(SPAINavPulse pulse, SPAINavSample *after, double now,
+    SPAINavSample *lastInWindow) {
+    if (after->at >= pulse.endedAt && after->at <= pulse.deadline && sp_ai_sample_fresh(after->at, now))
+        *lastInWindow = *after;
+    if (after->at > pulse.deadline && sp_ai_sample_fresh(after->at, now) && sp_ai_sample_fresh(lastInWindow->at, now)) {
+        if (after->evidence.target != pulse.before.evidence.target ||
+            (after->evidence.position && after->evidence.position != pulse.before.evidence.position))
+            return SP_NAV_CONTEXT_CHANGED;
+        *after = *lastInWindow;
+    }
+    return sp_ai_nav_outcome(pulse, *after, now);
+}
+
 static inline bool sp_ai_forward_probe_ready(SPAINavSample sample, uint8_t flags, uint8_t movementKeys, double now) {
     // Leave an eight-yard margin in this test. Distance is in quarter yards.
     return sp_ai_sample_fresh(sample.at, now) && (flags & (1|2|4|8|16|32|64)) == (1|4|8) &&

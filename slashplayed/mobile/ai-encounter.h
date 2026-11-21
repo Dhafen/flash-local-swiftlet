@@ -23,6 +23,7 @@ typedef struct {
     SPAISteering steering;
     uint8_t steeringPosition, target;
     SPAINavPulse pulse;
+    SPAINavSample lastPulseSample;
     SPAINavBudget navBudget;
     SPAICombatEvidence combatEvidence;
     bool recovering, probeAfterMove;
@@ -35,6 +36,7 @@ static inline void sp_ai_note(SPAIEncounterAdapter adapter, const char *message)
 static inline void sp_ai_cancel_steering(SPAIEncounter *encounter) {
     encounter->steering = (SPAISteering){0};
     encounter->pulse = (SPAINavPulse){0};
+    encounter->lastPulseSample = (SPAINavSample){0};
 }
 
 static inline void sp_ai_suspend_encounter(SPAIEncounter *encounter, SPAIEncounterAdapter adapter) {
@@ -98,14 +100,16 @@ static inline const char *sp_ai_advance(SPAIEncounter *encounter, SPAIEncounterO
     if (encounter->pulse.deadline) {
         bool canContinue = hostile && target && sample.column &&
             sp_ai_movement_key(encounter->pulse.move, observation.movementKeys);
-        SPAINavOutcome outcome = sp_ai_nav_outcome(encounter->pulse, sample, now);
+        SPAINavSample outcomeSample = sample;
+        SPAINavOutcome outcome = sp_ai_nav_observe(encounter->pulse, &outcomeSample, now, &encounter->lastPulseSample);
         if (!canContinue && (outcome == SP_NAV_PENDING || outcome == SP_NAV_NO_SAMPLE))
             outcome = SP_NAV_CONTEXT_CHANGED;
         if (outcome == SP_NAV_PENDING) return approach;
         adapter.release(adapter.context);
-        sp_ai_report_navigation(encounter, outcome, sample, adapter);
+        sp_ai_report_navigation(encounter, outcome, outcomeSample, adapter);
         encounter->probeAfterMove = encounter->pulse.move == SP_MOVE_FORWARD && outcome == SP_NAV_DISPLACED;
         encounter->pulse = (SPAINavPulse){0};
+        encounter->lastPulseSample = (SPAINavSample){0};
         encounter->nextAction = now + 0.4;
     }
 
