@@ -291,27 +291,10 @@ print("public kill attribution and corpse interaction evidence passed")
 
 targetDead = false
 UnitCanAttack = val(true)
-local attacker, victim, amount = "other-player", selected, 40
-CombatLogGetCurrentEventInfo = function()
-    return 29, "SPELL_DAMAGE", false, attacker, nil, 0, 0, victim, nil, 0, 0, 100, "test", 1, amount
-end
-corpseEvent(nil, "COMBAT_LOG_EVENT_UNFILTERED")
-assert(corpseState():byte(18) < 128)
-attacker = "test-player"
-victim = "other-foe"
-corpseEvent(nil, "COMBAT_LOG_EVENT_UNFILTERED")
-assert(corpseState():byte(18) < 128)
-victim, amount = selected, secret
-corpseEvent(nil, "COMBAT_LOG_EVENT_UNFILTERED")
-assert(corpseState():byte(18) < 128)
-amount = 40
-corpseEvent(nil, "COMBAT_LOG_EVENT_UNFILTERED")
-assert(corpseState():byte(18) >= 128 and math.floor(corpseState():byte(12) / 64) == 1)
-GetTime = val(30)
-assert(corpseState():byte(18) < 128)
+assert(corpseState():byte(18) < 128, "The packet must leave individual own-hit evidence unknown")
 corpseEvent(nil, "PLAYER_TARGET_CHANGED")
 assert(corpseState():byte(18) < 128)
-print("public selected-target local damage evidence passed")
+print("unavailable own-hit evidence stays unknown")
 
 GetBindingAction = function(key)
     if key == "LEFT" then return "TURNLEFT" end

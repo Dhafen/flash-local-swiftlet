@@ -119,6 +119,13 @@ hover = ROOT / "addon/SPHover/SPHover.lua"
 hover.with_name("SPHover.vision.lua").write_bytes(hover.read_bytes())
 restrictions = Path(__file__).with_name("SPHoverRestrictions.lua").read_text()
 hover.write_text("SPPhoneTouchRects = true\n" + restrictions + "\n" + hover.read_text())
+replace_once(hover, 'local strip = CreateFrame("Frame", "SPHoverStrip", UIParent)',
+             'spHoverStage = "strip frame"\nlocal strip = CreateFrame("Frame", "SPHoverStrip", UIParent)')
+for method in ("SetFrameStrata", "SetFrameLevel", "EnableMouse"):
+    replace_once(hover, f"strip:{method}(", f'spHoverStage = "strip {method}"\nstrip:{method}(')
+replace_once(hover, 'strip:SetPoint("BOTTOMLEFT")',
+             'spHoverStage = "strip anchors"\nstrip:SetPoint("BOTTOMLEFT")')
+replace_once(hover, 'local blocks = {}', 'spHoverStage = "strip textures"\nlocal blocks = {}')
 replace_once(hover, "    local f = EnumerateFrames()",
              """    local function addPanel(frame)
         if not frame or isForbidden(frame) or not frame.IsProtected or frame:IsProtected()
@@ -240,8 +247,12 @@ replace_once(hover_lua, "    chunkIndex = 0\nend\n\nlocal function showChunk",
     "    chunkIndex = 0\n    spSentFrames = 0\nend\n\nlocal function showChunk")
 replace_once(hover_lua, "    if sinceScan >= SCAN_INTERVAL then",
     "    if sinceScan >= SCAN_INTERVAL and (not SPPhoneTouchRects or #chunks <= 1 or spSentFrames >= #chunks * 2) then")
-replace_once(hover_lua, "        local ok, msg = pcall(scan)\n        if ok and msg ~= message then",
-    """        local ok, msg = pcall(scan)
+replace_once(hover_lua, "        layout()\n        local ok, msg = pcall(scan)\n        if ok and msg ~= message then",
+    """        spHoverStage = "strip layout"
+        layout()
+        spHoverStage = "panel scan"
+        local ok, msg = pcall(scan)
+        spHoverStage = "idle"
         if SPPhoneTouchRects then
             if ok and type(msg) == "string" and #msg >= 2 then
                 local a, b = msg:byte(1, 2)
@@ -299,15 +310,19 @@ local function aiPacket(kind, payload)
     return b
 end
 local function aiHeartbeat()
+    spHoverStage = "game state"
     local state, pose = spAIState()
     if #state ~= 18 then state = string.char(65, 73, 0, 0, 0, 0, 75, 0, 70, 0, 0, 0, 78, 0, 0, 255, 255, 0) end
     spLastAIState = state
     aiBeat = (aiBeat + 1) % 256
+    spHoverStage = "XP observation"
     local progression = aiBeat % 2 == 0 and spAIProgression() or nil
     local healthBounds
+    spHoverStage = "health bar bounds"
     if aiBeat % 2 == 0 then
         healthBounds = spAIVisibleHealthBounds() or string.char(65, 72, 1, 0) .. string.rep(string.char(0), 14)
     end
+    spHoverStage = "idle"
     return aiPacket(73, state), pose and aiPacket(80, pose) or nil, progression and aiPacket(88, progression) or nil,
         healthBounds and aiPacket(72, healthBounds) or nil
 end""")
@@ -343,6 +358,8 @@ replace_once(hover_lua, "    if #chunks > 0 and (#chunks > 1 or chunkIndex == 0)
         end
     end
     if #chunks > 0 and (#chunks > 1 or chunkIndex == 0) then""")
+replace_once(hover_lua, 'strip:SetScript("OnUpdate", function(self, elapsed)',
+             'spHoverStage = "strip update handler"\nstrip:SetScript("OnUpdate", function(self, elapsed)')
 # With single-chunk UI messages, redraw the rect strip after a heartbeat too.
 replace_once(hover_lua, "if #chunks > 0 and (#chunks > 1 or chunkIndex == 0) then",
     "if #chunks > 0 and (SPPhoneTouchRects or #chunks > 1 or chunkIndex == 0) then")
@@ -377,5 +394,5 @@ replace_once(hover_native, '    if (getenv("SP_PHONE_UI_RECTS"))\n        sp_ai_
 hover_text = hover_lua.read_text()
 state_start = hover_text.index("local function spAIState()")
 state_end = hover_text.index("\nlocal function scan()", state_start)
-hover_text = hover_text[:state_start] + 'local spLastAIState = ""\n' + Path(__file__).with_name("HealthTelemetry.lua").read_text() + "\n" + hover_text[state_end:]
-hover_lua.write_text(hover_text)
+hover_text = hover_text[:state_start] + 'local spLastAIState = ""\nspHoverStage = "telemetry setup"\n' + Path(__file__).with_name("HealthTelemetry.lua").read_text() + "\n" + hover_text[state_end:]
+hover_lua.write_text(hover_text + '\nspHoverStage = "idle"\n')

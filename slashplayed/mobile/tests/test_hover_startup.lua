@@ -32,6 +32,7 @@ WolkaraMobileQuests = { IsForbidden = function() return false end, IsProtected =
     IsVisible = forbidden, GetRect = forbidden }
 
 dofile(assert(arg[1], "Pass the staged SPHover.lua"))
+assert(not events.COMBAT_LOG_EVENT_UNFILTERED, "Forever must not register the forbidden combat-log event")
 local message = SPHover.scan()
 assert(message:byte(1) == 0 and message:byte(2) == 1, "only the public Wolkara panel is encoded")
 assert(measured == 1 and forbiddenCalls == 0)
@@ -59,5 +60,12 @@ listener:OnEvent("ADDON_ACTION_FORBIDDEN", "SPHover", "SetPreferredGamepadIntera
 for _ = 1, 16 do strip:OnUpdate(0.02) end
 local frame = encodedFrame()
 assert(frame:sub(1, 2) == "AE" and frame:sub(6, 7) == "AE" and frame:byte(9) == 1)
-assert(frame:sub(11, 10 + frame:byte(10)) == "SetPreferredGamepadInteractTarget()")
+assert(frame:sub(11, 10 + frame:byte(10)) == "SetPreferredGamepadInteractTarget() during idle")
+WolkaraMobileSettings.GetRect = function()
+    listener:OnEvent("ADDON_ACTION_FORBIDDEN", "SPHover", "UNKNOWN()")
+    return 100, 100, 120, 150
+end
+for _ = 1, 16 do strip:OnUpdate(0.3) end
+frame = encodedFrame()
+assert(frame:sub(11, 10 + frame:byte(10)) == "UNKNOWN() during panel scan")
 print("iPhone SPHover startup scans its own eligible panel only")
