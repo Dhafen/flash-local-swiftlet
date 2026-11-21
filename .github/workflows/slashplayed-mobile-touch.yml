@@ -9,6 +9,7 @@ on:
   push:
     branches: [experiment/slashplayed-floating-controls, experiment/slashplayed-laya-p2p]
   workflow_dispatch:
+  workflow_call:
 
 permissions:
   contents: read

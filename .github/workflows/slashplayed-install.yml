@@ -4,6 +4,7 @@ on:
   pull_request:
     paths:
       - .github/workflows/slashplayed-install.yml
+      - .github/workflows/slashplayed-mobile-touch.yml
       - slashplayed/**
   workflow_dispatch:
 
@@ -12,45 +13,7 @@ permissions:
 
 jobs:
   device-kit:
-    runs-on: xcode-27
-    timeout-minutes: 80
-    env:
-      XCODE_APP: /Applications/Xcode_27.1.app
-      XCODEGEN_VERSION: 2.46.0
-      XCODEGEN_SHA256: 4d9e34b62172d645eed6457cac13fc222569974098ef4ee9c3368bedf0196806
-      RUSTUP_VERSION: 1.29.2
-      RUSTUP_SHA256: f7c7e11eb2e07f006e532a8aaac77b32f4527d305ac386c0c633ca6133d35ca9
-      IDEVICE_CACHE_PATHS: |
-        work/idevice/BUILD.txt
-        work/idevice/include
-        work/idevice/ios
-        work/idevice/xros
-        work/idevice/macos
-    steps:
-      - name: Checkout pinned Slashplayed source
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
-        with:
-          repository: paulstraw/slashplayed
-          ref: 860d04e88afefc4fe7dbb6a2dba945250e5c2ecf
-          persist-credentials: false
-      - name: Build prerequisites
-        uses: ./.github/actions/companion-deps
-      - name: Build unsigned device kit
-        shell: bash
-        run: |
-          set -euo pipefail
-          scripts/fetch-font.sh
-          sh apps/companion/bundle-resources.sh --build "$RUNNER_TEMP/stage"
-          scripts/release/device-kit.sh "$RUNNER_TEMP/stage" "$RUNNER_TEMP/slashplayed-device-kit.zip"
-          unzip -t "$RUNNER_TEMP/slashplayed-device-kit.zip" >/dev/null
-          shasum -a 256 "$RUNNER_TEMP/slashplayed-device-kit.zip"
-      - name: Upload iPhone kit
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
-        with:
-          name: sp-kit
-          path: ${{ runner.temp }}/slashplayed-device-kit.zip
-          retention-days: 7
-          if-no-files-found: error
+    uses: ./.github/workflows/slashplayed-mobile-touch.yml
 
   windows:
     runs-on: windows-latest
@@ -68,7 +31,7 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           repository: paulstraw/slashplayed
-          ref: 860d04e88afefc4fe7dbb6a2dba945250e5c2ecf
+          ref: 976f9248971238187a82c8c55f69b23054055343
           persist-credentials: false
       - name: Build Windows installer
         run: |
@@ -90,42 +53,32 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      - name: Fetch generated packages
+      - name: Checkout assembly script
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - name: Fetch Windows installer
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
         with:
-          pattern: sp-*
-          path: downloads
-          merge-multiple: true
+          name: sp-windows
+          path: downloads/windows
+      - name: Fetch patched iPhone kit
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
+        with:
+          name: Slashplayed-iPhone-Wolkara-Windows-Companion
+          path: downloads/phone
       - name: Assemble Windows download
         shell: bash
         run: |
           set -euo pipefail
-          mkdir -p out
-          unzip -q downloads/slashplayed-companion-windows-x86_64.zip -d out
-          bundle=out/slashplayed-companion-windows-x86_64
-          test -f "$bundle/slashplayed-companion.exe"
-          cp downloads/slashplayed-device-kit.zip "$bundle/"
-          cat > "$bundle/INSTALL.txt" <<'TEXT'
-          INSTALLATION: Slashplayed on iPhone from Windows 11
-
-          1. Install Apple Devices from Microsoft Store on the PC.
-          2. Install LocalDevVPN from the App Store on iPhone.
-          3. Connect unlocked iPhone to the PC with a data-capable USB cable.
-          4. Open PowerShell in this folder; run:
-             .\slashplayed-companion.exe devices
-             .\slashplayed-companion.exe --kit .\slashplayed-device-kit.zip
-          5. Follow developer-mode and Apple ID signing prompts.
-          6. Open Slashplayed on iPhone, enable LocalDevVPN, and download WoW.
-          
-          Use a secondary Apple ID for the unofficial sideload procedure.
-          NEVER enter Apple or Battle.net credentials into GitHub Actions.
-          Free Apple ID signing must be renewed on the PC every seven days.
-          Blizzard has not approved Slashplayed; account action is possible.
-          Guide: https://github.com/paulstraw/slashplayed/blob/main/docs/setup-without-a-mac.md
-          TEXT
-          (cd out && zip -qr ../Slashplayed-iPhone-Windows.zip slashplayed-companion-windows-x86_64)
-          sha256sum Slashplayed-iPhone-Windows.zip > SHA256SUMS
-          unzip -t Slashplayed-iPhone-Windows.zip | tail -2
+          PYTHONPATH=slashplayed/mobile python3 slashplayed/mobile/tests/test_windows_bundle.py
+          (cd downloads/phone && sha256sum -c SHA256SUMS.txt)
+          python3 slashplayed/mobile/assemble_windows_bundle.py \
+            downloads/windows/slashplayed-companion-windows-x86_64.zip \
+            downloads/phone/slashplayed-wolkara-device-kit.zip \
+            Slashplayed-iPhone-Windows.zip downloads/phone/Installera.md \
+            downloads/phone/AI_DEVICE_VALIDATION.md downloads/phone/SHA256SUMS.txt
+          sha256sum -c SHA256SUMS
       - name: Upload final Windows installer and iPhone kit
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         with:
