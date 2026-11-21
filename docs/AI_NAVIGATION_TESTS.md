@@ -17,6 +17,7 @@ cc -std=c11 -Wall -Wextra -Werror slashplayed/mobile/tests/test_touch_zone.c -o 
 | Rörelse, vägg, fel riktning | C provar accepterad puls med stillastående counter, enbart speed, positionsbyte utan närmande, ökande avstånd och minskat avstånd. |
 | Avbruten kontext | C avvisar annan mål- eller positionsepok. Lua provar byte av karta och teleport. Staging inspekterar release och stop vid touch, fysisk knapp, bakgrund och kritisk värme. |
 | Instabil styrning | C provar två misslyckade utfall, upprepad sidoreversering med framåtrörelse mellan bytena och tolv-pulsgräns. |
+| Färsk riktning | C provar dubbla tidsstämplar, avbrott mellan samplingar, växlande kolumner och ny riktning efter en rörelsepuls. En ny puls kräver två överensstämmande observationer. |
 | Bindningar | Lua testar rätt W, Q/A, E/D, Tab, F12 och interact. C kontrollerar gamla packets och verifierad rörelsetangent. |
 | Combat och loot | C verifierar att accepterad F12 utan HP-minskning når försöksgränsen. Lua kräver en matchad loot-slot. Samma test provar fel källa, rätt källa och fönster som öppnas och stängs utan kvittens. |
 | Encounter med simulerad spelstatus | C använder produktionsfunktionerna för målsökning, attackprob, närmande, minskad mål-HP, strid som avslutats före loot, matchad loot och återhämtning med 35/50-procents hysteresis. Testet täcker även saknad hälsa mitt i återhämtning. |

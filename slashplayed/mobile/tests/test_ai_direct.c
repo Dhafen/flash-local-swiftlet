@@ -1,6 +1,23 @@
 #include <assert.h>
 #include "../ai-direct.h"
 
+static void test_steering_observations(void) {
+    SPAISteering steering = {0};
+    assert(!sp_ai_confirm_steering(&steering, SP_MOVE_LEFT, 1.0));
+    assert(!sp_ai_confirm_steering(&steering, SP_MOVE_LEFT, 1.0));
+    assert(sp_ai_confirm_steering(&steering, SP_MOVE_LEFT, 1.5));
+    // Returning to the same column after an observation gap needs a new pair.
+    assert(!sp_ai_confirm_steering(&steering, SP_MOVE_LEFT, 3.0));
+    assert(!sp_ai_confirm_steering(&steering, SP_MOVE_RIGHT, 3.5));
+    assert(sp_ai_confirm_steering(&steering, SP_MOVE_RIGHT, 4.0));
+    assert(!sp_ai_confirm_steering(&steering, SP_MOVE_NONE, 4.5));
+    assert(!sp_ai_confirm_steering(&steering, SP_MOVE_RIGHT, 5.0));
+    // An accepted movement pulse clears the evidence before the next decision.
+    steering = (SPAISteering){0};
+    assert(!sp_ai_confirm_steering(&steering, SP_MOVE_RIGHT, 5.5));
+    assert(sp_ai_confirm_steering(&steering, SP_MOVE_RIGHT, 6.0));
+}
+
 static void test_pulse_outcomes(void) {
     const SPAINavSample before = {10.0, {SP_MOTION_POSITION, 7, false}, {1, 2, 3, 80}, 8};
     const SPAINavPulse pulse = {before, SP_MOVE_FORWARD, 10.7, 11.9};
@@ -130,6 +147,7 @@ static void test_simulated_encounter(void) {
 }
 
 int main(void) {
+    test_steering_observations();
     test_pulse_outcomes();
     test_bounded_retries();
     test_combat_feedback();

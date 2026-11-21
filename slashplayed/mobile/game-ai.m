@@ -134,8 +134,9 @@ static void sp_ai_heartbeat(uint8_t seq, const uint8_t *data, size_t length, NST
     NSString *_lastWorldSummary;
     NSTimeInterval _directNextAction;
     unsigned _lootAttempts, _searchAttempts;
-    SPAIMove _visibleProposal;
-    NSTimeInterval _visibleSeenAt, _lastMoveAt, _lastDamageAt;
+    SPAISteering _visibleSteering;
+    uint8_t _steeringPosition;
+    NSTimeInterval _lastMoveAt, _lastDamageAt;
     SPAINavPulse _pulse;
     SPAINavBudget _navBudget;
     SPAICombatEvidence _combatEvidence;
@@ -206,8 +207,7 @@ static void sp_ai_heartbeat(uint8_t seq, const uint8_t *data, size_t length, NST
     ++_p2pGeneration;
     if (_pulse.deadline) sp_stub_log("AI navigation: cancelled");
     _pulse = (SPAINavPulse){0};
-    _visibleProposal = SP_MOVE_NONE;
-    _visibleSeenAt = 0;
+    _visibleSteering = (SPAISteering){0};
     // Keep single-flight ownership until the previous callback finishes.
     Class p2p = NSClassFromString(@"SPP2PBridge");
     SEL reset = NSSelectorFromString(@"resetHistory");
@@ -482,6 +482,7 @@ static NSArray<NSNumber *> *sp_ai_luminance(CVPixelBufferRef buffer) {
 
 - (NSString *)advance:(SPAINavSample)sample now:(NSTimeInterval)now reduced:(BOOL)reduced {
     if (!sp_ai_heartbeat_seen || !sp_ai_sample_fresh(sample.at, now)) {
+        _visibleSteering = (SPAISteering){0};
         if (_pulse.deadline) {
             [self recordNavigation:SP_NAV_NO_SAMPLE];
             _pulse = (SPAINavPulse){0};
@@ -499,7 +500,7 @@ static NSArray<NSNumber *> *sp_ai_luminance(CVPixelBufferRef buffer) {
         if (_pulse.deadline) sp_stub_log("AI navigation: cancelled on target change");
         if (self.releaseInput) self.releaseInput();
         _directNextAction = _lastDamageAt = 0;
-        _visibleProposal = SP_MOVE_NONE;
+        _visibleSteering = (SPAISteering){0};
         _pulse = (SPAINavPulse){0};
         _navBudget = (SPAINavBudget){0};
         _combatEvidence = (SPAICombatEvidence){.lastHP = 255};
@@ -513,6 +514,7 @@ static NSArray<NSNumber *> *sp_ai_luminance(CVPixelBufferRef buffer) {
     SPAIReadiness readiness = sp_ai_readiness(sp_ai_game_flags, sp_ai_game_hp, &recovering);
     _recovering = recovering;
     if (readiness != SP_AI_READY) {
+        _visibleSteering = (SPAISteering){0};
         if (_pulse.deadline) [self invalidateDecision];
         if (self.releaseInput) self.releaseInput();
         if (readiness == SP_AI_DEAD) return @"PLAYER DEAD";
@@ -578,10 +580,11 @@ static NSArray<NSNumber *> *sp_ai_luminance(CVPixelBufferRef buffer) {
     SPAIMove move = sp_ai_visible_approach(sp_ai_game_meta, 2, false, false);
     if (sample.evidence.distance != SP_AI_DISTANCE_UNKNOWN)
         move = sp_ai_apply_approach(&_approachExamples, move, combat);
-    if (move != _visibleProposal) {
-        _visibleProposal = move;
-        _visibleSeenAt = sample.at;
+    if (_steeringPosition != sample.evidence.position) {
+        _visibleSteering = (SPAISteering){0};
+        _steeringPosition = sample.evidence.position;
     }
+    BOOL confirmed = sp_ai_confirm_steering(&_visibleSteering, move, sample.at);
     if (now < _directNextAction) return combat ? @"IN COMBAT" : @"ENGAGE";
     SPAIEngagement engagement = sp_ai_engagement(_combatEvidence, move, sample.evidence.distance,
         recentDamage, _probeAfterMove);
@@ -592,7 +595,7 @@ static NSArray<NSNumber *> *sp_ai_luminance(CVPixelBufferRef buffer) {
         if (!sample.evidence.position || sample.motion.source != SP_MOTION_POSITION) return @"NAV POSITION";
         if (!sp_ai_nav_budget_open(_navBudget, move)) return @"NAV BLOCK";
         if (!sp_ai_movement_key(move, sp_ai_game_move_keys)) return @"MOVE BIND";
-        if (sample.at - _visibleSeenAt < 0.12 || now - _lastMoveAt < (reduced ? 2.0 : 0.8))
+        if (!confirmed || now - _lastMoveAt < (reduced ? 2.0 : 0.8))
             return reduced ? @"HEAT WALK" : @"APPROACH";
         NSString *key = move == SP_MOVE_LEFT ? @"STRAFE_LEFT" : move == SP_MOVE_RIGHT ? @"STRAFE_RIGHT" : @"FORWARD";
         NSTimeInterval hold = 0.60; // cover the nominal 0.5s SPHover cadence
@@ -601,6 +604,7 @@ static NSArray<NSNumber *> *sp_ai_luminance(CVPixelBufferRef buffer) {
             return @"NAV INPUT";
         }
         sp_ai_nav_accept(&_navBudget, move);
+        _visibleSteering = (SPAISteering){0};
         _lastMoveAt = now;
         _pulse = (SPAINavPulse){sample, move, now + hold, now + 1.8};
         return reduced ? @"HEAT WALK" : @"APPROACH";

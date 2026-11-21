@@ -111,6 +111,26 @@ static inline bool sp_ai_sample_fresh(double sampledAt, double now) {
     return sampledAt > 0 && now >= sampledAt && now - sampledAt < 0.85;
 }
 
+typedef struct {
+    SPAIMove move;
+    double observedAt;
+    bool confirmed;
+} SPAISteering;
+
+static inline bool sp_ai_confirm_steering(SPAISteering *steering, SPAIMove move, double at) {
+    if (move == SP_MOVE_NONE || at < steering->observedAt) {
+        *steering = (SPAISteering){0};
+        return false;
+    }
+    if (steering->move != move || !sp_ai_sample_fresh(steering->observedAt, at)) {
+        *steering = (SPAISteering){move, at, false};
+    } else if (at - steering->observedAt >= 0.12) {
+        steering->observedAt = at;
+        steering->confirmed = true;
+    }
+    return steering->confirmed;
+}
+
 typedef enum {
     SP_NAV_PENDING, SP_NAV_NO_SAMPLE, SP_NAV_CONTEXT_CHANGED, SP_NAV_STALLED,
     SP_NAV_DISPLACED, SP_NAV_CLOSER, SP_NAV_ALIGNED, SP_NAV_NO_PROGRESS
