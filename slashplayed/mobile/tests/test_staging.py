@@ -262,7 +262,9 @@ if sys.platform == "darwin" and len(sys.argv) == 2:
 assert 'local hp, hpReason = spReadHealthPercent("player")' in (root / "addon/SPHover/SPHover.lua").read_text()
 assert 'sp_ai_health_status(data' in event and '"HP UNKNOWN"' in event and '"HP SECRET"' in event
 assert 'sp_ai_nav_observe(encounter->pulse, &outcomeSample, now, &encounter->lastPulseSample)' in event
-assert 'sp_ai_confirm_steering(&encounter->steering, move, sample.at)' in event
+assert 'sp_ai_confirm_steering(&encounter->steering, move, useBearing ? observation.pose.observedAt : sample.at)' in event
+assert 'sp_ai_route_calibrate_leg(leg, _recordedFirstMotion, _recordedLastMotion)' in event
+assert 'sp_ai_projected_approach(encounter->targetWalkBefore, pose)' in event
 assert 'sp_ai_advance(&_encounter, observation, now, reduced, &_approachExamples, adapter)' in event
 assert 'sp_mobile_ai_yield:' in event and 'UIControlEventTouchDown' in event
 yield_method = event.split('- (void)sp_mobile_ai_yield:(id)sender {', 1)[1].split('\n}', 1)[0]
