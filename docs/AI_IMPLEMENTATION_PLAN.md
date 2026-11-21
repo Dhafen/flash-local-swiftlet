@@ -6,6 +6,8 @@ Målet är att den befintliga AI-knappen ska ge en begriplig väg från observat
 
 På iPhone med `d7bfd0e` visar loggen `OBSERVING`, `player=restricted`, `target=none`, `position=public`, `distance=unknown`, `tab=verified` och `f12=verified`. Observationen skickar ingen input. I autonomt testläge avbryter `sp_ai_advance` före första handlingen om offentlig spelarhälsa saknas. En tidigare manuell W-puls bekräftade positionsförändring. Minskning av avståndet till ett valt mål har ännu inte verifierats på telefonen.
 
+När användaren valde en fientlig NPC kl. 13.27 den 21 november visade samma bygge `identity=public`, `position=public`, `distance=public` och `plate=unknown`. Båda hälsovärdena rapporterades som skyddade. Ingen riktningssignal loggades i det uppföljande provet när användaren såg namnplattan. Därmed finns mätdata för en användarriktad puls mot samma mål. Den automatiska riktningssignalen och bevis för skada återstår.
+
 ## 1. Hitta rätt läge från en knapp
 
 - [x] Döp om observationsfasen till `OBS ONLY` i `slashplayed/mobile/game-ai.m`. Behåll `AI STALE` när observationen saknar färsk data.
@@ -14,8 +16,8 @@ På iPhone med `d7bfd0e` visar loggen `OBSERVING`, `player=restricted`, `target=
 
 ## 2. Mät de signaler som krävs för målrörelse
 
-- [ ] Välj en stillastående NPC manuellt i observation medan telefonen står på fri mark. Använd `AI world` i `game-ai.m` för att verifiera att målidentitet, nameplate och avstånd till samma mål håller ihop när kameran rör sig och när användaren går närmare. Gör ett andra prov med terräng som stoppar karaktären. Anteckna exakt vilka värden som blir skyddade, saknas eller är inaktuella.
-- [ ] Lägg i `phone-input.m` till ett användarstartat prov med ett redan valt mål som återanvänder `sp_ai_nav_outcome` från `ai-direct.h`. Begränsa provet till en framåtpuls om högst 0,60 s på fri mark. Kräv färsk startposition, stabil målidentitet, verifierad W-bindning och disambiguera `closer`, `displaced`, `stalled`, målförlust och avbruten input i loggen. En knapptryckning utan bekräftad rörelse ska ge ett mätbart fel.
+- [ ] Logga i `HealthTelemetry.lua` vilken kontroll i `spAITargetColumn` som avvisar namnplattan. Skilj saknad enhet eller ram, förbjuden ram, dold ram och oläsbar koordinat. Använd `AI world` i `game-ai.m` för att verifiera att målidentitet, namnplatta och avstånd till samma mål håller ihop när kameran rör sig och när användaren går närmare. Behåll `unknown` som riktningsvärde vid avvisning.
+- [ ] Lägg i `phone-input.m` till ett användarstartat prov med ett redan valt mål som återanvänder `sp_ai_nav_outcome` från `ai-direct.h`. Användaren riktar karaktären mot målet på fri mark. Skicka en framåtpuls om högst 0,60 s. Kräv färsk startposition, stabil målidentitet och verifierad W-bindning. Logga `closer`, `displaced`, `stalled`, målförlust och avbruten input som separata utfall.
 - [ ] Kör fallen i `tests/test_ai_direct.c` med oförändrat avstånd, minskat avstånd, växlat mål, skyddad position, försenade paket, blockerad rörelse och manuell avbrytning. Kontrollera samma-id före och efter varje puls på telefonen. Utan tillförlitligt målavstånd stannar leveransen vid `TEST MOVED` eller motsvarande precis status.
 
 ## 3. Flytta testet från manuell puls till reglerad styrning
