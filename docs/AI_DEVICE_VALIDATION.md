@@ -36,6 +36,8 @@ Spela in en redan genomgången rak sträcka enligt installationsguiden. Återvä
 
 Spela in två sammanhängande sträckor med en 90-graders sväng. Bind vänster och höger pil till **Turn Left** respektive **Turn Right**. Verifiera `TURN ROUTE` och att rätt pil släpps före första framåtrörelsen i den nya riktningen. Prova båda svängriktningarna och upprepa med felaktig bindning, saknad kompassdata och manuell touch under vridning. Kontrollera att ingen framåtpuls skickas innan den nya riktningen har bekräftats.
 
+På samma öppna testyta, välj en fiende som står lite åt sidan och stäng av namnplattor. Kontrollera `plate=unknown` och `target-vector=public`. Efter utebliven träff ska agenten visa `TURN TARGET` följt av en mätbar `APPROACH` till samma mål. Prova sann och falsk kalibrering, målbyte mitt i svängen och en högermappad pil som inte vrider karaktären. Med saknad eller motsägande kalibrering ska agenten hålla positionen.
+
 Jämför `AI progression` med spelets synliga XP och level före och efter en kill. Ett ökat XP-värde på samma level visas som `gain`. Ett levelbyte visas som `level-up`. Questfältet är det offentliga antalet quests i loggen. Det ger ännu ingen automatisk questplanering eller bevis för att en viss handling gav XP.
 
 Enhetsprov den 21 november 2026 på `910380a` visade `player=restricted` med `target=absent` före strid. Spelarposition var offentlig och Tab och F12 var verifierat bundna. På det bygget behöver du välja målet före AI-knappen, eftersom ett manuellt tryck annars stänger observationen.

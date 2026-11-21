@@ -622,7 +622,7 @@ static NSArray<NSNumber *> *sp_ai_luminance(CVPixelBufferRef buffer) {
     unsigned range = sp_ai_game_corpse & (SP_CORPSE_RANGE_OUT|SP_CORPSE_RANGE_IN);
     SPAIWorldPose pose = sp_ai_game_pose(sample);
     NSString *summary = [NSString stringWithFormat:
-        @"target=%@ identity=%@ plate=%@ position=%@ distance=%@ combat=%@ tab=%@ f12=%@ kill=%@ loot=%@ interact-range=%@ pose=%@ heading=%@",
+        @"target=%@ identity=%@ plate=%@ position=%@ distance=%@ combat=%@ tab=%@ f12=%@ kill=%@ loot=%@ interact-range=%@ pose=%@ heading=%@ target-vector=%@",
         target, sample.evidence.target ? @"public" : @"unknown", direction,
         sample.evidence.position && sample.motion.source == SP_MOTION_POSITION ? @"public" : @"unknown",
         sample.evidence.distance == SP_AI_DISTANCE_UNKNOWN ? @"unknown" : @"public",
@@ -632,7 +632,8 @@ static NSArray<NSNumber *> *sp_ai_luminance(CVPixelBufferRef buffer) {
         (sp_ai_game_corpse & SP_CORPSE_LOCAL_KILL) ? @"player-or-pet" : @"unknown",
         loot == SP_CORPSE_LOOT_AVAILABLE ? @"available" : loot == SP_CORPSE_LOOT_NONE ? @"none" : @"unknown",
         range == SP_CORPSE_RANGE_IN ? @"in" : range == SP_CORPSE_RANGE_OUT ? @"out" : @"unknown",
-        pose.valid ? @"public" : @"unknown", pose.valid && pose.headingKnown ? @"public" : @"unknown"];
+        pose.valid ? @"public" : @"unknown", pose.valid && pose.headingKnown ? @"public" : @"unknown",
+        pose.valid && pose.targetKnown ? @"public" : @"unknown"];
     if ([_lastWorldSummary isEqualToString:summary]) return;
     _lastWorldSummary = summary;
     sp_stub_log([[@"AI world: " stringByAppendingString:summary] UTF8String]);

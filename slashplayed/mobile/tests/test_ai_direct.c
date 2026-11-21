@@ -397,6 +397,32 @@ static void test_route_turn_requires_binding_and_confirmed_heading(void) {
 }
 
 int main(void) {
+    SPAIRoute calibrated = {0};
+    SPAIWorldPose axisA = {.map = 7, .valid = true, .headingKnown = true, .epoch = 1};
+    SPAIWorldPose joint = axisA;
+    joint.firstQ4 = 24;
+    assert(sp_ai_route_append(&calibrated, axisA, joint));
+    joint.heading = 64;
+    SPAIWorldPose axisB = joint;
+    axisB.secondQ4 = -24;
+    assert(sp_ai_route_append(&calibrated, joint, axisB));
+    SPAIWorldPose selected = axisA;
+    selected.targetKnown = true;
+    selected.targetFirstQ4 = 30;
+    selected.targetSecondQ4 = -30;
+    uint8_t desired = 0;
+    assert(sp_ai_target_heading(&calibrated, selected, &desired) && desired == 32);
+    selected.targetFirstQ4 = -30;
+    assert(sp_ai_target_heading(&calibrated, selected, &desired) && desired == 96);
+    selected.map = 8;
+    assert(!sp_ai_target_heading(&calibrated, selected, &desired));
+    selected.map = 7;
+    calibrated.legs[1].start.heading = 15;
+    assert(!sp_ai_target_heading(&calibrated, selected, &desired));
+    uint8_t targetPosePacket[] = {65, 80, 2, 7, 0, 0, 255, 255, 251, 0, 0, 8, 0, 12, 255, 240, 64, 7};
+    SPAIWorldPose decodedTarget = sp_ai_world_pose(targetPosePacket, sizeof targetPosePacket);
+    assert(decodedTarget.valid && decodedTarget.targetKnown && decodedTarget.firstQ4 == -5 &&
+        decodedTarget.secondQ4 == 8 && decodedTarget.targetFirstQ4 == 12 && decodedTarget.targetSecondQ4 == -16);
     test_route_turn_requires_binding_and_confirmed_heading();
     uint8_t health[3][64][4] = {0};
     for (unsigned row = 0; row < 3; ++row)

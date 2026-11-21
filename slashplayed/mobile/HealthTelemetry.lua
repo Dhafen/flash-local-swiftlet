@@ -266,7 +266,7 @@ local function spAIVisibleHealthBounds()
     return ok and bounds or nil
 end
 
-local function spAIPlayerPose(first, second, map, epoch)
+local function spAIPlayerPose(first, second, map, epoch, targetFirst, targetSecond)
     if not spAIFinite(first) or not spAIFinite(second) or not spAIFinite(map) or epoch == 0
         or map < 0 or map >= 4294967296 or map % 1 ~= 0 then return end
     local a, b = math.floor(first * 4 + 0.5), math.floor(second * 4 + 0.5)
@@ -278,6 +278,14 @@ local function spAIPlayerPose(first, second, map, epoch)
             flags, heading = 3, math.floor(facing * 128 / math.pi + 0.5) % 256
         end
     end
+    if map <= 65535 and a >= -8388608 and a <= 8388607 and b >= -8388608 and b <= 8388607
+        and spAIFinite(targetFirst) and spAIFinite(targetSecond) then
+        local dx, dy = math.floor(targetFirst * 4 + 0.5), math.floor(targetSecond * 4 + 0.5)
+        if dx >= -32768 and dx <= 32767 and dy >= -32768 and dy <= 32767 then
+            return string.char(65, 80, 2, flags + 4) .. spAIU32(map):sub(3) .. spAIU32(a):sub(2)
+                .. spAIU32(b):sub(2) .. spAIU32(dx):sub(3) .. spAIU32(dy):sub(3) .. string.char(heading, epoch)
+        end
+    end
     return string.char(65, 80, 1, flags) .. spAIU32(map) .. spAIU32(a) .. spAIU32(b) .. string.char(heading, epoch)
 end
 
@@ -287,10 +295,11 @@ local function spAIPosition(unit)
     if ok and spAIFinite(x) and spAIFinite(y) and spAIFinite(map) then return x, y, map end
 end
 
-local function spAIMotion(foeID)
+local function spAIMotion(foeID, liveHostile)
     local source = 0
     local distance = 65535
     local x, y, map = spAIPosition("player")
+    local targetFirst, targetSecond
     if map then
         source = 1
         if spAIAnchorMap ~= map then
@@ -309,7 +318,8 @@ local function spAIMotion(foeID)
         if foeID then
             local tx, ty, targetMap = spAIPosition("target")
             if map == targetMap then
-                local dx, dy = x-tx, y-ty
+                local dx, dy = tx-x, ty-y
+                if liveHostile then targetFirst, targetSecond = dx, dy end
                 distance = math.min(65534, math.floor(4 * math.sqrt(dx*dx + dy*dy) + 0.5))
             end
         end
@@ -328,7 +338,7 @@ local function spAIMotion(foeID)
     end
     spAIMotionSource = source
     local epoch = source == 1 and spAIPositionEpoch or 0
-    return source, spAIMotionCounter, epoch, distance, spAIPlayerPose(x, y, map, epoch)
+    return source, spAIMotionCounter, epoch, distance, spAIPlayerPose(x, y, map, epoch, targetFirst, targetSecond)
 end
 
 -- Health is optional. All decision flags must be public and known.
@@ -410,7 +420,7 @@ local function spAIState()
             spAITargetEpoch = spAITargetEpoch % 255 + 1
             spAIPreviousTarget = foeID
         end
-        local motionSource, motionCounter, positionEpoch, distance, worldPose = spAIMotion(foeID)
+        local motionSource, motionCounter, positionEpoch, distance, worldPose = spAIMotion(foeID, hostile and not targetDead)
         local bindings = (spAIBinding("TAB") == "TARGETNEARESTENEMY" and 1 or 0)
             + (rotation == "CLICK TactaraMainButton:LeftButton" and 2 or 0)
         local looted = targetDead and foeID and foeID == spAILootedTarget and 1 or 0

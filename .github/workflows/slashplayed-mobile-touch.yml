@@ -37,9 +37,9 @@ jobs:
           lua5.1 slashplayed/mobile/tests/test_wolkara_setup.lua slashplayed/mobile/WolkaraSetup.lua
           cc -Wall -Wextra -Werror -o "$RUNNER_TEMP/touch-zone" slashplayed/mobile/tests/test_touch_zone.c
           "$RUNNER_TEMP/touch-zone"
-          cc -Wall -Wextra -Werror -o "$RUNNER_TEMP/ai-direct" slashplayed/mobile/tests/test_ai_direct.c
+          cc -Wall -Wextra -Werror -o "$RUNNER_TEMP/ai-direct" slashplayed/mobile/tests/test_ai_direct.c -lm
           "$RUNNER_TEMP/ai-direct"
-          cc -std=c11 -Wall -Wextra -Werror -o "$RUNNER_TEMP/levelbot-simulator" slashplayed/mobile/tests/test_levelbot_simulator.c
+          cc -std=c11 -Wall -Wextra -Werror -o "$RUNNER_TEMP/levelbot-simulator" slashplayed/mobile/tests/test_levelbot_simulator.c -lm
           "$RUNNER_TEMP/levelbot-simulator"
 
   keyboard-device-kit:

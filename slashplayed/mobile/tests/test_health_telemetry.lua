@@ -34,6 +34,8 @@ GetPlayerFacing = val(math.pi / 2)
 local pose = assert(playerPose(-1.25, 2, 0, 7))
 local expected = string.char(65, 80, 1, 3, 0, 0, 0, 0, 255, 255, 255, 251, 0, 0, 0, 8, 64, 7)
 assert(pose == expected, "signed position, map zero and heading must survive encoding")
+local targetPose = assert(playerPose(-1.25, 2, 0, 7, 3, -4))
+assert(targetPose == string.char(65, 80, 2, 7, 0, 0, 255, 255, 251, 0, 0, 8, 0, 12, 255, 240, 64, 7))
 GetPlayerFacing = val(secret)
 -- Retain coordinates if only the heading is restricted.
 issecretvalue = function(value) return value == secret end
