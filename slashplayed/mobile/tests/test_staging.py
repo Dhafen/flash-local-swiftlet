@@ -31,6 +31,9 @@ hover = (root / "shims/appkit/sphover.m").read_text()
 assert 'sp_ai_strip_payload_length(frame + 5, SPH_PAYLOAD_BYTES)' in hover
 assert 'sp_ai_health_heartbeat(frame[2], frame + 5, aiLength, observedAt)' in hover
 assert 'sp_ai_restriction_heartbeat(frame + 5, SPH_PAYLOAD_BYTES)' in hover
+assert 'sp_ai_bundle_heartbeat(frame[2], frame + 5, SPH_PAYLOAD_BYTES, observedAt)' in hover
+assert 'sp_ai_set_pose(seq, bundle.pose, SP_AI_STRIP_RECORD_BYTES, observedAt)' in event
+assert 'sp_ai_game_update(bundle.state, SP_AI_STRIP_RECORD_BYTES, observedAt)' in event
 assert 'sourceSize:MTLSizeMake(width,SP_HEALTH_SCAN_ROWS,1)' in hover
 encounter_advance = event.split('- (NSString *)advance:(SPAINavSample)sample', 1)[1].split('\n}', 1)[0]
 assert 'sp_ai_health_visual_result' not in encounter_advance
@@ -101,7 +104,7 @@ ai_menu = event.split('- (UIMenu *)sp_mobile_ai_options {', 1)[1].split('\n}', 1
 assert 'Test AI movement (forward)' in ai_menu
 assert 'Test approach (authorized realm, face selected target)' in ai_menu
 assert '[input sp_mobile_ai_test:3]' in ai_menu
-assert 'Toggle automation on authorized test realm' in ai_menu
+assert 'Start farming test (authorized realm)' in ai_menu
 assert '[input->_mobileAI start]' not in ai_menu
 repeat_probe = event.split('- (void)sp_mobile_ai_check_test:(SPAINavPulse)pulse', 1)[1].split('\n}', 1)[0]
 assert 'sp_ai_forward_probe_repeat(outcome, remaining)' in repeat_probe
@@ -299,3 +302,9 @@ assert 'sp_ai_movement_key(move, sp_ai_game_move_keys)' in turn_method
 assert 'driveAI:' not in turn_method and '[self sp_mobile_ai_schedule_release:_mobileAIMovement.generation]' in turn_method
 assert 'left || right ? SPFunction | SPNumericPad : 0' in event
 assert 'pressed ? SPKeyDown : SPKeyUp' in event
+
+start_farming = event.split('actionWithTitle:@"Start farming test (authorized realm)"', 1)[1].split('}];', 1)[0]
+assert 'input->_mobileAI.autonomousTest = YES;' in start_farming
+assert '[input sp_mobile_ai_toggle:input->_mobileAIButton];' in start_farming
+assert '(healthDiag || waitingForHealth)' in poll and 'thermal == NSProcessInfoThermalStateNominal' in poll
+assert 'sp_ai_health_visual_result' not in encounter_advance

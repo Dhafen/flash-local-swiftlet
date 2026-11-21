@@ -226,17 +226,33 @@ local function spAIProgression()
         .. string.char(math.floor(level / 256), level % 256, math.floor(quests / 256), quests % 256, 0, 0)
 end
 
+local function spAIUnprotectedFrame(frame)
+    if not spAIReadable(frame) or not frame or type(frame.IsForbidden) ~= "function" then return false end
+    local forbidden = frame:IsForbidden()
+    if not spAIReadable(forbidden) or forbidden ~= false or type(frame.IsProtected) ~= "function" then return false end
+    local protected = frame:IsProtected()
+    return spAIReadable(protected) and protected == false
+end
+
 local function spAIVisibleHealthBounds()
     local ok, bounds = pcall(function()
         local player = _G.WolkaraMobilePlayer
-        local bar = player and player.health
-        if not bar or bar:IsForbidden() or not bar:IsVisible() or bar:GetEffectiveAlpha() < 0.8 then return end
-        local left, bottom, width, height = bar:GetRect()
+        -- Measure only a public, unprotected bar and owner. pcall cannot suppress a blocked-action dialog.
+        if not spAIUnprotectedFrame(player) then return end
+        local bar = player.health
+        if not spAIUnprotectedFrame(bar) then return end
+        local visible = bar:IsVisible()
+        if not spAIReadable(visible) or visible ~= true then return end
+        local alpha = bar:GetEffectiveAlpha()
+        if not spAIFinite(alpha) or alpha < 0.8 then return end
         local rootScale, scale = UIParent:GetEffectiveScale(), bar:GetEffectiveScale()
-        local w, h = UIParent:GetWidth() * rootScale, UIParent:GetHeight() * rootScale
+        local rootWidth, rootHeight = UIParent:GetWidth(), UIParent:GetHeight()
+        if not spAIFinite(rootScale) or not spAIFinite(rootWidth) or not spAIFinite(rootHeight) or
+            not spAIFinite(scale) or rootScale <= 0 or rootWidth <= 0 or rootHeight <= 0 or scale <= 0 then return end
+        local w, h = rootWidth * rootScale, rootHeight * rootScale
+        local left, bottom, width, height = bar:GetRect()
         if not spAIFinite(left) or not spAIFinite(bottom) or not spAIFinite(width) or not spAIFinite(height) or
-            not spAIFinite(scale) or not spAIFinite(w) or not spAIFinite(h) or
-            scale <= 0 or w <= 0 or h <= 0 or width <= 0 or height <= 0 then return end
+            not spAIFinite(w) or not spAIFinite(h) or w <= 0 or h <= 0 or width <= 0 or height <= 0 then return end
         local l, t = left * scale / w, 1 - (bottom + height) * scale / h
         local r, b = (left + width) * scale / w, 1 - bottom * scale / h
         if l < 0 or t < 0 or r > 1 or b > 1 then return end

@@ -131,13 +131,19 @@ static NSTimeInterval sp_ai_pose_at;
 static NSTimeInterval sp_ai_xp_at;
 static uint8_t sp_ai_health_seq;
 static NSTimeInterval sp_ai_health_at;
-static void sp_ai_pose_heartbeat(uint8_t seq, const uint8_t *data, unsigned length, NSTimeInterval observedAt) {
-    if (observedAt <= sp_ai_pose_at || (sp_ai_pose_at > 0 && observedAt - sp_ai_pose_at < 1.0 && seq == sp_ai_pose_seq)) return;
-    sp_ai_pose = sp_ai_world_pose(data, length);
+static BOOL sp_ai_packed_heartbeat;
+static void sp_ai_set_pose(uint8_t seq, const uint8_t *data, unsigned length, NSTimeInterval observedAt) {
+    sp_ai_pose = data ? sp_ai_world_pose(data, length) : (SPAIWorldPose){0};
     sp_ai_pose.observedAt = observedAt;
     sp_ai_pose.sequence = seq;
     sp_ai_pose_seq = seq;
     sp_ai_pose_at = observedAt;
+}
+
+static void sp_ai_pose_heartbeat(uint8_t seq, const uint8_t *data, unsigned length, NSTimeInterval observedAt) {
+    if (sp_ai_packed_heartbeat || observedAt <= sp_ai_pose_at ||
+        (sp_ai_pose_at > 0 && observedAt - sp_ai_pose_at < 1.0 && seq == sp_ai_pose_seq)) return;
+    sp_ai_set_pose(seq, data, length, observedAt);
 }
 
 static SPAIWorldPose sp_ai_game_pose(SPAINavSample sample) {
@@ -221,15 +227,30 @@ static void sp_ai_game_update(const uint8_t *data, size_t length, NSTimeInterval
     sp_ai_record_health_reference(observedAt, player == SP_HEALTH_PUBLIC ? sp_ai_game_hp : SP_VISUAL_HP_UNKNOWN);
 }
 
-static void sp_ai_heartbeat(uint8_t seq, const uint8_t *data, size_t length, NSTimeInterval observedAt) {
+static BOOL sp_ai_accept_heartbeat(uint8_t seq, NSTimeInterval observedAt) {
     static NSTimeInterval lastHeartbeat;
-    if (observedAt <= lastHeartbeat) return;
-    if (sp_ai_heartbeat_seen && seq == sp_ai_heartbeat_seq) return;
+    if (observedAt <= lastHeartbeat || (sp_ai_heartbeat_seen && seq == sp_ai_heartbeat_seq)) return NO;
     if (!sp_ai_heartbeat_seen) sp_stub_log("AI telemetry: independent heartbeat detected");
     sp_ai_heartbeat_seen = YES;
     sp_ai_heartbeat_seq = seq;
     lastHeartbeat = observedAt;
+    return YES;
+}
+
+static void sp_ai_heartbeat(uint8_t seq, const uint8_t *data, size_t length, NSTimeInterval observedAt) {
+    if (!sp_ai_accept_heartbeat(seq, observedAt)) return;
+    sp_ai_packed_heartbeat = NO;
     sp_ai_game_update(data, length, observedAt);
+}
+
+static void sp_ai_bundle_heartbeat(uint8_t seq, const uint8_t *data, unsigned length, NSTimeInterval observedAt) {
+    SPAIObservationBundle bundle = sp_ai_strip_bundle(data, length);
+    if (!bundle.state || !sp_ai_accept_heartbeat(seq, observedAt)) return;
+    sp_ai_packed_heartbeat = YES;
+    sp_ai_set_pose(seq, bundle.pose, SP_AI_STRIP_RECORD_BYTES, observedAt);
+    if (bundle.progression) sp_ai_xp_heartbeat(seq, bundle.progression, SP_AI_STRIP_RECORD_BYTES, observedAt);
+    if (bundle.health) sp_ai_health_heartbeat(seq, bundle.health, SP_AI_STRIP_RECORD_BYTES, observedAt);
+    sp_ai_game_update(bundle.state, SP_AI_STRIP_RECORD_BYTES, observedAt);
 }
 
 @interface SPGameAIController : NSObject
@@ -657,8 +678,10 @@ static void sp_ai_note_event(void *context, const char *message) {
     if (!paused) _manualResumeAt = 0;
     BOOL preview = diagnosticsRequested && !paused && thermal == NSProcessInfoThermalStateNominal;
     BOOL healthDiag = self.healthDiagnostics && !self.autonomousTest;
-    BOOL healthPreview = healthDiag && !paused && fresh && thermal == NSProcessInfoThermalStateNominal;
+    BOOL waitingForHealth = self.autonomousTest && !sp_ai_health_known(sp_ai_game_hp);
+    BOOL healthPreview = (healthDiag || waitingForHealth) && !paused && fresh && thermal == NSProcessInfoThermalStateNominal;
     sp_ai_health_enable(healthPreview);
+    if (healthPreview) sp_ai_finish_health_comparison(now);
     NSTimeInterval interval = reduced ? 0.8 : 0.4;
     if (thermal != _lastThermal || !_lastPhase) {
         _lastThermal = thermal;
@@ -686,7 +709,6 @@ static void sp_ai_note_event(void *context, const char *message) {
     } else if (self.autonomousTest) {
         [self showPhase:[self advance:sample now:now reduced:reduced]];
     } else if (healthDiag) {
-        sp_ai_finish_health_comparison(now);
         NSString *status = !healthPreview ? (fresh ? @"HP PAUSED" : @"AI STALE") : @"HP NO VIEW";
         if (healthPreview && sp_ai_health_visual_at > 0 && now - sp_ai_health_visual_at < 2.0 &&
             sp_ai_health_visual_result != SP_VISUAL_HP_UNKNOWN)

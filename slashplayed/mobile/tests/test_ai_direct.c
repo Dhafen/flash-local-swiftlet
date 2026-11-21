@@ -35,6 +35,33 @@ static void test_padded_observation_strip(void) {
     assert(!sp_ai_strip_payload_length(pose, sizeof pose));
 }
 
+static void test_bundled_observation_strip(void) {
+    uint8_t payload[113] = {'A', 'I', 1};
+    static const uint8_t pose[] = {'A', 'P', 1, 3, 0, 0, 0, 7, 0, 0, 0, 8, 0, 0, 0, 9, 64, 1};
+    static const uint8_t xp[] = {'A', 'X', 1, 1, 0, 0, 0, 15, 0, 0, 0, 40, 0, 12};
+    static const uint8_t health[] = {'A', 'H', 1, 1, 0, 50, 0, 60, 0, 180, 0, 90};
+    memcpy(payload + 18, pose, sizeof pose);
+    memcpy(payload + 36, xp, sizeof xp);
+    memcpy(payload + 54, health, sizeof health);
+
+    SPAIObservationBundle decoded = sp_ai_strip_bundle(payload, sizeof payload);
+    assert(decoded.state == payload);
+    assert(sp_ai_world_pose(decoded.pose, 18).headingKnown);
+    assert(sp_ai_progression(decoded.progression, 18).xpKnown);
+    assert(sp_ai_health_region(decoded.health, 18));
+    assert(!sp_ai_strip_bundle(payload, 71).state);
+    payload[112] = 1;
+    assert(!sp_ai_strip_bundle(payload, sizeof payload).state);
+    payload[112] = 0;
+    payload[19] = 'X';
+    assert(!sp_ai_strip_bundle(payload, sizeof payload).state);
+    memset(payload + 18, 0, sizeof payload - 18);
+    decoded = sp_ai_strip_bundle(payload, sizeof payload);
+    assert(decoded.state && !decoded.pose && !decoded.progression && !decoded.health);
+    payload[21] = 3;
+    assert(!sp_ai_strip_bundle(payload, sizeof payload).state);
+}
+
 static void test_restriction_strip(void) {
     uint8_t packet[113] = {'A', 'E', 1, 1, 0};
     const char action[] = "SetPreferredGamepadInteractTarget()";
@@ -309,6 +336,14 @@ static void test_combat_feedback(void) {
     assert(!sp_ai_observe_own_damage(&combat, (SPAIOwnHit){1, true}, 9.5));
     assert(sp_ai_observe_own_damage(&combat, (SPAIOwnHit){2, true}, 10));
     assert(sp_ai_combat_budget_open(combat));
+
+    combat = (SPAICombatEvidence){.lastHP = 100};
+    sp_ai_accept_probe(&combat, 1);
+    assert(sp_ai_observe_damage(&combat, 80, 1.5));
+    for (unsigned i = 0; i < 3; ++i) sp_ai_accept_probe(&combat, 2 + i);
+    assert(!sp_ai_observe_damage(&combat, 80, 5));
+    assert(sp_ai_engagement(combat, SP_MOVE_NONE, 16, false, false) == SP_ENGAGE_DAMAGE_UNKNOWN);
+    assert(!sp_ai_combat_budget_open(combat));
 }
 
 static void test_health_status(void) {
@@ -471,6 +506,7 @@ int main(void) {
     test_restriction_strip();
     test_movement_ownership();
     test_padded_observation_strip();
+    test_bundled_observation_strip();
     SPHealthReference hp[] = {{1.0, 27}, {1.5, 27}};
     uint8_t actual = 255;
     assert(sp_ai_compare_visible_health(hp, 1, 1.25, 90, 1.5, &actual) == SP_HEALTH_COMPARE_PENDING);

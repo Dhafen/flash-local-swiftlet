@@ -297,12 +297,12 @@ replace_once(hover_native, "    sp_hover_misses = 0;\n    sp_hover_crop(YES, hei
     sp_hover_crop(YES, height);""")
 
 
-# Independent, checksummed single-frame diagnostic heartbeat on iPhone.
+# Independent, checksummed single-frame telemetry heartbeat on iPhone.
 # The regular UI rectangle transport remains unchanged for other platforms.
 replace_once(hover_lua, "local sinceScan = SCAN_INTERVAL",
     """local sinceScan = SCAN_INTERVAL
-local aiElapsed, aiBeat, aiFrame, aiPoseFrame, aiXPFrame, aiHealthFrame, aiTick = 1, 0, nil, nil, nil, nil, 0
-local aiPosePending
+local aiElapsed, aiBeat, aiFrame, aiTick = 1, 0, nil, 0
+local aiEmptyRecord = string.rep(string.char(0), 18)
 local function aiPacket(kind, payload)
     local b = {65, kind, aiBeat, 0, 1}
     for i = 1, PAYLOAD_BYTES do b[5+i] = payload:byte(i) or 0 end
@@ -323,8 +323,7 @@ local function aiHeartbeat()
         healthBounds = spAIVisibleHealthBounds() or string.char(65, 72, 1, 0) .. string.rep(string.char(0), 14)
     end
     spHoverStage = "idle"
-    return aiPacket(73, state), pose and aiPacket(80, pose) or nil, progression and aiPacket(88, progression) or nil,
-        healthBounds and aiPacket(72, healthBounds) or nil
+    return aiPacket(66, state .. (pose or aiEmptyRecord) .. (progression or aiEmptyRecord) .. (healthBounds or aiEmptyRecord))
 end""")
 replace_once(hover_lua, "    if #chunks > 0 and (#chunks > 1 or chunkIndex == 0) then",
     """    if SPPhoneTouchRects then
@@ -332,24 +331,10 @@ replace_once(hover_lua, "    if #chunks > 0 and (#chunks > 1 or chunkIndex == 0)
         aiTick = aiTick + 1
         if not aiFrame or aiElapsed >= 0.5 then
             aiElapsed = 0
-            aiFrame, aiPoseFrame, aiXPFrame, aiHealthFrame = aiHeartbeat()
+            aiFrame = aiHeartbeat()
         end
         if aiTick % 4 == 0 then
             showChunk(aiFrame)
-            aiPosePending = aiPoseFrame
-            return
-        end
-        if aiPosePending and aiTick % 8 == 1 then
-            showChunk(aiPosePending)
-            aiPosePending = nil
-            return
-        end
-        if aiXPFrame and aiTick % 16 == 6 then
-            showChunk(aiXPFrame)
-            return
-        end
-        if aiHealthFrame and aiTick % 16 == 10 then
-            showChunk(aiHealthFrame)
             return
         end
         if spHoverRestriction and aiTick % 16 == 14 then
@@ -364,16 +349,20 @@ replace_once(hover_lua, 'strip:SetScript("OnUpdate", function(self, elapsed)',
 replace_once(hover_lua, "if #chunks > 0 and (#chunks > 1 or chunkIndex == 0) then",
     "if #chunks > 0 and (SPPhoneTouchRects or #chunks > 1 or chunkIndex == 0) then")
 replace_once(strip_header, "if (frame[0] != 'V' || frame[1] != 'W') return 0;",
-    "if (!((frame[0] == 'V' && frame[1] == 'W') || (frame[0] == 'A' && (frame[1] == 'I' || frame[1] == 'P' || frame[1] == 'X' || frame[1] == 'H' || frame[1] == 'E')))) return 0;")
+    "if (!((frame[0] == 'V' && frame[1] == 'W') || (frame[0] == 'A' && (frame[1] == 'B' || frame[1] == 'I' || frame[1] == 'P' || frame[1] == 'X' || frame[1] == 'H' || frame[1] == 'E')))) return 0;")
 replace_once(hover_native, "    static sph_rect rects[SPH_MAX_RECTS];",
-    """    if (frame[0] == 'A' && (frame[1] == 'I' || frame[1] == 'P' || frame[1] == 'X' || frame[1] == 'H' || frame[1] == 'E')) {
+    """    if (frame[0] == 'A' && (frame[1] == 'B' || frame[1] == 'I' || frame[1] == 'P' || frame[1] == 'X' || frame[1] == 'H' || frame[1] == 'E')) {
 #if !TARGET_OS_VISION
         if (getenv("SP_PHONE_UI_RECTS") && frame[3] == 0 && frame[4] == 1) {
+            _Static_assert(SPH_PAYLOAD_BYTES >= SP_AI_STRIP_BUNDLE_BYTES, "AI bundle exceeds strip capacity");
+            if (frame[1] == 'B') {
+                sp_ai_bundle_heartbeat(frame[2], frame + 5, SPH_PAYLOAD_BYTES, observedAt);
+                return;
+            }
             if (frame[1] == 'E') {
                 sp_ai_restriction_heartbeat(frame + 5, SPH_PAYLOAD_BYTES);
                 return;
             }
-            _Static_assert(SPH_PAYLOAD_BYTES >= SP_AI_STRIP_RECORD_BYTES, "AI record exceeds strip capacity");
             unsigned aiLength = sp_ai_strip_payload_length(frame + 5, SPH_PAYLOAD_BYTES);
             if (!aiLength) return;
             if (frame[1] == 'P') sp_ai_pose_heartbeat(frame[2], frame + 5, aiLength, observedAt);

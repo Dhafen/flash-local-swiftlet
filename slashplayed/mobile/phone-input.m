@@ -523,15 +523,17 @@ static UIButton *sp_mobile_button(NSString *title, NSString *label, id owner, SE
         SPInputView *input = weakSelf;
         if (input) [input->_mobileAI clearGrindRoute];
     }];
-    UIAction *aiTestMode = [UIAction actionWithTitle:@"Toggle automation on authorized test realm" image:nil identifier:nil handler:^(__kindof UIAction *action) {
+    UIAction *aiTestMode = [UIAction actionWithTitle:@"Start farming test (authorized realm)" image:nil identifier:nil handler:^(__kindof UIAction *action) {
         SPInputView *input = weakSelf;
         if (!input) return;
         [input->_mobileAI stop];
-        input->_mobileAI.autonomousTest = !input->_mobileAI.autonomousTest;
-        input->_mobileAI.observationSelected = !input->_mobileAI.autonomousTest;
+        input->_mobileAI.autonomousTest = YES;
+        input->_mobileAI.observationSelected = NO;
+        input->_mobileAI.modelDiagnostics = NO;
+        input->_mobileAI.healthDiagnostics = NO;
         input->_mobileAIButton.showsMenuAsPrimaryAction = NO;
-        [input->_mobileAIButton setTitle:input->_mobileAI.autonomousTest ? @"TEST READY" : @"OBS READY"
-            forState:UIControlStateNormal];
+        [input->_mobileAIButton setTitle:@"TEST READY" forState:UIControlStateNormal];
+        dispatch_async(dispatch_get_main_queue(), ^{ [input sp_mobile_ai_toggle:input->_mobileAIButton]; });
     }];
     UIAction *aiModels = [UIAction actionWithTitle:@"Toggle model diagnostics in observation mode" image:nil identifier:nil handler:^(__kindof UIAction *action) {
         SPInputView *input = weakSelf;

@@ -6,8 +6,8 @@
 typedef struct {
     double now, movementEndsAt;
     uint16_t distance;
-    uint8_t playerHP, targetHP, positionCounter;
-    unsigned targetCommands, movementCommands, attacks, hits, lootCommands, stalls, approaches;
+    uint8_t playerHP, targetHP, positionCounter, targetEpoch, targetHits;
+    unsigned targetCommands, movementCommands, attacks, hits, kills, lootCommands, stalls, approaches;
     bool selected, inCombat, looted, blockAllMovement, suppressDamage, rejectAttack;
     bool suppressLootConfirmation;
     SPAIRoute route;
@@ -28,6 +28,8 @@ static bool submit(void *context, const char *action, SPAINavSample sample, doub
         ++game->targetCommands;
         bool atSpawn = game->geometryTarget ? game->now >= 2 : game->corner ? game->routeFirstQ4 >= 40 :
             game->route.count ? game->routePositionQ4 >= 32 : game->now >= 2;
+        if (!game->selected && !game->looted && atSpawn)
+            game->targetEpoch = game->targetEpoch % UINT8_MAX + 1;
         game->selected = !game->looted && atSpawn;
     } else if (!strcmp(action, "FORWARD") || !strcmp(action, "STRAFE_LEFT")) {
         assert((game->route.count || game->selected) && game->targetHP > 0 && (hold == 0.60 || hold == 0.20));
@@ -36,7 +38,7 @@ static bool submit(void *context, const char *action, SPAINavSample sample, doub
         game->movementEndsAt = game->now + hold;
     } else if (!strcmp(action, "TURN_LEFT") || !strcmp(action, "TURN_RIGHT")) {
         assert((game->geometryTarget ? game->selected : game->corner && !game->selected) &&
-            (hold == 0.10 || hold == 0.28));
+            !game->inCombat && (hold == 0.10 || hold == 0.28));
         int bins = hold == 0.28 ? 32 : 10;
         game->heading = (uint8_t)(game->heading + (!strcmp(action, "TURN_LEFT") ? bins : -bins));
         ++game->turns;
@@ -50,7 +52,9 @@ static bool submit(void *context, const char *action, SPAINavSample sample, doub
         if (game->rejectAttack) return false;
         if (game->distance <= 16 && !game->suppressDamage) {
             ++game->hits;
+            ++game->targetHits;
             game->targetHP -= 50;
+            if (!game->targetHP) ++game->kills;
             game->inCombat = game->targetHP > 0;
         }
     } else if (!strcmp(action, "LOOT")) {
@@ -115,16 +119,16 @@ static SPAIEncounterObservation sample(GameSimulator *game) {
     }
     if (game->inCombat) flags |= 32;
     SPAINavSample nav = {game->now, {SP_MOTION_POSITION, game->positionCounter, game->looted},
-        {game->selected ? 1 : 0, 1, SP_AI_TAB_BOUND | SP_AI_ROTATION_BOUND,
+        {game->selected ? game->targetEpoch : 0, 1, SP_AI_TAB_BOUND | SP_AI_ROTATION_BOUND,
             game->selected ? game->distance : SP_AI_DISTANCE_UNKNOWN},
         game->selected && game->targetHP ? column : 0};
     SPAIWorldPose pose = {.map = 0, .firstQ4 = game->routeFirstQ4, .secondQ4 = game->routePositionQ4,
         .heading = game->corner || game->geometryTarget ? game->heading : 64, .epoch = 1,
-        .valid = game->route.count > 0, .headingKnown = true, .observedAt = game->now, .sequence = (uint8_t)(2 * game->now),
+        .valid = game->route.count > 0, .headingKnown = true, .observedAt = game->now, .sequence = (uint8_t)(unsigned)(2 * game->now),
         .targetKnown = game->geometryTarget && game->selected, .targetFirstQ4 = (int16_t)game->distance};
     return (SPAIEncounterObservation){nav, flags, game->playerHP, game->targetHP, meta, 1 | 4 | 64 | 128, corpse,
         sp_ai_hp_known(game->playerHP) ? SP_HEALTH_PUBLIC : SP_HEALTH_RESTRICTED, pose,
-        {game->hits % 4, game->selected && game->hits > 0}};
+        {game->targetHits % 4, game->selected && game->targetHits > 0}};
 }
 
 static void run(GameSimulator *game, const char *finish, bool requireLoot) {
@@ -144,6 +148,65 @@ static void run(GameSimulator *game, const char *finish, bool requireLoot) {
     }
     fprintf(stderr, "did not reach phase %s\n", finish);
     assert(!"simulator timed out");
+}
+
+static void test_continuous_session(void) {
+    const unsigned sessionSeconds = 30 * 60;
+    // Start near the wire-format wrap to cover a rollover across distinct targets.
+    GameSimulator game = {.distance = 44, .playerHP = 100, .targetHP = 100, .targetEpoch = 247};
+    SPAIEncounter planner = {.combatEvidence.lastHP = 255};
+    SPAIApproachExamples examples = {0};
+    SPAIEncounterAdapter adapter = {&game, submit, release, observe_navigation, note};
+    unsigned confirmed = 0, returnedToSearch = 0;
+    bool searchPending = false, wrappedEpoch = false;
+    for (game.now = 1; game.now <= 1 + sessionSeconds; game.now += 0.5) {
+        SPAIEncounterObservation observed = sample(&game);
+        const char *phase = sp_ai_advance(&planner, observed, game.now, false, &examples, adapter);
+        if (!strcmp(phase, "LOOT OK")) {
+            assert(!searchPending && game.selected && game.looted && game.targetHP == 0);
+            assert(game.kills == confirmed + 1 && game.targetHits == 2 && game.lootCommands == game.kills);
+            ++confirmed;
+            searchPending = true;
+            game.selected = game.looted = false;
+            game.targetHP = 100;
+            game.targetHits = 0;
+            game.distance = confirmed % 2 ? 72 : 44;
+        } else if (searchPending && !strcmp(phase, "SEARCH")) {
+            ++returnedToSearch;
+            searchPending = false;
+            if (game.targetEpoch == 1) wrappedEpoch = true;
+        }
+    }
+    assert(confirmed >= 20 && returnedToSearch >= 20 && wrappedEpoch);
+    assert(returnedToSearch + (searchPending ? 1u : 0u) == confirmed);
+    assert(game.approaches >= confirmed && game.kills - confirmed <= 1);
+    printf("30 simulated minutes with public health and mock own-hit evidence: %u verified kills with loot, %u returns to search\n",
+        confirmed, returnedToSearch);
+}
+
+static void test_protected_health_interrupts_approach(SPAIRoute route) {
+    GameSimulator game = {.distance = 44, .playerHP = 100, .targetHP = 100,
+        .geometryTarget = true, .route = route};
+    SPAIEncounter planner = {.combatEvidence.lastHP = 255, .route = route};
+    SPAIApproachExamples examples = {0};
+    SPAIEncounterAdapter adapter = {&game, submit, release, observe_navigation, note};
+    for (game.now = 1; game.now < 20; game.now += 0.5) {
+        SPAIEncounterObservation observed = sample(&game);
+        sp_ai_advance(&planner, observed, game.now, false, &examples, adapter);
+        if (game.movementEndsAt) break;
+    }
+    assert(game.movementCommands == 1 && game.movementEndsAt > game.now);
+    assert(game.selected && !game.inCombat && !game.hits);
+    unsigned targetCommands = game.targetCommands, attacks = game.attacks;
+    game.playerHP = UINT8_MAX;
+    game.now = (game.now + game.movementEndsAt) / 2;
+    for (unsigned i = 0; i < 5; ++i, game.now += 0.5) {
+        SPAIEncounterObservation observed = sample(&game);
+        assert(!strcmp(sp_ai_advance(&planner, observed, game.now, false, &examples, adapter), "HP SECRET"));
+        assert(!game.movementEndsAt && !planner.pulse.deadline);
+    }
+    assert(game.targetCommands == targetCommands && game.attacks == attacks);
+    assert(game.movementCommands == 1 && !game.turns && !game.lootCommands);
 }
 
 int main(void) {
@@ -216,6 +279,7 @@ int main(void) {
     sp_ai_route_calibrate_leg(&geometry.route.legs[1], next, nextEnd);
     run(&geometry, "SEARCH", true);
     assert(geometry.turns == 2 && geometry.approaches == 1 && geometry.hits == 2 && geometry.lootCommands == 1);
+    test_protected_health_interrupts_approach(geometry.route);
     GameSimulator uncalibrated = {.distance = 44, .playerHP = 100, .targetHP = 100, .geometryTarget = true,
         .heading = 64, .route = geometry.route};
     uncalibrated.route.count = 1;
@@ -242,6 +306,7 @@ int main(void) {
     assert(rules.modelMoves == 0 && rules.stalls == 2 && rules.hits == 0);
     assert(learned.modelMoves >= 1 && learned.hits == 2 && learned.lootCommands == 1);
 
+    test_continuous_session();
     puts("Production planner simulator passed farming, wall, no damage, rejected attack and protected health");
     puts("Recorded route simulator passed waypoint, 90-degree corner, farm and route blockage");
     puts("Selected-target simulation passed turn, approach and farm with nameplates unavailable");

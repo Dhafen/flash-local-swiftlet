@@ -4,7 +4,35 @@
 #include <stdbool.h>
 #include <stdint.h>
 
-enum { SP_AI_STRIP_RECORD_BYTES = 18 };
+enum { SP_AI_STRIP_RECORD_BYTES = 18, SP_AI_STRIP_BUNDLE_BYTES = 4 * SP_AI_STRIP_RECORD_BYTES };
+
+typedef struct {
+    const uint8_t *state, *pose, *progression, *health;
+} SPAIObservationBundle;
+
+static inline bool sp_ai_strip_is_zero(const uint8_t *bytes, unsigned length) {
+    for (unsigned i = 0; i < length; ++i)
+        if (bytes[i]) return false;
+    return true;
+}
+
+// AB carries the existing AI/AP/AX/AH records in fixed slots. Optional records
+// are all-zero when absent, so missing pose cannot inherit an earlier sample.
+static inline SPAIObservationBundle sp_ai_strip_bundle(const uint8_t *payload, unsigned capacity) {
+    if (capacity < SP_AI_STRIP_BUNDLE_BYTES || payload[0] != 'A' || payload[1] != 'I' ||
+        !sp_ai_strip_is_zero(payload + SP_AI_STRIP_BUNDLE_BYTES, capacity - SP_AI_STRIP_BUNDLE_BYTES))
+        return (SPAIObservationBundle){0};
+
+    SPAIObservationBundle bundle = {.state = payload};
+    const uint8_t **slots[] = {&bundle.pose, &bundle.progression, &bundle.health};
+    static const uint8_t types[] = {'P', 'X', 'H'};
+    for (unsigned i = 0; i < sizeof types; ++i) {
+        const uint8_t *record = payload + (i + 1) * SP_AI_STRIP_RECORD_BYTES;
+        if (record[0] == 'A' && record[1] == types[i]) *slots[i] = record;
+        else if (!sp_ai_strip_is_zero(record, SP_AI_STRIP_RECORD_BYTES)) return (SPAIObservationBundle){0};
+    }
+    return bundle;
+}
 
 typedef struct {
     uint8_t kind;
@@ -24,17 +52,15 @@ static inline SPRuntimeRestriction sp_ai_strip_restriction(const uint8_t *payloa
         if (!symbol) return (SPRuntimeRestriction){0};
         result.action[i] = (char)c;
     }
-    for (unsigned i = 5 + length; i < capacity; ++i)
-        if (payload[i]) return (SPRuntimeRestriction){0};
-    return result;
+    unsigned used = 5 + length;
+    return sp_ai_strip_is_zero(payload + used, capacity - used) ? result : (SPRuntimeRestriction){0};
 }
 
 // The shared pixel strip pads each single-record AI message to its chunk size.
 static inline unsigned sp_ai_strip_payload_length(const uint8_t *payload, unsigned capacity) {
-    if (capacity < SP_AI_STRIP_RECORD_BYTES) return 0;
-    for (unsigned i = SP_AI_STRIP_RECORD_BYTES; i < capacity; ++i)
-        if (payload[i]) return 0;
-    return SP_AI_STRIP_RECORD_BYTES;
+    return capacity >= SP_AI_STRIP_RECORD_BYTES &&
+        sp_ai_strip_is_zero(payload + SP_AI_STRIP_RECORD_BYTES, capacity - SP_AI_STRIP_RECORD_BYTES)
+        ? SP_AI_STRIP_RECORD_BYTES : 0;
 }
 
 #endif

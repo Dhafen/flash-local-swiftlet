@@ -54,13 +54,31 @@ C_QuestLog = {GetNumQuestLogEntries = function() error("not available") end}
 assert(progression() == nil)
 print("optional public XP and quest count tests passed")
 UIParent = {GetWidth = val(1000), GetHeight = val(500), GetEffectiveScale = val(1)}
-WolkaraMobilePlayer = {health = {IsForbidden = val(false), IsVisible = val(true), GetEffectiveAlpha = val(1),
-    GetEffectiveScale = val(1), GetRect = function() return 100, 400, 200, 25 end}}
+local healthRectReads = 0
+local healthBar = {IsForbidden = val(false), IsProtected = val(false), IsVisible = val(true), GetEffectiveAlpha = val(1),
+    GetEffectiveScale = val(1), GetRect = function()
+        healthRectReads = healthRectReads + 1
+        return 100, 400, 200, 25
+    end}
+WolkaraMobilePlayer = {IsForbidden = val(false), IsProtected = val(false), health = healthBar}
 assert(assert(healthBounds()):sub(1, 4) == string.char(65, 72, 1, 1))
-WolkaraMobilePlayer.health.IsVisible = val(false)
-assert(healthBounds() == nil)
-WolkaraMobilePlayer.health.IsVisible = val(true)
-WolkaraMobilePlayer.health.GetRect = function() return secret, 400, 200, 25 end
+local function rejectsGeometry(frame, property, method)
+    local original, previousReads = frame[property], healthRectReads
+    frame[property] = method
+    assert(healthBounds() == nil and healthRectReads == previousReads, property .. " must reject before measurement")
+    frame[property] = original
+end
+for _, frame in ipairs({WolkaraMobilePlayer, healthBar}) do
+    rejectsGeometry(frame, "IsForbidden", val(true))
+    rejectsGeometry(frame, "IsForbidden", val(secret))
+    rejectsGeometry(frame, "IsProtected", val(true))
+    rejectsGeometry(frame, "IsProtected", val(secret))
+    rejectsGeometry(frame, "IsProtected", nil)
+end
+rejectsGeometry(healthBar, "IsVisible", val(false))
+rejectsGeometry(healthBar, "IsVisible", val(secret))
+rejectsGeometry(healthBar, "GetEffectiveAlpha", val(secret))
+healthBar.GetRect = function() return secret, 400, 200, 25 end
 assert(healthBounds() == nil)
 print("visible player health geometry tests passed")
 
