@@ -46,9 +46,11 @@ def patch_input():
     SPMobileJumpButton *_mobileJump;
     UIButton *_mobileEdit, *_mobileUI, *_mobileReset, *_mobileSpeed;
     UIButton *_mobileRotation, *_mobileAIButton;
+    UILabel *_mobileAIStatus;
     SPGameAIController *_mobileAI;
     SPMovementCommand _mobileAIMovement;
     NSUInteger _mobileAIKeyGeneration;
+    BOOL _mobileAIStartPending;
     NSMutableIndexSet *_mobilePhysicalKeys;
     NSTimeInterval _mobileAIManualUntil;
     UIPanGestureRecognizer *_mobileJumpPan, *_mobileRotationPan;

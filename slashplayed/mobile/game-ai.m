@@ -258,8 +258,8 @@ static void sp_ai_bundle_heartbeat(uint8_t seq, const uint8_t *data, unsigned le
 @interface SPGameAIController : NSObject
 @property(nonatomic, readonly) BOOL active;
 @property(nonatomic, readonly) BOOL manualPaused;
-@property(nonatomic) BOOL autonomousTest;
-@property(nonatomic) BOOL observationSelected;
+@property(nonatomic, readonly) BOOL autonomousTest;
+@property(nonatomic) BOOL farmingAuthorized;
 @property(nonatomic) BOOL modelDiagnostics;
 @property(nonatomic) BOOL healthDiagnostics;
 @property(nonatomic, copy) BOOL (^action)(NSString *, CGPoint, NSTimeInterval, NSTimeInterval);
@@ -336,6 +336,7 @@ static void sp_ai_note_event(void *context, const char *message) {
 }
 - (BOOL)active { return _active; }
 - (BOOL)manualPaused { return _manualPaused; }
+- (BOOL)autonomousTest { return self.farmingAuthorized && !self.modelDiagnostics && !self.healthDiagnostics; }
 
 - (void)yieldToManualInput {
     if (!_active) return;
@@ -354,6 +355,7 @@ static void sp_ai_note_event(void *context, const char *message) {
     if (!_active || !_manualPaused) return;
     _manualResumeAt = NSProcessInfo.processInfo.systemUptime + 1.0;
     _manualPaused = NO;
+    if (self.status) self.status(@"WAIT DATA");
 }
 
 - (void)sampleRecordedLeg:(NSUInteger)generation {
@@ -673,8 +675,8 @@ static void sp_ai_note_event(void *context, const char *message) {
     BOOL fresh = sp_ai_sample_fresh(sample.at, now);
     if (fresh) _lastFreshGameAt = now;
     else if (self.autonomousTest && now - _lastFreshGameAt >= 6.0) {
-        self.autonomousTest = NO;
-        [self fail:@"AI MODE"];
+        self.farmingAuthorized = NO;
+        [self fail:@"AI STALE"];
         return;
     }
     BOOL paused = _manualPaused || (_manualResumeAt > 0 && (!fresh || sample.at <= _manualResumeAt));
