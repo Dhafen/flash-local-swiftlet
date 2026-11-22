@@ -502,7 +502,91 @@ static void test_route_turn_requires_binding_and_confirmed_heading(void) {
     assert(sp_ai_heading_error(250, 4) == -10);
 }
 
+static void append_verified_route_leg(SPAIRoute *route, SPAIWorldPose start, SPAIWorldPose end) {
+    end.heading = start.heading;
+    start.observedAt = 1;
+    end.observedAt = 2;
+    assert(sp_ai_route_append(route, start, end));
+    sp_ai_route_calibrate_leg(&route->legs[route->count - 1], start, end);
+    assert(route->legs[route->count - 1].calibrated);
+}
+
+static void test_route_start_partway(void) {
+    SPAIWorldPose start = {.map = 7, .valid = true, .headingKnown = true, .heading = 64, .epoch = 1};
+    SPAIWorldPose joint = start;
+    joint.secondQ4 = 40;
+    SPAIWorldPose end = joint;
+    end.firstQ4 = 40;
+    SPAIRoute route = {0};
+    append_verified_route_leg(&route, start, joint);
+    joint.heading = 0;
+    append_verified_route_leg(&route, joint, end);
+
+    SPAIWorldPose middle = joint;
+    middle.firstQ4 = 20;
+    middle.observedAt = 4;
+    SPAIEncounterObservation observation = {.sample.at = 4, .sample.evidence = {0, 1, SP_AI_TAB_BOUND, SP_AI_DISTANCE_UNKNOWN},
+        .flags = 1, .hp = 100, .movementKeys = 1 | 64 | 128, .playerHealth = SP_HEALTH_PUBLIC, .pose = middle};
+    SPAIApproachExamples examples = {0};
+    SPTestAdapter mock = {.accept = true};
+    SPAIEncounterAdapter adapter = {&mock, test_submit, test_release, test_outcome, NULL};
+    SPAIEncounter startLate = {.route = route, .searchAttempts = 4};
+    assert(!strcmp(sp_ai_advance(&startLate, observation, 4, false, &examples, adapter), "ROUTE"));
+    assert(startLate.route.next == 1 && startLate.routeMoves == 1 && startLate.searchAttempts == 4);
+    assert(mock.submissions == 1 && !strcmp(mock.lastAction, "FORWARD"));
+
+    mock = (SPTestAdapter){.accept = true};
+    for (unsigned i = 0; i < 5; ++i) {
+        SPAIEncounter blocked = {.route = route, .searchAttempts = 4};
+        observation.pose = middle;
+        switch (i) {
+            case 0: observation.pose.map = 8; break;
+            case 1: observation.pose.secondQ4 = 55; break;
+            case 2: observation.pose.headingKnown = false; break;
+            case 3: observation.pose.heading = 128; break;
+            case 4: observation.pose.observedAt = 3; break;
+        }
+        assert(strcmp(sp_ai_advance(&blocked, observation, 4, false, &examples, adapter), "ROUTE") != 0);
+        assert(blocked.route.next == 0 && mock.submissions == 0);
+    }
+
+    observation.pose = middle;
+    SPAIEncounter unverified = {.route = route, .searchAttempts = 4};
+    unverified.route.legs[1].calibrated = false;
+    assert(!strcmp(sp_ai_advance(&unverified, observation, 4, false, &examples, adapter), "ROUTE HOLD"));
+    assert(unverified.route.next == 0 && mock.submissions == 0);
+
+    SPAIEncounter ambiguous = {.route = route, .searchAttempts = 4};
+    end.heading = 128;
+    append_verified_route_leg(&ambiguous.route, end, joint);
+    append_verified_route_leg(&ambiguous.route, joint, end);
+    assert(!strcmp(sp_ai_advance(&ambiguous, observation, 4, false, &examples, adapter), "ROUTE HOLD"));
+    assert(ambiguous.route.next == 0 && mock.submissions == 0);
+
+    SPAIEncounter continuing = {.route = route, .searchAttempts = 4};
+    observation.pose = start;
+    observation.pose.secondQ4 = 20;
+    observation.pose.observedAt = 4;
+    assert(!strcmp(sp_ai_advance(&continuing, observation, 4, false, &examples, adapter), "ROUTE"));
+    assert(continuing.route.next == 0 && continuing.routeDeadline && mock.submissions == 1);
+    observation.pose = middle;
+    for (double now = 4.5; now <= 5; now += 0.5) {
+        observation.sample.at = observation.pose.observedAt = now;
+        assert(!strcmp(sp_ai_advance(&continuing, observation, now, false, &examples, adapter), "ROUTE HOLD"));
+        assert(continuing.route.next == 0 && !continuing.routeDeadline && mock.submissions == 1);
+    }
+    assert(mock.releases == 1);
+}
+
 int main(void) {
+    assert(sp_ai_health_capture_interval_ms(0, true, false, true) == 1000);
+    assert(sp_ai_health_capture_interval_ms(1, true, false, true) == 2500);
+    assert(sp_ai_health_capture_interval_ms(2, true, false, true) == 4000);
+    assert(sp_ai_health_capture_interval_ms(3, true, false, true) == 0);
+    assert(sp_ai_health_capture_interval_ms(4, true, false, true) == 0);
+    assert(sp_ai_health_capture_interval_ms(2, false, false, true) == 0);
+    assert(sp_ai_health_capture_interval_ms(2, true, true, true) == 0);
+    assert(sp_ai_health_capture_interval_ms(2, true, false, false) == 0);
     assert(!sp_ai_health_bounds_fresh(0, 500));
     assert(!sp_ai_health_bounds_fresh(6000, 5999));
     assert(sp_ai_health_bounds_fresh(6000, 7500));
@@ -577,6 +661,7 @@ int main(void) {
     onFoot.firstQ4 -= 4;
     assert(!sp_ai_projected_approach(selected, onFoot));
     test_route_turn_requires_binding_and_confirmed_heading();
+    test_route_start_partway();
     uint8_t health[3][64][4] = {0};
     for (unsigned row = 0; row < 3; ++row)
         for (unsigned x = 0; x < 64; ++x) {

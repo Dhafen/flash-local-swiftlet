@@ -4,9 +4,12 @@ static atomic_bool sp_ai_health_inflight;
 static _Atomic(uint64_t) sp_ai_health_last_ms;
 
 static void sp_health_capture(id<MTLCommandBuffer> cb, id<MTLTexture> texture) {
-    if (!atomic_load(&sp_ai_health_capture_enabled)) return;
     unsigned epoch = atomic_load(&sp_ai_health_capture_epoch);
+    unsigned interval = atomic_load(&sp_ai_health_interval_ms);
+    if (!interval) return;
     uint64_t ms = (uint64_t)(NSProcessInfo.processInfo.systemUptime * 1000);
+    uint64_t previous = atomic_load(&sp_ai_health_last_ms);
+    if (ms < previous + interval) return;
     uint64_t boundsAt = atomic_load(&sp_ai_health_bounds_ms);
     if (!sp_ai_health_bounds_fresh(boundsAt, ms)) return;
     uint64_t bounds = atomic_load(&sp_ai_health_bounds);
@@ -22,8 +25,10 @@ static void sp_health_capture(id<MTLCommandBuffer> cb, id<MTLTexture> texture) {
     size_t width = right - x, barHeight = bottom - y;
     if (width < 48 || width > 1024 || barHeight < 12 || barHeight > 128) return;
     y += barHeight / 5;  // Off the middle row, where Wolkara draws the text.
-    uint64_t previous = atomic_load(&sp_ai_health_last_ms);
-    if (ms < previous + 1000 || !atomic_compare_exchange_strong(&sp_ai_health_last_ms, &previous, ms)) return;
+    NSProcessInfoThermalState thermal = NSProcessInfo.processInfo.thermalState;
+    unsigned liveInterval = sp_ai_health_capture_interval_ms((unsigned)thermal, true, false, true);
+    if (!liveInterval || ms < previous + liveInterval) return;
+    if (!atomic_compare_exchange_strong(&sp_ai_health_last_ms, &previous, ms)) return;
     bool expected = false;
     if (!atomic_compare_exchange_strong(&sp_ai_health_inflight, &expected, true)) return;
     size_t stride = (width * 4 + 255) & ~(size_t)255;
@@ -35,11 +40,13 @@ static void sp_health_capture(id<MTLCommandBuffer> cb, id<MTLTexture> texture) {
     destinationBytesPerRow:stride destinationBytesPerImage:stride * SP_HEALTH_SCAN_ROWS];
     [blit endEncoding];
     [cb addCompletedHandler:^(id<MTLCommandBuffer> done) {
-        if (done.status == MTLCommandBufferStatusCompleted && atomic_load(&sp_ai_health_capture_enabled) &&
+        if (done.status == MTLCommandBufferStatusCompleted && atomic_load(&sp_ai_health_interval_ms) &&
+            NSProcessInfo.processInfo.thermalState < NSProcessInfoThermalStateCritical &&
             atomic_load(&sp_ai_health_capture_epoch) == epoch) {
             uint8_t result = sp_ai_visible_health(data.contents, width, stride, bgra);
             dispatch_async(dispatch_get_main_queue(), ^{
-                if (atomic_load(&sp_ai_health_capture_enabled) && atomic_load(&sp_ai_health_capture_epoch) == epoch) {
+                if (atomic_load(&sp_ai_health_interval_ms) && atomic_load(&sp_ai_health_capture_epoch) == epoch &&
+                    NSProcessInfo.processInfo.thermalState < NSProcessInfoThermalStateCritical) {
                     NSTimeInterval now = NSProcessInfo.processInfo.systemUptime;
                     sp_ai_finish_health_comparison(now);
                     sp_ai_health_visual_result = result;

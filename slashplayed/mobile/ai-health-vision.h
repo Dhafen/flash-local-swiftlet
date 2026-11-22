@@ -6,6 +6,12 @@
 
 enum { SP_VISUAL_HP_UNKNOWN = 255, SP_HEALTH_SCAN_ROWS = 3 };
 
+static inline unsigned sp_ai_health_capture_interval_ms(unsigned thermal, bool requested, bool paused, bool fresh) {
+    static const unsigned intervals[] = {1000, 2500, 4000};  // Nominal, fair, serious.
+    if (!requested || paused || !fresh || thermal >= sizeof intervals / sizeof intervals[0]) return 0;
+    return intervals[thermal];
+}
+
 static inline bool sp_ai_health_bounds_fresh(uint64_t boundsAt, uint64_t now) {
     return boundsAt && now >= boundsAt && now - boundsAt <= 1500;
 }

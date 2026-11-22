@@ -17,7 +17,7 @@ static void sp_ai_restriction_heartbeat(const uint8_t *bytes, unsigned length) {
 }
 
 static atomic_bool sp_p2p_capture_enabled;
-static atomic_bool sp_ai_health_capture_enabled;
+static atomic_uint sp_ai_health_interval_ms;
 static atomic_uint sp_ai_health_capture_epoch;
 static _Atomic(uint64_t) sp_ai_health_bounds, sp_ai_health_bounds_ms;
 static uint8_t sp_ai_health_visual_result = SP_VISUAL_HP_UNKNOWN;
@@ -41,7 +41,7 @@ static void sp_ai_finish_health_comparison(NSTimeInterval now) {
         (unsigned)sp_ai_health_visual_result, (unsigned)reference] UTF8String]);
 }
 static void sp_ai_record_health_reference(NSTimeInterval at, uint8_t hp) {
-    if (!atomic_load(&sp_ai_health_capture_enabled)) return;
+    if (!atomic_load(&sp_ai_health_interval_ms)) return;
     unsigned count = sp_ai_health_reference_count;
     if (count && at <= sp_ai_health_reference[count - 1].at) return;
     if (count == sizeof sp_ai_health_reference / sizeof sp_ai_health_reference[0]) {
@@ -52,10 +52,10 @@ static void sp_ai_record_health_reference(NSTimeInterval at, uint8_t hp) {
     sp_ai_health_reference_count = count + 1;
     sp_ai_finish_health_comparison(at);
 }
-static void sp_ai_health_enable(BOOL enabled) {
-    if (atomic_load(&sp_ai_health_capture_enabled) == enabled) return;
+static void sp_ai_health_set_interval(unsigned interval) {
+    unsigned previous = atomic_exchange(&sp_ai_health_interval_ms, interval);
+    if ((previous != 0) == (interval != 0)) return;
     atomic_fetch_add(&sp_ai_health_capture_epoch, 1);
-    atomic_store(&sp_ai_health_capture_enabled, enabled);
     sp_ai_health_visual_result = SP_VISUAL_HP_UNKNOWN;
     sp_ai_health_visual_at = 0;
     sp_ai_clear_health_comparison();
@@ -345,7 +345,7 @@ static void sp_ai_note_event(void *context, const char *message) {
         sp_ai_navigation_outcome, sp_ai_note_event};
     sp_ai_suspend_encounter(&_encounter, adapter);
     sp_p2p_enable(NO);
-    sp_ai_health_enable(NO);
+    sp_ai_health_set_interval(0);
     [self invalidateDecision];
     [self showPhase:@"AI PAUSED"];
 }
@@ -486,7 +486,7 @@ static void sp_ai_note_event(void *context, const char *message) {
     _visualPreviewStatus = nil;
     _visualPreviewAt = 0;
     sp_p2p_enable(NO);
-    sp_ai_health_enable(NO);
+    sp_ai_health_set_interval(0);
     ++_run;
     if (self.releaseInput) self.releaseInput();
     [self invalidateDecision];
@@ -682,14 +682,18 @@ static void sp_ai_note_event(void *context, const char *message) {
     BOOL preview = diagnosticsRequested && !paused && thermal == NSProcessInfoThermalStateNominal;
     BOOL healthDiag = self.healthDiagnostics && !self.autonomousTest;
     BOOL waitingForHealth = self.autonomousTest && !sp_ai_health_known(sp_ai_game_hp);
-    BOOL healthPreview = (healthDiag || waitingForHealth) && !paused && fresh && thermal == NSProcessInfoThermalStateNominal;
-    sp_ai_health_enable(healthPreview);
-    if (healthPreview) sp_ai_finish_health_comparison(now);
+    _Static_assert(NSProcessInfoThermalStateNominal == 0 && NSProcessInfoThermalStateFair == 1 &&
+                   NSProcessInfoThermalStateSerious == 2 && NSProcessInfoThermalStateCritical == 3,
+                   "Health capture cadence must match iOS thermal states");
+    unsigned healthInterval = sp_ai_health_capture_interval_ms((unsigned)thermal, healthDiag || waitingForHealth, paused, fresh);
+    sp_ai_health_set_interval(healthInterval);
+    if (healthInterval) sp_ai_finish_health_comparison(now);
     if (healthDiag || waitingForHealth) {
         BOOL cropAvailable = atomic_load(&sp_ai_health_bounds) &&
             sp_ai_health_bounds_fresh(atomic_load(&sp_ai_health_bounds_ms), (uint64_t)(now * 1000));
         NSString *state = !fresh ? @"stale telemetry" : paused ? @"manual input" :
-            !healthPreview ? @"thermal pause" : !cropAvailable ? @"layout unavailable" : @"layout available";
+            !healthInterval ? @"thermal pause" : !cropAvailable ? @"layout unavailable" :
+            [NSString stringWithFormat:@"layout available, interval %u ms", healthInterval];
         if (![state isEqualToString:_lastHealthCaptureState]) {
             _lastHealthCaptureState = state;
             sp_stub_log([[NSString stringWithFormat:@"AI health capture: %@", state] UTF8String]);
@@ -698,7 +702,7 @@ static void sp_ai_note_event(void *context, const char *message) {
     NSTimeInterval interval = reduced ? 0.8 : 0.4;
     if (thermal != _lastThermal || !_lastPhase) {
         _lastThermal = thermal;
-        if (thermal == NSProcessInfoThermalStateCritical) {
+        if (thermal >= NSProcessInfoThermalStateCritical) {
             sp_stub_log("AI thermal: critical, stopping");
         } else {
             NSString *diagnostics = preview ? @"allowed" : (diagnosticsRequested ? @"paused" : @"off");
@@ -706,7 +710,7 @@ static void sp_ai_note_event(void *context, const char *message) {
                 (long)thermal, interval, diagnostics] UTF8String]);
         }
     }
-    if (thermal == NSProcessInfoThermalStateCritical) { [self fail:@"AI HEAT"]; return; }
+    if (thermal >= NSProcessInfoThermalStateCritical) { [self fail:@"AI HEAT"]; return; }
     if (fresh) {
         [self observeWorld:sample];
         [self observeProgression:now];
@@ -722,8 +726,8 @@ static void sp_ai_note_event(void *context, const char *message) {
     } else if (self.autonomousTest) {
         [self showPhase:[self advance:sample now:now reduced:reduced]];
     } else if (healthDiag) {
-        NSString *status = !healthPreview ? (fresh ? @"HP PAUSED" : @"AI STALE") : @"HP NO VIEW";
-        if (healthPreview && sp_ai_health_visual_at > 0 && now - sp_ai_health_visual_at < 2.0 &&
+        NSString *status = !healthInterval ? (fresh ? @"HP PAUSED" : @"AI STALE") : @"HP NO VIEW";
+        if (healthInterval && sp_ai_health_visual_at > 0 && now - sp_ai_health_visual_at < 2.0 &&
             sp_ai_health_visual_result != SP_VISUAL_HP_UNKNOWN)
             status = [NSString stringWithFormat:@"HP≈%u%%", (unsigned)sp_ai_health_visual_result];
         [self showPhase:status];

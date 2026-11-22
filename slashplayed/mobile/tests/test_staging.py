@@ -281,7 +281,7 @@ assert 'sample.at <= _manualResumeAt' in poll and 'if (paused)' in poll
 assert 'self.autonomousTest && now - _lastFreshGameAt >= 6.0' in poll
 assert '[_mobilePhysicalKeys addIndex:p.key.keyCode]' in event
 assert '[_mobilePhysicalKeys removeIndex:p.key.keyCode]' in event
-assert 'if (thermal == NSProcessInfoThermalStateCritical) { [self fail:@"AI HEAT"]; return; }' in poll
+assert 'if (thermal >= NSProcessInfoThermalStateCritical) { [self fail:@"AI HEAT"]; return; }' in poll
 assert 'interval = reduced ? 0.8 : 0.4' in poll
 assert 'sp_p2p_enable(preview &&' in poll and '[self previewP2P:run]' in poll.split('} else if (preview) {', 1)[1]
 assert '[self showPhase:fresh ? @"OBS ONLY" : @"AI STALE"]' in poll
@@ -308,5 +308,9 @@ assert 'pressed ? SPKeyDown : SPKeyUp' in event
 start_farming = event.split('actionWithTitle:@"Start farming test (authorized realm)"', 1)[1].split('}];', 1)[0]
 assert 'input->_mobileAI.autonomousTest = YES;' in start_farming
 assert '[input sp_mobile_ai_toggle:input->_mobileAIButton];' in start_farming
-assert '(healthDiag || waitingForHealth)' in poll and 'thermal == NSProcessInfoThermalStateNominal' in poll
+assert 'sp_ai_health_capture_interval_ms((unsigned)thermal, healthDiag || waitingForHealth, paused, fresh)' in poll
+assert 'BOOL preview = diagnosticsRequested && !paused && thermal == NSProcessInfoThermalStateNominal;' in poll
+health_capture = hover.split('static void sp_health_capture(id<MTLCommandBuffer> cb, id<MTLTexture> texture) {', 1)[1].split('\n}', 1)[0]
+assert health_capture.index('!liveInterval') < health_capture.index('newBufferWithLength:stride * SP_HEALTH_SCAN_ROWS')
+assert health_capture.count('thermalState < NSProcessInfoThermalStateCritical') == 2
 assert 'sp_ai_health_visual_result' not in encounter_advance
