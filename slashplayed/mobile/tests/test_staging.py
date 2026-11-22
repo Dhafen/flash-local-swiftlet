@@ -310,6 +310,7 @@ assert 'input->_mobileAI.autonomousTest = YES;' in start_farming
 assert '[input sp_mobile_ai_toggle:input->_mobileAIButton];' in start_farming
 assert 'sp_ai_health_capture_interval_ms((unsigned)thermal, healthDiag || waitingForHealth, paused, fresh)' in poll
 assert 'BOOL preview = diagnosticsRequested && !paused && thermal == NSProcessInfoThermalStateNominal;' in poll
+assert 'if (cropAvailable) {\n                if (!sampleFresh) status = @"HP WAIT";' in poll
 health_capture = hover.split('static void sp_health_capture(id<MTLCommandBuffer> cb, id<MTLTexture> texture) {', 1)[1].split('\n}', 1)[0]
 assert health_capture.index('!liveInterval') < health_capture.index('newBufferWithLength:stride * SP_HEALTH_SCAN_ROWS')
 assert health_capture.count('thermalState < NSProcessInfoThermalStateCritical') == 2

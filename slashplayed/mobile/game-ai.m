@@ -54,7 +54,7 @@ static void sp_ai_record_health_reference(NSTimeInterval at, uint8_t hp) {
 }
 static void sp_ai_health_set_interval(unsigned interval) {
     unsigned previous = atomic_exchange(&sp_ai_health_interval_ms, interval);
-    if ((previous != 0) == (interval != 0)) return;
+    if (interval || !previous) return;
     atomic_fetch_add(&sp_ai_health_capture_epoch, 1);
     sp_ai_health_visual_result = SP_VISUAL_HP_UNKNOWN;
     sp_ai_health_visual_at = 0;
@@ -688,9 +688,9 @@ static void sp_ai_note_event(void *context, const char *message) {
     unsigned healthInterval = sp_ai_health_capture_interval_ms((unsigned)thermal, healthDiag || waitingForHealth, paused, fresh);
     sp_ai_health_set_interval(healthInterval);
     if (healthInterval) sp_ai_finish_health_comparison(now);
+    BOOL cropAvailable = (healthDiag || waitingForHealth) && atomic_load(&sp_ai_health_bounds) &&
+        sp_ai_health_bounds_fresh(atomic_load(&sp_ai_health_bounds_ms), (uint64_t)(now * 1000));
     if (healthDiag || waitingForHealth) {
-        BOOL cropAvailable = atomic_load(&sp_ai_health_bounds) &&
-            sp_ai_health_bounds_fresh(atomic_load(&sp_ai_health_bounds_ms), (uint64_t)(now * 1000));
         NSString *state = !fresh ? @"stale telemetry" : paused ? @"manual input" :
             !healthInterval ? @"thermal pause" : !cropAvailable ? @"layout unavailable" :
             [NSString stringWithFormat:@"layout available, interval %u ms", healthInterval];
@@ -726,10 +726,16 @@ static void sp_ai_note_event(void *context, const char *message) {
     } else if (self.autonomousTest) {
         [self showPhase:[self advance:sample now:now reduced:reduced]];
     } else if (healthDiag) {
-        NSString *status = !healthInterval ? (fresh ? @"HP PAUSED" : @"AI STALE") : @"HP NO VIEW";
-        if (healthInterval && sp_ai_health_visual_at > 0 && now - sp_ai_health_visual_at < 2.0 &&
-            sp_ai_health_visual_result != SP_VISUAL_HP_UNKNOWN)
-            status = [NSString stringWithFormat:@"HP≈%u%%", (unsigned)sp_ai_health_visual_result];
+        NSString *status = fresh ? @"HP PAUSED" : @"AI STALE";
+        if (healthInterval) {
+            BOOL sampleFresh = sp_ai_health_visual_at > 0 && now - sp_ai_health_visual_at < 2.0;
+            status = @"HP NO VIEW";
+            if (cropAvailable) {
+                if (!sampleFresh) status = @"HP WAIT";
+                else if (sp_ai_health_visual_result != SP_VISUAL_HP_UNKNOWN)
+                    status = [NSString stringWithFormat:@"HP≈%u%%", (unsigned)sp_ai_health_visual_result];
+            }
+        }
         [self showPhase:status];
     } else if (preview) {
         if (fresh) {

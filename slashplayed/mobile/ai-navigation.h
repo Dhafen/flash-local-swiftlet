@@ -133,7 +133,7 @@ static inline unsigned sp_ai_route_later_entry(const SPAIRoute *route, SPAIWorld
     unsigned match = route->count;
     for (unsigned i = route->next + 1; i < route->count; ++i) {
         const SPAIRouteLeg *leg = &route->legs[i];
-        if (!leg->calibrated) continue;
+        if (!leg->calibrated || pose.epoch != leg->start.epoch) continue;
         SPAIRouteDecision decision = sp_ai_route_probe_leg(route, i, pose);
         bool canTurnAtStart = decision == SP_ROUTE_FACE &&
             sp_ai_pose_distance2(pose, leg->start) <= SP_ROUTE_RADIUS_Q4 * SP_ROUTE_RADIUS_Q4;

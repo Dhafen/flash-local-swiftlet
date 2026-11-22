@@ -536,7 +536,7 @@ static void test_route_start_partway(void) {
     assert(mock.submissions == 1 && !strcmp(mock.lastAction, "FORWARD"));
 
     mock = (SPTestAdapter){.accept = true};
-    for (unsigned i = 0; i < 5; ++i) {
+    for (unsigned i = 0; i < 6; ++i) {
         SPAIEncounter blocked = {.route = route, .searchAttempts = 4};
         observation.pose = middle;
         switch (i) {
@@ -545,6 +545,7 @@ static void test_route_start_partway(void) {
             case 2: observation.pose.headingKnown = false; break;
             case 3: observation.pose.heading = 128; break;
             case 4: observation.pose.observedAt = 3; break;
+            case 5: ++observation.pose.epoch; break;
         }
         assert(strcmp(sp_ai_advance(&blocked, observation, 4, false, &examples, adapter), "ROUTE") != 0);
         assert(blocked.route.next == 0 && mock.submissions == 0);
