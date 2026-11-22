@@ -62,7 +62,7 @@ local healthBar = {IsForbidden = val(false), IsProtected = val(false), IsVisible
     end}
 WolkaraMobilePlayer = setmetatable({}, {__index = function() error("the secure HUD must never be inspected") end})
 WolkaraMobileHealthGeometry = {IsForbidden = val(false), IsProtected = val(false), IsVisible = val(true), crop = healthBar}
-assert(assert(healthBounds()):sub(1, 4) == string.char(65, 72, 1, 1))
+assert(assert(healthBounds()):sub(1, 4) == string.char(65, 72, 2, 1))
 local function rejectsGeometry(frame, property, method)
     local original, previousReads = frame[property], healthRectReads
     frame[property] = method

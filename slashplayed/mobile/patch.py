@@ -320,7 +320,7 @@ local function aiHeartbeat()
     local healthBounds
     spHoverStage = "health bar bounds"
     if aiBeat % 2 == 0 then
-        healthBounds = spAIVisibleHealthBounds() or string.char(65, 72, 1, 0) .. string.rep(string.char(0), 14)
+        healthBounds = spAIVisibleHealthBounds() or string.char(65, 72, 2, 0) .. string.rep(string.char(0), 14)
     end
     spHoverStage = "idle"
     return aiPacket(66, state .. (pose or aiEmptyRecord) .. (progression or aiEmptyRecord) .. (healthBounds or aiEmptyRecord))

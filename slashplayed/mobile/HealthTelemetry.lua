@@ -285,7 +285,7 @@ local function spAIVisibleHealthBounds()
             local q = math.floor(4095 * value + 0.5)
             return string.char(math.floor(q / 256), q % 256)
         end
-        return string.char(65, 72, 1, 1) .. q12(l) .. q12(t) .. q12(r) .. q12(b) .. string.rep("\0", 6)
+        return string.char(65, 72, 2, 1) .. q12(l) .. q12(t) .. q12(r) .. q12(b) .. string.rep("\0", 6)
     end)
     return ok and bounds or nil
 end

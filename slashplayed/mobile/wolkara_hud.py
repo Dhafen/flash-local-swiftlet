@@ -28,19 +28,35 @@ def protect_hud(source):
     changes = [
         ('local player, target', '''local player, target, healthGeometry
 local PLAYER_WIDTH, PLAYER_HEIGHT, PLAYER_PORTRAIT_WIDTH, HEALTH_HEIGHT = 366, 66, 66, 24
+local HEALTH_GUTTER = 6
 
-local function placeHealthBar(bar, owner, left)
-    bar:SetPoint("TOPLEFT", owner, "TOPLEFT", 4 + left, -20)
-    bar:SetPoint("TOPRIGHT", owner, "TOPRIGHT", -4, -20)
+local function placeHealthBar(bar, owner, left, inset)
+    bar:SetPoint("TOPLEFT", owner, "TOPLEFT", left + inset, -20)
+    bar:SetPoint("TOPRIGHT", owner, "TOPRIGHT", -inset, -20)
+end
+
+local function markHealthBarEdge(bar, side, opposite, r, g)
+    local edge = bar:CreateTexture(nil, "OVERLAY")
+    edge:SetPoint("TOP" .. opposite, bar, "TOP" .. side)
+    edge:SetPoint("BOTTOM" .. opposite, bar, "BOTTOM" .. side)
+    edge:SetWidth(HEALTH_GUTTER)
+    edge:SetColorTexture(r, g, 1, 1)
 end'''),
         ('frame:SetSize(width, unit == "player" and 66 or 58)',
          'frame:SetSize(width, unit == "player" and PLAYER_HEIGHT or 58)'),
         ('        left = 66', '        left = PLAYER_PORTRAIT_WIDTH'),
+        ('local function Bar(parent, height, r, g, b)', 'local function Bar(parent, height, r, g, b, solidTrack)'),
+        ('    ns.Box(bar, "BACKGROUND", 0, 0, 0, 0.55)',
+         '    ns.Box(bar, "BACKGROUND", 0, 0, 0, solidTrack and 1 or 0.55)'),
         ('''    frame.health = Bar(frame, 24, 0.15, 0.75, 0.2)
     frame.health:SetPoint("TOPLEFT", 4 + left, -20)
     frame.health:SetPoint("TOPRIGHT", -4, -20)''',
-         '''    frame.health = Bar(frame, HEALTH_HEIGHT, 0.15, 0.75, 0.2)
-    placeHealthBar(frame.health, frame, left)'''),
+         '''    frame.health = Bar(frame, HEALTH_HEIGHT, 0.15, 0.75, 0.2, unit == "player")
+    placeHealthBar(frame.health, frame, left, unit == "player" and HEALTH_GUTTER or 4)
+    if unit == "player" then
+        markHealthBarEdge(frame.health, "LEFT", "RIGHT", 1, 0)
+        markHealthBarEdge(frame.health, "RIGHT", "LEFT", 0, 1)
+    end'''),
         ('''    player = Unit("WolkaraMobilePlayer", "player", 366, { "TOPLEFT", "TOPLEFT", 12, -10 })''',
          '''    player = Unit("WolkaraMobilePlayer", "player", PLAYER_WIDTH, { "TOPLEFT", "TOPLEFT", 12, -10 })
     -- This empty frame tracks only our layout. Its anchors never depend on the secure player button.
@@ -50,7 +66,7 @@ end'''),
     healthGeometry:Hide()
     healthGeometry.crop = CreateFrame("Frame", nil, healthGeometry)
     healthGeometry.crop:SetHeight(HEALTH_HEIGHT)
-    placeHealthBar(healthGeometry.crop, healthGeometry, PLAYER_PORTRAIT_WIDTH)'''),
+    placeHealthBar(healthGeometry.crop, healthGeometry, PLAYER_PORTRAIT_WIDTH, 0)'''),
         ('''    for _, frame in ipairs({ player, target }) do
         frame:SetScale(scale)
         frame:PlaceSaved()

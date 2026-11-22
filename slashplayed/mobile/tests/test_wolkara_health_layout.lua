@@ -9,13 +9,14 @@ local ns = {db = {hud = {enabled = true, scale = 100}}}
 local hud, inCombat
 function ns.Register(_, module) hud = module; return module end
 function ns.On() end
-function ns.Box() end
+function ns.Box(frame, _, _, _, _, alpha) frame.backdropAlpha = alpha end
 function ns.Disc() return setmetatable({}, {__index = function() return function() end end}) end
 ns.Label, ns.EditFrame, ns.Circle = ns.Disc, ns.Disc, function() end
 
 local methods = {}
 function methods:SetSize(width, height) self.width, self.height = width, height end
 function methods:SetHeight(height) self.height = height end
+function methods:SetWidth(width) self.width = width end
 function methods:SetScale(scale) self.scale = scale end
 function methods:SetPoint(...) self.anchors[#self.anchors + 1] = {...} end
 function methods:ClearAllPoints() self.anchors = {} end
@@ -24,12 +25,18 @@ function methods:Hide() self.shown = false end
 function methods:Show() self.shown = true end
 function methods:GetPoint() error("must not read a secure frame's anchors") end
 function methods:GetRect() error("must not read a secure frame's rectangle") end
-function methods:CreateTexture() return ns.Disc() end
+function methods:SetColorTexture(...) self.color = {...} end
+local fakeFrame = {__index = function(_, key) return methods[key] or function() end end}
+function methods:CreateTexture()
+    local texture = setmetatable({anchors = {}}, fakeFrame)
+    self.textures[#self.textures + 1] = texture
+    return texture
+end
 
 UIParent = {}
 CreateFrame = function(kind, name, parent, template)
-    local frame = setmetatable({kind = kind, parent = parent, template = template or false, anchors = {}, shown = true},
-        {__index = function(_, key) return methods[key] or function() end end})
+    local frame = setmetatable({kind = kind, parent = parent, template = template or false, anchors = {},
+        textures = {}, shown = true}, fakeFrame)
     if name then _G[name] = frame end
     return frame
 end
@@ -45,7 +52,7 @@ assert(loadfile(assert(arg[2])))("WolkaraRoue", ns)
 hud:Init()
 hud.Refresh = function() end
 
-local player = assert(WolkaraMobilePlayer)
+local player, target = assert(WolkaraMobilePlayer), assert(WolkaraMobileTarget)
 local geometry = assert(WolkaraMobileHealthGeometry)
 local crop = geometry.crop
 assert(geometry.kind == "Frame" and not geometry.template and geometry.parent == UIParent)
@@ -55,8 +62,18 @@ assert(geometry.width == player.width and geometry.height == player.height and c
 for i, anchor in ipairs(crop.anchors) do
     local visibleAnchor = player.health.anchors[i]
     assert(anchor[2] == geometry and visibleAnchor[2] == player)
-    for _, field in ipairs({1, 3, 4, 5}) do assert(anchor[field] == visibleAnchor[field]) end
+    for _, field in ipairs({1, 3, 5}) do assert(anchor[field] == visibleAnchor[field]) end
+    local marker = player.health.textures[i]
+    local side, outer = i == 1 and "LEFT" or "RIGHT", i == 1 and "RIGHT" or "LEFT"
+    assert(marker.width == 6 and anchor[4] - visibleAnchor[4] == (i == 1 and -6 or 6))
+    for index, point in ipairs({"TOP", "BOTTOM"}) do
+        local position = marker.anchors[index]
+        assert(position[1] == point .. outer and position[2] == player.health and position[3] == point .. side)
+    end
+    assert(table.concat(marker.color, ",") == (i == 1 and "1,0,1,1" or "0,1,1,1"))
 end
+assert(player.health.backdropAlpha == 1 and #player.health.textures == 2)
+assert(target.health.backdropAlpha == 0.55 and #target.health.textures == 0, "the target bar keeps its existing style")
 
 local function expectPlacement(point, relativePoint, x, y, scale)
     assert(geometry.shown and geometry.scale == player.scale and geometry.scale == scale)

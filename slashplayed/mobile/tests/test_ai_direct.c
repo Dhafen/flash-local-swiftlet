@@ -26,7 +26,7 @@ static void test_movement_ownership(void) {
 static void test_padded_observation_strip(void) {
     uint8_t pose[113] = {'A', 'P', 1, 3, 0, 0, 0, 7, 0, 0, 0, 8, 0, 0, 0, 9, 64, 1};
     uint8_t xp[113] = {'A', 'X', 1, 1, 0, 0, 0, 15, 0, 0, 0, 40, 0, 12};
-    uint8_t health[113] = {'A', 'H', 1, 1, 0, 50, 0, 60, 0, 180, 0, 90};
+    uint8_t health[113] = {'A', 'H', 2, 1, 0, 50, 0, 60, 0, 180, 0, 90};
     assert(sp_ai_world_pose(pose, sp_ai_strip_payload_length(pose, sizeof pose)).headingKnown);
     assert(sp_ai_progression(xp, sp_ai_strip_payload_length(xp, sizeof xp)).xpKnown);
     assert(sp_ai_health_region(health, sp_ai_strip_payload_length(health, sizeof health)));
@@ -39,7 +39,7 @@ static void test_bundled_observation_strip(void) {
     uint8_t payload[113] = {'A', 'I', 1};
     static const uint8_t pose[] = {'A', 'P', 1, 3, 0, 0, 0, 7, 0, 0, 0, 8, 0, 0, 0, 9, 64, 1};
     static const uint8_t xp[] = {'A', 'X', 1, 1, 0, 0, 0, 15, 0, 0, 0, 40, 0, 12};
-    static const uint8_t health[] = {'A', 'H', 1, 1, 0, 50, 0, 60, 0, 180, 0, 90};
+    static const uint8_t health[] = {'A', 'H', 2, 1, 0, 50, 0, 60, 0, 180, 0, 90};
     memcpy(payload + 18, pose, sizeof pose);
     memcpy(payload + 36, xp, sizeof xp);
     memcpy(payload + 54, health, sizeof health);
@@ -421,6 +421,8 @@ static void test_approach_model_requires_measured_benefit(void) {
     SPAIApproachModel model = {0};
     SPAINavSample sample = {1, {SP_MOTION_POSITION, 2, false}, {9, 7, 0, 60}, 6};
     assert(sp_ai_predict_approach(&model, sample, SP_MOVE_LEFT, false) == SP_MOVE_LEFT);
+    assert(!sp_ai_train_approach(&model, sample, SP_MOVE_LEFT, SP_NAV_ALIGNED));
+    assert(model.trials[0][1] == 0 && model.progress[0][1] == 0);
     for (int i = 0; i < 6; ++i) {
         assert(sp_ai_train_approach(&model, sample, SP_MOVE_FORWARD, SP_NAV_CLOSER));
         assert(sp_ai_train_approach(&model, sample, SP_MOVE_LEFT, SP_NAV_STALLED));
@@ -579,6 +581,65 @@ static void test_route_start_partway(void) {
     assert(mock.releases == 1);
 }
 
+static void paint_health_bar(uint8_t *data, size_t width, size_t stride, size_t gutter, unsigned hp, bool bgra) {
+    size_t filled = (width - 2 * gutter) * hp / 100;
+    for (size_t row = 0; row < SP_HEALTH_SCAN_ROWS; ++row) {
+        for (size_t x = 0; x < width; ++x) {
+            uint8_t *pixel = data + row * stride + x * 4;
+            bool left = x < gutter, right = x >= width - gutter;
+            bool green = !left && !right && x < gutter + filled;
+            pixel[bgra ? 2 : 0] = left ? 255 : green ? 24 : 0;
+            pixel[1] = right ? 255 : green ? 170 : 0;
+            pixel[bgra ? 0 : 2] = left || right ? 255 : green ? 29 : 0;
+            pixel[3] = 255;
+        }
+    }
+}
+
+static void test_visible_health_bar(void) {
+    uint8_t data[SP_HEALTH_SCAN_ROWS * (410 * 4 + 16)];
+    const unsigned coverage[] = {20, 34, 35, 49, 50, 72, 100};
+    for (size_t scale = 1; scale <= 4; ++scale) {
+        size_t gutter = scale + 1;
+        size_t width = 100 * scale + 2 * gutter, stride = width * 4 + 16;
+        for (unsigned bgra = 0; bgra <= 1; ++bgra) {
+            for (size_t i = 0; i < sizeof coverage / sizeof coverage[0]; ++i) {
+                paint_health_bar(data, width, stride, gutter, coverage[i], bgra);
+                assert(sp_ai_visible_health(data, width, stride, bgra) == coverage[i]);
+            }
+            paint_health_bar(data, width, stride, 0, 100, bgra);
+            assert(sp_ai_visible_health(data, width, stride, bgra) == SP_VISUAL_HP_UNKNOWN);
+            paint_health_bar(data, width, stride, 0, 50, bgra);
+            assert(sp_ai_visible_health(data, width, stride, bgra) == SP_VISUAL_HP_UNKNOWN);
+            paint_health_bar(data, width, stride, gutter, 50, bgra);
+            memset(data + stride + (width - gutter) * 4, 0, gutter * 4);
+            assert(sp_ai_visible_health(data, width, stride, bgra) == SP_VISUAL_HP_UNKNOWN);
+            paint_health_bar(data, width, stride, gutter, 50, bgra);
+            assert(sp_ai_visible_health(data + 4, width - 1, stride, bgra) ==
+                (gutter > 2 ? 50 : SP_VISUAL_HP_UNKNOWN));
+            memset(data + stride, 255, width * 4);
+            assert(sp_ai_visible_health(data, width, stride, bgra) == SP_VISUAL_HP_UNKNOWN);
+            paint_health_bar(data, width, stride, gutter, 0, bgra);
+            assert(sp_ai_visible_health(data, width, stride, bgra) == SP_VISUAL_HP_UNKNOWN);
+        }
+    }
+    size_t width = 108, stride = width * 4;
+    paint_health_bar(data, width, stride, 4, 47, true);
+    assert(sp_ai_visible_health(data, width, stride, true) == 47);
+    for (size_t row = 0; row < SP_HEALTH_SCAN_ROWS; ++row) {
+        uint8_t *pixels = data + row * stride;
+        memcpy(pixels + 97 * 4, pixels + 104 * 4, 2 * 4);
+    }
+    assert(sp_ai_visible_health(data, width, stride, true) == SP_VISUAL_HP_UNKNOWN);
+    uint8_t region[] = {'A', 'H', 2, 1, 0, 10, 0, 20, 0, 150, 0, 75, 0, 0, 0, 0, 0, 0};
+    assert(sp_ai_health_region(region, sizeof region) == UINT64_C(0x000a00140096004b));
+    region[2] = 1;
+    assert(sp_ai_health_region(region, sizeof region) == 0);
+    region[2] = 2;
+    region[3] = 0;
+    assert(sp_ai_health_region(region, sizeof region) == 0);
+}
+
 int main(void) {
     assert(sp_ai_health_capture_interval_ms(0, true, false, true) == 1000);
     assert(sp_ai_health_capture_interval_ms(1, true, false, true) == 2500);
@@ -663,33 +724,7 @@ int main(void) {
     assert(!sp_ai_projected_approach(selected, onFoot));
     test_route_turn_requires_binding_and_confirmed_heading();
     test_route_start_partway();
-    uint8_t health[3][64][4] = {0};
-    for (unsigned row = 0; row < 3; ++row)
-        for (unsigned x = 0; x < 64; ++x) {
-            health[row][x][0] = 29;
-            health[row][x][1] = x < 40 ? 170 : 29;
-            health[row][x][2] = 29;
-        }
-    assert(sp_ai_visible_health(&health[0][0][0], 64, 64 * 4, true) == 63);
-    for (unsigned row = 0; row < 3; ++row) {
-        health[row][0][1] = 29;
-        health[row][1][1] = 29;
-    }
-    assert(sp_ai_visible_health(&health[0][0][0], 64, 64 * 4, true) == 59);
-    for (unsigned row = 0; row < 3; ++row) {
-        health[row][2][1] = 29;
-        health[row][3][1] = 29;
-    }
-    assert(sp_ai_visible_health(&health[0][0][0], 64, 64 * 4, true) == SP_VISUAL_HP_UNKNOWN);
-    for (unsigned row = 0; row < 3; ++row) health[row][2][1] = 170;
-    memset(health[1], 255, sizeof health[1]);
-    assert(sp_ai_visible_health(&health[0][0][0], 64, 64 * 4, true) == SP_VISUAL_HP_UNKNOWN);
-    uint8_t region[] = {65, 72, 1, 1, 0, 10, 0, 20, 0, 150, 0, 75, 0, 0, 0, 0, 0, 0};
-    assert(sp_ai_health_region(region, sizeof region) == UINT64_C(0x000a00140096004b));
-    region[3] = 0;
-    assert(sp_ai_health_region(region, sizeof region) == 0);
-    memset(health, 0, sizeof health);
-    assert(sp_ai_visible_health(&health[0][0][0], 64, 64 * 4, true) == SP_VISUAL_HP_UNKNOWN);
+    test_visible_health_bar();
     test_route_stops_when_pose_disappears();
     test_approach_model_requires_measured_benefit();
     uint8_t xpPacket[] = {65, 88, 1, 3, 0, 0, 3, 82, 0, 0, 4, 176, 0, 6, 0, 4, 0, 0};

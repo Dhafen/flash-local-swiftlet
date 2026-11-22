@@ -333,7 +333,8 @@ static inline bool sp_ai_approach_model_context(SPAINavSample sample) {
 static inline bool sp_ai_train_approach(SPAIApproachModel *model, SPAINavSample before,
     SPAIMove move, SPAINavOutcome outcome) {
     if (!sp_ai_approach_model_context(before)) return false;
-    bool progress = outcome == SP_NAV_CLOSER || outcome == SP_NAV_ALIGNED;
+    // Screen alignment alone does not show that the player moved closer to the same target.
+    bool progress = outcome == SP_NAV_CLOSER;
     if (!progress && outcome != SP_NAV_STALLED && outcome != SP_NAV_NO_PROGRESS) return false;
     unsigned side = before.column == 10;
     if (move != SP_MOVE_FORWARD && move != (side ? SP_MOVE_RIGHT : SP_MOVE_LEFT)) return false;

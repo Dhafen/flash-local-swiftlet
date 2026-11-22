@@ -19,8 +19,8 @@ static void sp_health_capture(id<MTLCommandBuffer> cb, id<MTLTexture> texture) {
     if (!bgra && fmt != MTLPixelFormatRGBA8Unorm && fmt != MTLPixelFormatRGBA8Unorm_sRGB) return;
     size_t x = (bounds >> 48) * texture.width / 4095;
     size_t y = ((bounds >> 32) & 4095) * texture.height / 4095;
-    size_t right = ((bounds >> 16) & 4095) * texture.width / 4095;
-    size_t bottom = (bounds & 4095) * texture.height / 4095;
+    size_t right = (((bounds >> 16) & 4095) * texture.width + 4094) / 4095;
+    size_t bottom = ((bounds & 4095) * texture.height + 4094) / 4095;
     if (right <= x || bottom <= y) return;
     size_t width = right - x, barHeight = bottom - y;
     if (width < 48 || width > 1024 || barHeight < 12 || barHeight > 128) return;

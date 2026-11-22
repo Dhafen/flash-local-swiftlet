@@ -43,34 +43,66 @@ static inline SPHealthComparison sp_ai_compare_visible_health(const SPHealthRefe
 }
 
 static inline uint64_t sp_ai_health_region(const uint8_t *p, unsigned length) {
-    if (length != 18 || p[0] != 'A' || p[1] != 'H' || p[2] != 1 || p[3] != 1) return 0;
+    if (length != 18 || p[0] != 'A' || p[1] != 'H' || p[2] != 2 || p[3] != 1) return 0;
     unsigned left = p[4] * 256 + p[5], top = p[6] * 256 + p[7];
     unsigned right = p[8] * 256 + p[9], bottom = p[10] * 256 + p[11];
     if (right > 4095 || bottom > 4095 || right <= left || bottom <= top) return 0;
     return ((uint64_t)left << 48) | ((uint64_t)top << 32) | ((uint64_t)right << 16) | bottom;
 }
 
-// Evaluate only the visible green player bar. A thin leading border still contributes to the denominator.
-// Missing fill or inconsistent rows are unknown.
+static inline bool sp_ai_health_marker(const uint8_t *pixel, bool bgra, bool left) {
+    unsigned r = pixel[bgra ? 2 : 0], g = pixel[1], b = pixel[bgra ? 0 : 2];
+    return b >= 224 && (left ? r >= 224 && g <= 32 : g >= 224 && r <= 32);
+}
+
+static inline bool sp_ai_health_edge(const uint8_t *pixels, size_t width, size_t window, bool bgra,
+    bool left, size_t *innerEdge) {
+    size_t first = width, last = 0;
+    size_t start = left ? 0 : width - window, end = left ? window : width;
+    for (size_t x = start; x < end; ++x) {
+        if (!sp_ai_health_marker(pixels + x * 4, bgra, left)) continue;
+        if (!last) first = x;
+        else if (x != last) return false;
+        last = x + 1;
+    }
+    if (!last || last - first < 2 || (left ? first > 2 : width - last > 2)) return false;
+    *innerEdge = left ? last : first;
+    return true;
+}
+
+// The player bar has a magenta left edge and a cyan right edge, both outside the fill.
+// Require both edges in all rows before interpreting the green pixels between them.
 static inline uint8_t sp_ai_visible_health(const uint8_t *data, size_t width, size_t stride, bool bgra) {
-    if (width < 48 || width > 1024 || stride < width * 4) return SP_VISUAL_HP_UNKNOWN;
-    unsigned low = 100, high = 0, total = 0;
+    if (!data || width < 48 || width > 1024 || stride < width * 4) return SP_VISUAL_HP_UNKNOWN;
+    size_t edgeWindow = width / 12 + 2;
+    if (edgeWindow > 32) edgeWindow = 32;
+    size_t firstLeft = 0, firstRight = 0;
+    unsigned low = 100, high = 0;
     for (size_t row = 0; row < SP_HEALTH_SCAN_ROWS; ++row) {
+        const uint8_t *pixels = data + row * stride;
+        size_t left, right;
+        if (!sp_ai_health_edge(pixels, width, edgeWindow, bgra, true, &left) ||
+            !sp_ai_health_edge(pixels, width, edgeWindow, bgra, false, &right)) return SP_VISUAL_HP_UNKNOWN;
+        if (row == 0) {
+            firstLeft = left;
+            firstRight = right;
+        } else if (left > firstLeft + 1 || firstLeft > left + 1 ||
+                   right > firstRight + 1 || firstRight > right + 1) return SP_VISUAL_HP_UNKNOWN;
+        size_t interior = right - left;
         size_t fill = 0, leading = 0, unexpected = 0;
-        for (size_t x = 0; x < width; ++x) {
-            const uint8_t *p = data + row * stride + x * 4;
+        for (size_t x = 0; x < interior; ++x) {
+            const uint8_t *p = pixels + (left + x) * 4;
             unsigned r = p[bgra ? 2 : 0], g = p[1], b = p[bgra ? 0 : 2];
             bool green = g >= 64 && g >= r + 24 && g >= b + 24;
-            if (!green && !fill && leading == x && x < width / 20) ++leading;
+            if (!green && !fill && leading == x && x < interior / 20) ++leading;
             else if (green && leading + fill == x) ++fill;
             else if (green || r > 85 || g > 85 || b > 85) ++unexpected;
         }
-        if (fill < 3 || unexpected > width / 16) return SP_VISUAL_HP_UNKNOWN;
-        unsigned percent = (unsigned)((100 * fill + width / 2) / width);
+        if (fill < 3 || unexpected > interior / 16) return SP_VISUAL_HP_UNKNOWN;
+        unsigned percent = (unsigned)(100 * fill / interior);
         if (percent < low) low = percent;
         if (percent > high) high = percent;
-        total += percent;
     }
-    return high - low <= 5 ? (uint8_t)((total + 1) / SP_HEALTH_SCAN_ROWS) : SP_VISUAL_HP_UNKNOWN;
+    return high - low <= 5 ? (uint8_t)low : SP_VISUAL_HP_UNKNOWN;
 }
 #endif

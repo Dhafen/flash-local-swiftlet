@@ -100,7 +100,7 @@ static const char *sp_ai_nav_outcome_name(SPAINavOutcome outcome) {
     return names[outcome];
 }
 
-static NSString *const sp_ai_approach_model_key = @"sp_wolkara_approach_feedback_v1";
+static NSString *const sp_ai_approach_model_key = @"sp_wolkara_approach_feedback_v2";
 static SPAIApproachModel sp_ai_load_approach_model(void) {
     SPAIApproachModel model = {0};
     NSData *data = [NSUserDefaults.standardUserDefaults dataForKey:sp_ai_approach_model_key];
