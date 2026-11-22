@@ -60,7 +60,8 @@ local healthBar = {IsForbidden = val(false), IsProtected = val(false), IsVisible
         healthRectReads = healthRectReads + 1
         return 100, 400, 200, 25
     end}
-WolkaraMobilePlayer = {IsForbidden = val(false), IsProtected = val(false), health = healthBar}
+WolkaraMobilePlayer = setmetatable({}, {__index = function() error("the secure HUD must never be inspected") end})
+WolkaraMobileHealthGeometry = {IsForbidden = val(false), IsProtected = val(false), IsVisible = val(true), crop = healthBar}
 assert(assert(healthBounds()):sub(1, 4) == string.char(65, 72, 1, 1))
 local function rejectsGeometry(frame, property, method)
     local original, previousReads = frame[property], healthRectReads
@@ -68,16 +69,27 @@ local function rejectsGeometry(frame, property, method)
     assert(healthBounds() == nil and healthRectReads == previousReads, property .. " must reject before measurement")
     frame[property] = original
 end
-for _, frame in ipairs({WolkaraMobilePlayer, healthBar}) do
+for _, frame in ipairs({WolkaraMobileHealthGeometry, healthBar}) do
     rejectsGeometry(frame, "IsForbidden", val(true))
     rejectsGeometry(frame, "IsForbidden", val(secret))
     rejectsGeometry(frame, "IsProtected", val(true))
     rejectsGeometry(frame, "IsProtected", val(secret))
     rejectsGeometry(frame, "IsProtected", nil)
 end
+rejectsGeometry(WolkaraMobileHealthGeometry, "IsVisible", val(false))
 rejectsGeometry(healthBar, "IsVisible", val(false))
 rejectsGeometry(healthBar, "IsVisible", val(secret))
 rejectsGeometry(healthBar, "GetEffectiveAlpha", val(secret))
+local beforeModal = healthRectReads
+WorldMapFrame = {IsForbidden = val(false), IsVisible = val(true),
+    GetRect = function() error("do not measure game modals") end}
+assert(healthBounds() == nil and healthRectReads == beforeModal, "a visible modal must suppress the crop")
+WorldMapFrame.IsVisible = val(secret)
+assert(healthBounds() == nil and healthRectReads == beforeModal, "a possibly visible modal must suppress the crop")
+WorldMapFrame.IsForbidden = val(true)
+WorldMapFrame.IsVisible = function() error("do not query a forbidden modal") end
+assert(healthBounds() == nil and healthRectReads == beforeModal)
+WorldMapFrame = nil
 healthBar.GetRect = function() return secret, 400, 200, 25 end
 assert(healthBounds() == nil)
 print("visible player health geometry tests passed")

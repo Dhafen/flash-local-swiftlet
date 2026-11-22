@@ -137,6 +137,7 @@ jobs:
           python3 .edits/slashplayed/mobile/tests/test_staging.py .
           if ! command -v lua >/dev/null 2>&1; then brew install lua; fi
           lua .edits/slashplayed/mobile/tests/test_hover_startup.lua addon/SPHover/SPHover.lua
+          lua .edits/slashplayed/mobile/tests/test_wolkara_health_layout.lua addon/WolkaraRoue/Core.lua addon/WolkaraRoue/Hud.lua
 
       - name: Build prerequisites
         uses: ./.github/actions/companion-deps

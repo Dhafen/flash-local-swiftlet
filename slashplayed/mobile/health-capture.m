@@ -8,7 +8,7 @@ static void sp_health_capture(id<MTLCommandBuffer> cb, id<MTLTexture> texture) {
     unsigned epoch = atomic_load(&sp_ai_health_capture_epoch);
     uint64_t ms = (uint64_t)(NSProcessInfo.processInfo.systemUptime * 1000);
     uint64_t boundsAt = atomic_load(&sp_ai_health_bounds_ms);
-    if (!boundsAt || ms < boundsAt || ms - boundsAt > 1500) return;
+    if (!sp_ai_health_bounds_fresh(boundsAt, ms)) return;
     uint64_t bounds = atomic_load(&sp_ai_health_bounds);
     if (!bounds) return;
     MTLPixelFormat fmt = texture.pixelFormat;

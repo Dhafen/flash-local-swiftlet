@@ -5,6 +5,10 @@
 #include <stdint.h>
 
 enum { SP_VISUAL_HP_UNKNOWN = 255, SP_HEALTH_SCAN_ROWS = 3 };
+
+static inline bool sp_ai_health_bounds_fresh(uint64_t boundsAt, uint64_t now) {
+    return boundsAt && now >= boundsAt && now - boundsAt <= 1500;
+}
 typedef struct { double at; uint8_t hp; } SPHealthReference;
 typedef enum {
     SP_HEALTH_COMPARE_PENDING, SP_HEALTH_COMPARE_PAIRED, SP_HEALTH_COMPARE_UNREADABLE,
@@ -40,17 +44,19 @@ static inline uint64_t sp_ai_health_region(const uint8_t *p, unsigned length) {
     return ((uint64_t)left << 48) | ((uint64_t)top << 32) | ((uint64_t)right << 16) | bottom;
 }
 
-// Evaluate only the visible green player bar. Missing fill or inconsistent rows are unknown.
+// Evaluate only the visible green player bar. A thin leading border still contributes to the denominator.
+// Missing fill or inconsistent rows are unknown.
 static inline uint8_t sp_ai_visible_health(const uint8_t *data, size_t width, size_t stride, bool bgra) {
     if (width < 48 || width > 1024 || stride < width * 4) return SP_VISUAL_HP_UNKNOWN;
     unsigned low = 100, high = 0, total = 0;
     for (size_t row = 0; row < SP_HEALTH_SCAN_ROWS; ++row) {
-        size_t fill = 0, unexpected = 0;
+        size_t fill = 0, leading = 0, unexpected = 0;
         for (size_t x = 0; x < width; ++x) {
             const uint8_t *p = data + row * stride + x * 4;
             unsigned r = p[bgra ? 2 : 0], g = p[1], b = p[bgra ? 0 : 2];
             bool green = g >= 64 && g >= r + 24 && g >= b + 24;
-            if (green && fill == x) ++fill;
+            if (!green && !fill && leading == x && x < width / 20) ++leading;
+            else if (green && leading + fill == x) ++fill;
             else if (green || r > 85 || g > 85 || b > 85) ++unexpected;
         }
         if (fill < 3 || unexpected > width / 16) return SP_VISUAL_HP_UNKNOWN;

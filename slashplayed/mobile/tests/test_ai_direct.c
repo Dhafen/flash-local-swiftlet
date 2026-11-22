@@ -503,6 +503,10 @@ static void test_route_turn_requires_binding_and_confirmed_heading(void) {
 }
 
 int main(void) {
+    assert(!sp_ai_health_bounds_fresh(0, 500));
+    assert(!sp_ai_health_bounds_fresh(6000, 5999));
+    assert(sp_ai_health_bounds_fresh(6000, 7500));
+    assert(!sp_ai_health_bounds_fresh(6000, 7501));
     test_restriction_strip();
     test_movement_ownership();
     test_padded_observation_strip();
@@ -581,6 +585,17 @@ int main(void) {
             health[row][x][2] = 29;
         }
     assert(sp_ai_visible_health(&health[0][0][0], 64, 64 * 4, true) == 63);
+    for (unsigned row = 0; row < 3; ++row) {
+        health[row][0][1] = 29;
+        health[row][1][1] = 29;
+    }
+    assert(sp_ai_visible_health(&health[0][0][0], 64, 64 * 4, true) == 59);
+    for (unsigned row = 0; row < 3; ++row) {
+        health[row][2][1] = 29;
+        health[row][3][1] = 29;
+    }
+    assert(sp_ai_visible_health(&health[0][0][0], 64, 64 * 4, true) == SP_VISUAL_HP_UNKNOWN);
+    for (unsigned row = 0; row < 3; ++row) health[row][2][1] = 170;
     memset(health[1], 255, sizeof health[1]);
     assert(sp_ai_visible_health(&health[0][0][0], 64, 64 * 4, true) == SP_VISUAL_HP_UNKNOWN);
     uint8_t region[] = {65, 72, 1, 1, 0, 10, 0, 20, 0, 150, 0, 75, 0, 0, 0, 0, 0, 0};

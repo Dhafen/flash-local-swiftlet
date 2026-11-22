@@ -361,14 +361,16 @@ static UIButton *sp_mobile_button(NSString *title, NSString *label, id owner, SE
     _mobileAI.status = ^(NSString *status) {
         SPInputView *input = weakSelf;
         if (!input) return;
-        [input->_mobileAIButton setTitle:status forState:UIControlStateNormal];
+        BOOL healthBlocked = [status isEqualToString:@"HP SECRET"] || [status isEqualToString:@"HP UNKNOWN"];
+        [input->_mobileAIButton setTitle:healthBlocked ? @"HP BLOCKED" : status forState:UIControlStateNormal];
         input->_mobileAIButton.menu = input->_mobileAI.active && !input->_mobileAI.manualPaused ? nil : [input sp_mobile_ai_menu];
         input->_mobileAIButton.showsMenuAsPrimaryAction =
             !input->_mobileAI.active && !input->_mobileAI.autonomousTest && !input->_mobileAI.observationSelected;
-        input->_mobileAIButton.backgroundColor = input->_mobileAI.active
-            && !input->_mobileAI.manualPaused && input->_mobileAI.autonomousTest
-            ? [UIColor colorWithRed:0.10 green:0.39 blue:0.22 alpha:0.92] : [UIColor colorWithWhite:0 alpha:0.55];
-        input->_mobileAIButton.accessibilityHint = input->_mobileAI.manualPaused
+        BOOL farmingActive = input->_mobileAI.active && !input->_mobileAI.manualPaused && input->_mobileAI.autonomousTest;
+        input->_mobileAIButton.backgroundColor = healthBlocked ? [UIColor colorWithRed:0.47 green:0.26 blue:0.06 alpha:0.95]
+            : farmingActive ? [UIColor colorWithRed:0.10 green:0.39 blue:0.22 alpha:0.92] : [UIColor colorWithWhite:0 alpha:0.55];
+        input->_mobileAIButton.accessibilityHint = healthBlocked ? @"Farming paused. Player health is unverified. Tap to stop."
+            : input->_mobileAI.manualPaused
             ? @"Tap to stop. Hold to resume."
             : input->_mobileAI.active
             ? @"Tap to stop AI" : @"Tap to start. Hold for AI options.";
@@ -557,6 +559,7 @@ static UIButton *sp_mobile_button(NSString *title, NSString *label, id owner, SE
         input->_mobileAI.observationSelected = YES;
         input->_mobileAIButton.showsMenuAsPrimaryAction = NO;
         [input->_mobileAIButton setTitle:@"HP READY" forState:UIControlStateNormal];
+        dispatch_async(dispatch_get_main_queue(), ^{ [input sp_mobile_ai_toggle:input->_mobileAIButton]; });
     }];
     UIMenu *route = [UIMenu menuWithTitle:@"Grind route" children:@[markRoute, clearRoute]];
     return [UIMenu menuWithTitle:@"AI options" children:@[observe, aiTest, approachTest, aiTestMode, route, inspectHealth, aiModels, aiTeach]];
@@ -757,6 +760,13 @@ static void sp_mobile_ai_movement_key(unsigned char key, BOOL pressed) {
     if (_mobileAI.active || self.window.windowScene.activationState != UISceneActivationStateForegroundActive) return;
     NSTimeInterval now = NSProcessInfo.processInfo.systemUptime;
     SPAINavSample after = sp_ai_game_sample();
+    if (remaining && (!sp_ai_sample_fresh(after.at, now) || sp_ai_player_health != SP_HEALTH_PUBLIC ||
+        !sp_ai_hp_known(sp_ai_game_hp) || sp_ai_game_hp < 35)) {
+        [self sp_mobile_ai_release_key];
+        [_mobileAIButton setTitle:@"HP BLOCKED" forState:UIControlStateNormal];
+        sp_stub_log("AI movement diagnostic: repeated approach stopped without fresh safe player health");
+        return;
+    }
     SPAINavOutcome outcome = sp_ai_nav_observe(pulse, &after, now, &lastSample);
     if (outcome == SP_NAV_PENDING) {
         __weak SPInputView *weakSelf = self;
@@ -813,10 +823,11 @@ static void sp_mobile_ai_movement_key(unsigned char key, BOOL pressed) {
         if (remaining) {
             NSString *blocked = nil;
             if (!input->_mobileAI.autonomousTest) blocked = @"TEST MODE";
+            else if (sp_ai_player_health != SP_HEALTH_PUBLIC || !sp_ai_hp_known(sp_ai_game_hp) ||
+                sp_ai_game_hp < 35) blocked = @"HP BLOCKED";
             else if (confirmed.at && (before.evidence.target != confirmed.evidence.target ||
                 before.evidence.position != confirmed.evidence.position)) blocked = @"TEST TARGET";
             else if (!sp_ai_forward_probe_ready(before, sp_ai_game_flags, sp_ai_game_move_keys, now) ||
-                (sp_ai_hp_known(sp_ai_game_hp) && sp_ai_game_hp < 35) ||
                 (confirmed.at && before.evidence.distance > confirmed.evidence.distance + 2)) blocked = @"TEST HOLD";
             if (blocked) {
                 [input->_mobileAIButton setTitle:blocked forState:UIControlStateNormal];

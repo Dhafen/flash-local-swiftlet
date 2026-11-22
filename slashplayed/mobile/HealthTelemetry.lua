@@ -234,23 +234,48 @@ local function spAIUnprotectedFrame(frame)
     return spAIReadable(protected) and protected == false
 end
 
+local spAIHealthModalFrames = {
+    "WolkaraMobileMenu", "WolkaraMobilePicker", "WolkaraMobileSettings", "WolkaraMobileChat",
+    "GameMenuFrame", "SettingsPanel", "WorldMapFrame", "QuestFrame", "GossipFrame", "LootFrame",
+    "ContainerFrameCombinedBags", "CharacterFrame", "PlayerSpellsFrame",
+    "StaticPopup1", "StaticPopup2", "StaticPopup3", "StaticPopup4",
+}
+
+local function spAIHealthViewClear()
+    for _, name in ipairs(spAIHealthModalFrames) do
+        local frame = _G[name]
+        if not spAIReadable(frame) then return false end
+        if frame then
+            -- Visibility can be secret. Do not measure or operate on game modal frames.
+            if type(frame.IsForbidden) ~= "function" then return false end
+            local forbidden = frame:IsForbidden()
+            if not spAIReadable(forbidden) or forbidden ~= false or type(frame.IsVisible) ~= "function" then return false end
+            local visible = frame:IsVisible()
+            if not spAIReadable(visible) or visible ~= false then return false end
+        end
+    end
+    return true
+end
+
 local function spAIVisibleHealthBounds()
     local ok, bounds = pcall(function()
-        local player = _G.WolkaraMobilePlayer
-        -- Measure only a public, unprotected bar and owner. pcall cannot suppress a blocked-action dialog.
-        if not spAIUnprotectedFrame(player) then return end
-        local bar = player.health
-        if not spAIUnprotectedFrame(bar) then return end
-        local visible = bar:IsVisible()
+        -- This frame has no textures and is placed independently from the secure HUD.
+        local geometry = _G.WolkaraMobileHealthGeometry
+        if not spAIUnprotectedFrame(geometry) then return end
+        local visible = geometry:IsVisible()
         if not spAIReadable(visible) or visible ~= true then return end
-        local alpha = bar:GetEffectiveAlpha()
+        local crop = geometry.crop
+        if not spAIUnprotectedFrame(crop) or not spAIHealthViewClear() then return end
+        visible = crop:IsVisible()
+        if not spAIReadable(visible) or visible ~= true then return end
+        local alpha = crop:GetEffectiveAlpha()
         if not spAIFinite(alpha) or alpha < 0.8 then return end
-        local rootScale, scale = UIParent:GetEffectiveScale(), bar:GetEffectiveScale()
+        local rootScale, scale = UIParent:GetEffectiveScale(), crop:GetEffectiveScale()
         local rootWidth, rootHeight = UIParent:GetWidth(), UIParent:GetHeight()
         if not spAIFinite(rootScale) or not spAIFinite(rootWidth) or not spAIFinite(rootHeight) or
             not spAIFinite(scale) or rootScale <= 0 or rootWidth <= 0 or rootHeight <= 0 or scale <= 0 then return end
         local w, h = rootWidth * rootScale, rootHeight * rootScale
-        local left, bottom, width, height = bar:GetRect()
+        local left, bottom, width, height = crop:GetRect()
         if not spAIFinite(left) or not spAIFinite(bottom) or not spAIFinite(width) or not spAIFinite(height) or
             not spAIFinite(w) or not spAIFinite(h) or w <= 0 or h <= 0 or width <= 0 or height <= 0 then return end
         local l, t = left * scale / w, 1 - (bottom + height) * scale / h

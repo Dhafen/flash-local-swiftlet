@@ -6,7 +6,7 @@ from zipfile import ZipFile
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from wolkara_english import translate
-from wolkara_hud import protect_cooldowns, protect_hud
+from wolkara_hud import protect_cooldowns, protect_hud, publish_applied_layout
 from wolkara_rotation import actions, picker, turn
 
 root = Path(sys.argv[1])
@@ -37,6 +37,8 @@ assert 'sp_ai_game_update(bundle.state, SP_AI_STRIP_RECORD_BYTES, observedAt)' i
 assert 'sourceSize:MTLSizeMake(width,SP_HEALTH_SCAN_ROWS,1)' in hover
 encounter_advance = event.split('- (NSString *)advance:(SPAINavSample)sample', 1)[1].split('\n}', 1)[0]
 assert 'sp_ai_health_visual_result' not in encounter_advance
+assert 'uint8_t publicHP = player == SP_HEALTH_PUBLIC ? data[3] : SP_VISUAL_HP_UNKNOWN;' in event
+assert 'sp_ai_game_hp = publicHP;' in event
 assert 'seq == sp_ai_heartbeat_seq' in event
 assert '[_mobileAI stop];' in event
 assert 'sp_mobile_emit_rotation()' in event
@@ -138,7 +140,7 @@ for source in reference.iterdir():
             '    local args, count = { ... }, select("#", ...)\n'
             "    local ok, problem = xpcall(function() return fn(unpack(args, 1, count)) end, Trace)",
         )
-        assert (wolkara / source.name).read_text(encoding="utf-8") == translate(expected)
+        assert (wolkara / source.name).read_text(encoding="utf-8") == translate(publish_applied_layout(expected))
     elif source.name == "Hud.lua":
         assert (wolkara / source.name).read_text(encoding="utf-8") == translate(protect_hud(source.read_text(encoding="utf-8")))
     elif source.name == "Actions.lua":

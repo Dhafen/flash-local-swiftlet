@@ -190,6 +190,7 @@ static void sp_ai_game_update(const uint8_t *data, size_t length, NSTimeInterval
         sp_ai_state_reason = reason;
         sp_ai_payload_status = 0;
         sp_ai_game_at = 0;
+        sp_ai_game_hp = SP_VISUAL_HP_UNKNOWN;
         sp_ai_game_move_keys = 0;
         sp_ai_game_feedback = (SPAIFarmFeedback){0};
         sp_ai_game_corpse = 0;
@@ -199,15 +200,17 @@ static void sp_ai_game_update(const uint8_t *data, size_t length, NSTimeInterval
         sp_ai_record_health_reference(observedAt, SP_VISUAL_HP_UNKNOWN);
         return;
     }
+    SPAIHealthStatus player = sp_ai_health_status(data, (unsigned)length, false);
+    uint8_t publicHP = player == SP_HEALTH_PUBLIC ? data[3] : SP_VISUAL_HP_UNKNOWN;
     if (sp_ai_game_at <= 0 || sp_ai_packet_at - sp_ai_game_at >= 6.0 ||
-        sp_ai_health_known(sp_ai_game_hp) != sp_ai_health_known(data[3]) ||
+        sp_ai_health_known(sp_ai_game_hp) != sp_ai_health_known(publicHP) ||
         sp_ai_health_known(sp_ai_game_target_hp) != sp_ai_health_known(data[4]))
-        sp_stub_log((data[3] == 255 || data[4] == 255) ?
+        sp_stub_log((publicHP == SP_VISUAL_HP_UNKNOWN || data[4] == 255) ?
             "AI telemetry: public decision flags valid; health unknown" : "AI telemetry: valid game-state payload");
     sp_ai_payload_status = 1;
     sp_ai_state_reason = -1;
     sp_ai_game_flags = data[2];
-    sp_ai_game_hp = data[3];
+    sp_ai_game_hp = publicHP;
     sp_ai_game_target_hp = data[4];
     sp_ai_game_meta = data[5];
     sp_ai_game_move_keys = sp_ai_movement_bindings(data, (unsigned)length);
@@ -215,7 +218,6 @@ static void sp_ai_game_update(const uint8_t *data, size_t length, NSTimeInterval
     sp_ai_game_corpse = sp_ai_corpse_evidence(data, (unsigned)length);
     sp_ai_game_hit = sp_ai_own_hit(data, (unsigned)length);
     sp_ai_game_evidence = sp_ai_nav_evidence(data, (unsigned)length);
-    SPAIHealthStatus player = sp_ai_health_status(data, (unsigned)length, false);
     SPAIHealthStatus target = sp_ai_health_status(data, (unsigned)length, true);
     if (player != sp_ai_player_health || target != sp_ai_target_health) {
         static const char *const health[] = {"public", "unavailable", "restricted", "absent", "unspecified"};
@@ -224,7 +226,7 @@ static void sp_ai_game_update(const uint8_t *data, size_t length, NSTimeInterval
     sp_ai_player_health = player;
     sp_ai_target_health = target;
     sp_ai_game_at = observedAt;
-    sp_ai_record_health_reference(observedAt, player == SP_HEALTH_PUBLIC ? sp_ai_game_hp : SP_VISUAL_HP_UNKNOWN);
+    sp_ai_record_health_reference(observedAt, publicHP);
 }
 
 static BOOL sp_ai_accept_heartbeat(uint8_t seq, NSTimeInterval observedAt) {
@@ -309,6 +311,7 @@ static void sp_ai_note_event(void *context, const char *message) {
     BOOL _layaEnabled, _layaPending;
     NSString *_layaState, *_lastPhase;
     NSString *_lastWorldSummary;
+    NSString *_lastHealthCaptureState;
     NSString *_lastProgressSummary;
     SPAIProgression _lastProgress;
     NSTimeInterval _lastProgressAt;
@@ -682,6 +685,16 @@ static void sp_ai_note_event(void *context, const char *message) {
     BOOL healthPreview = (healthDiag || waitingForHealth) && !paused && fresh && thermal == NSProcessInfoThermalStateNominal;
     sp_ai_health_enable(healthPreview);
     if (healthPreview) sp_ai_finish_health_comparison(now);
+    if (healthDiag || waitingForHealth) {
+        BOOL cropAvailable = atomic_load(&sp_ai_health_bounds) &&
+            sp_ai_health_bounds_fresh(atomic_load(&sp_ai_health_bounds_ms), (uint64_t)(now * 1000));
+        NSString *state = !fresh ? @"stale telemetry" : paused ? @"manual input" :
+            !healthPreview ? @"thermal pause" : !cropAvailable ? @"layout unavailable" : @"layout available";
+        if (![state isEqualToString:_lastHealthCaptureState]) {
+            _lastHealthCaptureState = state;
+            sp_stub_log([[NSString stringWithFormat:@"AI health capture: %@", state] UTF8String]);
+        }
+    } else _lastHealthCaptureState = nil;
     NSTimeInterval interval = reduced ? 0.8 : 0.4;
     if (thermal != _lastThermal || !_lastPhase) {
         _lastThermal = thermal;
@@ -760,6 +773,7 @@ static void sp_ai_note_event(void *context, const char *message) {
     _manualResumeAt = 0;
     _lastFreshGameAt = NSProcessInfo.processInfo.systemUptime;
     _lastWorldSummary = nil;
+    _lastHealthCaptureState = nil;
     _lastProgressSummary = nil;
     _lastProgress = (SPAIProgression){0};
     _lastProgressAt = 0;

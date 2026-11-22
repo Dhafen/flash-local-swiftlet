@@ -30,9 +30,11 @@ WolkaraMobileSettings = { IsForbidden = function() return false end, IsProtected
     GetRect = function() measured = measured + 1; return 100, 100, 120, 150 end }
 WolkaraMobileQuests = { IsForbidden = function() return false end, IsProtected = function() return true end,
     IsVisible = forbidden, GetRect = forbidden }
-WolkaraMobilePlayer = { health = { IsForbidden = function() return false end, IsVisible = function() return true end,
-    GetEffectiveAlpha = function() return 1 end, GetEffectiveScale = UIParent.GetEffectiveScale,
-    GetRect = function() return 100, 50, 160, 20 end } }
+local function no() return false end
+local function yes() return true end
+WolkaraMobileHealthGeometry = {IsForbidden = no, IsProtected = no, IsVisible = yes,
+    crop = {IsForbidden = no, IsProtected = no, IsVisible = yes, GetEffectiveAlpha = function() return 1 end,
+        GetEffectiveScale = UIParent.GetEffectiveScale, GetRect = function() return 100, 50, 160, 20 end}}
 UnitExists = function() return true end
 UnitIsDeadOrGhost = function() return false end
 UnitIsPlayer = function() return false end
