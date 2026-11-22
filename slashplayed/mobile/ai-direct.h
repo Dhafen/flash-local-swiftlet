@@ -250,7 +250,7 @@ typedef struct {
     unsigned attacks;
     uint8_t lastHP, probeHP;
     double observedAt, probedAt;
-    bool measured;
+    bool measured, unattributedDamage;
     SPAIOwnHit lastOwnHit;
 } SPAICombatEvidence;
 
@@ -267,6 +267,7 @@ static inline bool sp_ai_observe_damage(SPAICombatEvidence *combat, uint8_t hp, 
     bool decreased = sp_ai_hp_known(combat->lastHP) && sp_ai_hp_known(hp) && hp < combat->lastHP;
     combat->lastHP = hp;
     if (combat->attacks && observedAt > combat->probedAt) {
+        if (decreased) combat->unattributedDamage = true;
         if (!sp_ai_hp_known(hp)) combat->probeHP = 255;
         combat->measured = sp_ai_hp_known(combat->probeHP) && sp_ai_hp_known(hp);
     }
@@ -279,6 +280,7 @@ static inline bool sp_ai_observe_own_damage(SPAICombatEvidence *combat, SPAIOwnH
     combat->lastOwnHit = hit;
     if (!changed || !combat->attacks || at <= combat->probedAt) return false;
     combat->attacks = 0;
+    combat->unattributedDamage = false;
     return true;
 }
 
@@ -291,7 +293,7 @@ typedef enum { SP_ENGAGE_PROBE, SP_ENGAGE_APPROACH, SP_ENGAGE_NO_DAMAGE, SP_ENGA
 static inline SPAIEngagement sp_ai_engagement(SPAICombatEvidence combat, SPAIMove move, uint16_t distance,
     bool observedDamage, bool probeAfterMove) {
     if (!sp_ai_combat_budget_open(combat))
-        return combat.measured ? SP_ENGAGE_NO_DAMAGE : SP_ENGAGE_DAMAGE_UNKNOWN;
+        return combat.measured && !combat.unattributedDamage ? SP_ENGAGE_NO_DAMAGE : SP_ENGAGE_DAMAGE_UNKNOWN;
     if (combat.attacks && !probeAfterMove && distance > 16 && !observedDamage && move != SP_MOVE_NONE)
         return SP_ENGAGE_APPROACH;
     return SP_ENGAGE_PROBE;
@@ -331,7 +333,8 @@ static inline bool sp_ai_approach_model_context(SPAINavSample sample) {
 static inline bool sp_ai_train_approach(SPAIApproachModel *model, SPAINavSample before,
     SPAIMove move, SPAINavOutcome outcome) {
     if (!sp_ai_approach_model_context(before)) return false;
-    bool progress = outcome == SP_NAV_CLOSER || outcome == SP_NAV_ALIGNED;
+    // Screen alignment alone does not show that the player moved closer to the same target.
+    bool progress = outcome == SP_NAV_CLOSER;
     if (!progress && outcome != SP_NAV_STALLED && outcome != SP_NAV_NO_PROGRESS) return false;
     unsigned side = before.column == 10;
     if (move != SP_MOVE_FORWARD && move != (side ? SP_MOVE_RIGHT : SP_MOVE_LEFT)) return false;

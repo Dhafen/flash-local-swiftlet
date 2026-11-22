@@ -40,7 +40,7 @@ typedef struct {
     uint8_t routeEvidenceSeq;
     SPAIWorldPose routeBefore;
     SPAIMove routeAction;
-    bool routeEvidenceArmed, routeHeadingUnconfirmed;
+    bool routeEvidenceArmed, routeHeadingUnconfirmed, routeLocated;
     SPAIWorldPose targetTurnBefore;
     SPAIWorldPose targetWalkBefore;
     double targetTurnReleasedAt, targetTurnDeadline;
@@ -154,6 +154,18 @@ static inline const char *sp_ai_follow_route(SPAIEncounter *encounter, SPAIEncou
     if (!sp_ai_sample_fresh(pose.observedAt, now)) pose.valid = false;
     SPAIRoute *route = &encounter->route;
     SPAIRouteDecision decision = sp_ai_route_probe(route, pose);
+    if (!encounter->routeLocated && !encounter->routeDeadline) {
+        if (route->next == 0 && decision == SP_ROUTE_OFF_ROUTE) {
+            unsigned entry = sp_ai_route_later_entry(route, pose);
+            if (entry < route->count) {
+                route->next = entry;
+                decision = sp_ai_route_probe(route, pose);
+                sp_ai_note(adapter, "AI route: joined verified leg from observed pose");
+            }
+        }
+        // Once the session has a route anchor, leave recovery to the active leg's safety checks.
+        encounter->routeLocated = decision == SP_ROUTE_FORWARD || decision == SP_ROUTE_FACE || decision == SP_ROUTE_REACHED;
+    }
     if (encounter->routeDeadline) {
         bool turning = encounter->routeAction == SP_TURN_LEFT || encounter->routeAction == SP_TURN_RIGHT;
         const char *status = turning ? "TURN ROUTE" : "ROUTE";

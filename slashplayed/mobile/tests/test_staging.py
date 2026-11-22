@@ -6,7 +6,7 @@ from zipfile import ZipFile
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from wolkara_english import translate
-from wolkara_hud import protect_cooldowns, protect_hud
+from wolkara_hud import protect_cooldowns, protect_hud, publish_applied_layout
 from wolkara_rotation import actions, picker, turn
 
 root = Path(sys.argv[1])
@@ -24,24 +24,29 @@ assert '.. spLastAIState' in (root / "addon/SPHover/SPHover.lua").read_text()
 assert 'local function aiHeartbeat()' in (root / "addon/SPHover/SPHover.lua").read_text()
 assert 'showChunk(aiFrame)' in (root / "addon/SPHover/SPHover.lua").read_text()
 assert b"\x00" not in (root / "addon/SPHover/SPHover.lua").read_bytes()
-assert 'sp_ai_heartbeat(frame[2], frame + 5, SPH_PAYLOAD_BYTES, observedAt)' in (root / "shims/appkit/sphover.m").read_text()
-assert 'sp_ai_pose_heartbeat(frame[2], frame + 5, SPH_PAYLOAD_BYTES, observedAt)' in (root / "shims/appkit/sphover.m").read_text()
-assert 'sp_ai_xp_heartbeat(frame[2], frame + 5, SPH_PAYLOAD_BYTES, observedAt)' in (root / "shims/appkit/sphover.m").read_text()
+assert 'sp_ai_heartbeat(frame[2], frame + 5, aiLength, observedAt)' in (root / "shims/appkit/sphover.m").read_text()
+assert 'sp_ai_pose_heartbeat(frame[2], frame + 5, aiLength, observedAt)' in (root / "shims/appkit/sphover.m").read_text()
+assert 'sp_ai_xp_heartbeat(frame[2], frame + 5, aiLength, observedAt)' in (root / "shims/appkit/sphover.m").read_text()
 hover = (root / "shims/appkit/sphover.m").read_text()
-assert 'sp_ai_health_heartbeat(frame[2], frame + 5, SPH_PAYLOAD_BYTES, observedAt)' in hover
+assert 'sp_ai_strip_payload_length(frame + 5, SPH_PAYLOAD_BYTES)' in hover
+assert 'sp_ai_health_heartbeat(frame[2], frame + 5, aiLength, observedAt)' in hover
+assert 'sp_ai_restriction_heartbeat(frame + 5, SPH_PAYLOAD_BYTES)' in hover
+assert 'sp_ai_bundle_heartbeat(frame[2], frame + 5, SPH_PAYLOAD_BYTES, observedAt)' in hover
+assert 'sp_ai_set_pose(seq, bundle.pose, SP_AI_STRIP_RECORD_BYTES, observedAt)' in event
+assert 'sp_ai_game_update(bundle.state, SP_AI_STRIP_RECORD_BYTES, observedAt)' in event
 assert 'sourceSize:MTLSizeMake(width,SP_HEALTH_SCAN_ROWS,1)' in hover
 encounter_advance = event.split('- (NSString *)advance:(SPAINavSample)sample', 1)[1].split('\n}', 1)[0]
 assert 'sp_ai_health_visual_result' not in encounter_advance
+assert 'uint8_t publicHP = player == SP_HEALTH_PUBLIC ? data[3] : SP_VISUAL_HP_UNKNOWN;' in event
+assert 'sp_ai_game_hp = publicHP;' in event
 assert 'seq == sp_ai_heartbeat_seq' in event
 assert '[_mobileAI stop];' in event
 assert 'sp_mobile_emit_rotation()' in event
-assert 'RPSampleBufferTypeVideo' in event
-assert 'VNRecognizeTextRequest' in event
-assert 'VNClassifyImageRequest' in event and 'sp_ai_luminance' in event
+assert 'RPSampleBufferTypeVideo' not in event
+assert 'VNRecognizeTextRequest' not in event
+assert 'VNClassifyImageRequest' not in event
 assert 'resetDecision' in event
 assert 'captured < input->_mobileAIManualUntil' in event
-legacy_result = event.split('- (void)finish:', 1)[1].split('- (void)inspect:', 1)[0]
-assert 'self.action' not in legacy_result
 assert 'SPAIHarness' in (root / "apps/client/SPAIGraph.swift").read_text()
 assert 'harness.validate' in (root / "apps/client/spgameai.swift").read_text()
 if sys.platform == "darwin" and len(sys.argv) == 2:
@@ -56,10 +61,8 @@ assert '120 * NSEC_PER_SEC' not in event
 assert 'AI OFF' in event and 'AI ON' in event
 assert 'sp_mobile_phone_zone(x, y, interface)' in event
 assert 'Restore floating joystick (Play)' in event
-assert 'if (!_mobileAI.starting) [_mobileAI stop];' in event
+assert 'RPScreenRecorder' not in event and 'startScreen' not in event and '_mobileAI.starting' not in event
 assert 'UISceneDidEnterBackgroundNotification' in event
-assert 'AI NO VID' in event and 'AI NO TEXT' in event and 'AI THINK' in event
-assert 'AI MODEL!' in event and 'AI CAP!' in event
 assert 'sp_mobile_ai_release_key' in event and 'sp_mobile_ai_hold_axis:' in event
 assert '[_mobileStick driveAI:axis]' in event and 'Test AI movement (forward)' in event
 assert 'AI input: Tactara F12 rotation' in event and 'sp_mobile_emit_rotation();' in event
@@ -67,12 +70,11 @@ manual_rotation = event.split('- (void)sp_mobile_rotation:(UIButton *)button {',
 assert 'sp_mobile_emit_rotation();' in manual_rotation
 assert 'if ([action isEqualToString:@"ATTACK"]) {\n            sp_mobile_emit_rotation();' in event
 assert 'VIS SLOW' in event
-assert 'NSProcessInfo.processInfo.systemUptime - captured <= 8.0' in event
 assert 'input->_mobileAIManualUntil' in event
 assert 'SystemLanguageModel.default.isAvailable' in (root / "apps/client/spgameai.swift").read_text()
 assert 'spgameai.swift -o' in (root / "apps/client/build-launcher.sh").read_text()
 assert 'sp_game_ai_register();' in (root / "apps/client/launcher.m").read_text()
-assert '-framework Vision -framework ReplayKit -framework CoreMedia' in (root / "shims/generated/build.sh").read_text()
+assert '-framework ReplayKit' not in (root / "shims/generated/build.sh").read_text()
 assert 'SP_MOBILE_RIGHT_PRESS_SECONDS 0.45' in event
 assert 'sp_mobile_click(getenv("SP_PHONE_UI_RECTS") ? elapsed : 0,' in event
 assert 'sp_mouse_button(click, YES, position);' in event and 'sp_mouse_button(click, NO, position);' in event
@@ -96,20 +98,22 @@ assert '_mobileUI.hidden = _mobileEdit.hidden = compact;' in event
 assert '_mobileSpeed.hidden = _mobileReset.hidden = compact || !_mobileEditing;' in event
 assert '_mobileJump.hidden = compact && ![prefs boolForKey:@"sp_wolkara_show_jump"];' in event
 assert '_softToggle.menu = [self sp_mobile_compact_menu];' in event
-assert '_mobileAIButton.menu = [self sp_mobile_ai_menu];' in event
-assert '_mobileAIButton.showsMenuAsPrimaryAction = YES;' in event
-assert 'input->_mobileAIButton.showsMenuAsPrimaryAction = NO;' in event
-assert 'input->_mobileAIButton.menu = input->_mobileAI.active && !input->_mobileAI.manualPaused ? nil : [input sp_mobile_ai_menu];' in event
+assert '_mobileAIButton.menu' not in event and '_mobileAIButton.showsMenuAsPrimaryAction' not in event
+assert 'sp_mobile_button(@"AI OFF", @"Local AI", self, @selector(sp_mobile_ai_toggle:))' in event
+assert '_mobileAIButton setTitle:on ? @"AI ON" : @"AI OFF" forState:UIControlStateNormal' in event
+assert event.count('_mobileAIButton setTitle:') == 1
+assert '_mobileAIStatus.userInteractionEnabled = NO;' in event
+assert '[self sp_mobile_ai_options]' in event.split('- (UIMenu *)sp_mobile_compact_menu {', 1)[1].split('\n}', 1)[0]
 ai_menu = event.split('- (UIMenu *)sp_mobile_ai_options {', 1)[1].split('\n}', 1)[0]
 assert 'Test AI movement (forward)' in ai_menu
 assert 'Test approach (authorized realm, face selected target)' in ai_menu
 assert '[input sp_mobile_ai_test:3]' in ai_menu
-assert 'Toggle automation on authorized test realm' in ai_menu
+assert 'Authorize farming in this test session' in ai_menu
 assert '[input->_mobileAI start]' not in ai_menu
 repeat_probe = event.split('- (void)sp_mobile_ai_check_test:(SPAINavPulse)pulse', 1)[1].split('\n}', 1)[0]
 assert 'sp_ai_forward_probe_repeat(outcome, remaining)' in repeat_probe
 assert 'sp_mobile_ai_schedule_test:remaining - 1 after:after' in repeat_probe
-assert 'if (!input->_mobileAI.autonomousTest) blocked = @"TEST MODE";' in event
+assert 'if (!input->_mobileAI.farmingAuthorized) blocked = @"TEST MODE";' in event
 assert '_softToggle.showsMenuAsPrimaryAction = NO;' in event
 assert 'CGRectGetMidX(game) - 22' in event
 assert 'Show / hide Jump button' in event and 'Show / hide extra controls' in event
@@ -138,7 +142,7 @@ for source in reference.iterdir():
             '    local args, count = { ... }, select("#", ...)\n'
             "    local ok, problem = xpcall(function() return fn(unpack(args, 1, count)) end, Trace)",
         )
-        assert (wolkara / source.name).read_text(encoding="utf-8") == translate(expected)
+        assert (wolkara / source.name).read_text(encoding="utf-8") == translate(publish_applied_layout(expected))
     elif source.name == "Hud.lua":
         assert (wolkara / source.name).read_text(encoding="utf-8") == translate(protect_hud(source.read_text(encoding="utf-8")))
     elif source.name == "Actions.lua":
@@ -279,24 +283,49 @@ assert 'sample.at <= _manualResumeAt' in poll and 'if (paused)' in poll
 assert 'self.autonomousTest && now - _lastFreshGameAt >= 6.0' in poll
 assert '[_mobilePhysicalKeys addIndex:p.key.keyCode]' in event
 assert '[_mobilePhysicalKeys removeIndex:p.key.keyCode]' in event
-assert 'if (thermal == NSProcessInfoThermalStateCritical) { [self fail:@"AI HEAT"]; return; }' in poll
+assert 'if (thermal >= NSProcessInfoThermalStateCritical) { [self fail:@"AI HEAT"]; return; }' in poll
 assert 'interval = reduced ? 0.8 : 0.4' in poll
 assert 'sp_p2p_enable(preview &&' in poll and '[self previewP2P:run]' in poll.split('} else if (preview) {', 1)[1]
 assert '[self showPhase:fresh ? @"OBS ONLY" : @"AI STALE"]' in poll
 assert not any(status in event for status in ('"HEAT PAUSE"', '"HEAT WALK"', '"HEAT SEEK"'))
-assert 'input->_mobileAI.autonomousTest' in event and '_mobileAI.autonomousTest = NO' in event
+assert 'input->_mobileAI.autonomousTest' in event and '_mobileAI.farmingAuthorized = NO' in event
+assert 'return self.farmingAuthorized && !self.modelDiagnostics && !self.healthDiagnostics;' in event
+assert 'self.farmingAuthorized = NO;' in poll
 
-start_method = event.split("- (void)sp_mobile_ai_toggle:(UIButton *)button {", 1)[1].split("\n}", 1)[0]
+toggle_method = event.split("- (void)sp_mobile_ai_toggle:(UIButton *)button {", 1)[1].split("\n}", 1)[0]
+assert 'observationSelected' not in event
+assert '[self sp_mobile_ai_start];' in toggle_method
+assert '[self sp_mobile_ai_cancel_pending];' in toggle_method
+assert '[self sp_mobile_ai_cancel_pending];' in yield_method
+start_method = event.split("- (void)sp_mobile_ai_start {", 1)[1].split("\n}", 1)[0]
 assert "dispatch_async(dispatch_get_main_queue()" in start_method
 assert start_method.index('[self sp_mobile_ai_release_key]') < start_method.index('++_mobileAIKeyGeneration')
 assert "input->_mobileAIKeyGeneration != generation" in start_method
+assert 'else [input->_mobileAI start];' in start_method
+assert 'if (_mobileAI.autonomousTest) [_mobileStick prepareAI];' in start_method
 manual_button_group = next(line for line in event.splitlines() if "@[_mobileRotation, _mobileUI, _mobileEdit" in line)
 assert "_mobileAIButton" not in manual_button_group
 
-assert 'sp_mobile_ai_movement_key(_mobileAIKeyboardHeld, YES)' in event
-assert 'sp_mobile_ai_movement_key(_mobileAIKeyboardHeld, NO)' in event
+assert 'sp_mobile_ai_movement_key(key, YES)' in event
+assert 'sp_mobile_ai_movement_key(command.key, NO)' in event
+assert 'sp_movement_due(&input->_mobileAIMovement, generation,' in event
+assert '_mobileAIKeyGeneration != generation + 1' not in event
 turn_method = event.split('- (BOOL)sp_mobile_ai_hold_turn:(SPAIMove)move duration:(NSTimeInterval)duration {', 1)[1].split('\n}', 1)[0]
 assert 'sp_ai_movement_key(move, sp_ai_game_move_keys)' in turn_method
-assert 'driveAI:' not in turn_method and '[self sp_mobile_ai_schedule_release:duration]' in turn_method
+assert 'driveAI:' not in turn_method and '[self sp_mobile_ai_schedule_release:_mobileAIMovement.generation]' in turn_method
 assert 'left || right ? SPFunction | SPNumericPad : 0' in event
 assert 'pressed ? SPKeyDown : SPKeyUp' in event
+
+authorize_farming = event.split('actionWithTitle:@"Authorize farming in this test session"', 1)[1].split('}];', 1)[0]
+assert 'input->_mobileAI.farmingAuthorized = YES;' in authorize_farming
+assert 'sp_mobile_ai_start' not in authorize_farming and 'sp_mobile_ai_toggle' not in authorize_farming
+for read_only in ('Observe local models', 'Observe visible player health'):
+    diagnostic = ai_menu.split(f'actionWithTitle:@"{read_only}"', 1)[1].split('}];', 1)[0]
+    assert diagnostic.index('input->_mobileAI.farmingAuthorized = NO;') < diagnostic.index('[input sp_mobile_ai_start]')
+assert 'sp_ai_health_capture_interval_ms((unsigned)thermal, healthDiag || waitingForHealth, paused, fresh)' in poll
+assert 'BOOL preview = diagnosticsRequested && !paused && thermal == NSProcessInfoThermalStateNominal;' in poll
+assert 'if (cropAvailable) {\n                if (!sampleFresh) status = @"HP WAIT";' in poll
+health_capture = hover.split('static void sp_health_capture(id<MTLCommandBuffer> cb, id<MTLTexture> texture) {', 1)[1].split('\n}', 1)[0]
+assert health_capture.index('!liveInterval') < health_capture.index('newBufferWithLength:stride * SP_HEALTH_SCAN_ROWS')
+assert health_capture.count('thermalState < NSProcessInfoThermalStateCritical') == 2
+assert 'sp_ai_health_visual_result' not in encounter_advance

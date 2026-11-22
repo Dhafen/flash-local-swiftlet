@@ -105,7 +105,6 @@ local function spAIIdentity(unit)
 end
 
 local spAICombatTarget, spAILootedTarget
-local spAIHitTarget, spAIHitCount, spAIHitAt = nil, 0, nil
 local spAIPlayerKill, spAIPlayerKillAt
 local spAIPreviousTarget, spAITargetEpoch = nil, 0
 local spAILootSlots = {}
@@ -137,33 +136,11 @@ end
 
 -- Track only a slot whose entire reported source is the selected corpse.
 -- A closed loot window by itself carries no success signal.
-local function spAICombatLog(_, kind, _, source, _, _, _, destination, _, _, _, ...)
-    if not spAIReadable(kind) or not spAIReadable(source) or not spAIReadable(destination)
-        or type(kind) ~= "string" or type(source) ~= "string" or type(destination) ~= "string" then return end
-    local amount
-    if kind == "SWING_DAMAGE" then amount = ...
-    elseif kind == "SPELL_DAMAGE" or kind == "RANGE_DAMAGE" or kind == "SPELL_PERIODIC_DAMAGE" then
-        amount = select(4, ...)
-    else return end
-    if not spAIReadable(amount) or type(amount) ~= "number" or not (amount > 0 and amount < math.huge) then return end
-    local now = spAIClock()
-    if not now or source ~= spAIIdentity("player") or destination ~= spAIIdentity("target") then return end
-    if spAIHitTarget ~= destination then spAIHitCount = 0 end
-    spAIHitTarget, spAIHitCount, spAIHitAt = destination, (spAIHitCount + 1) % 4, now
-end
-
 local function spAILootEvent(_, event, first, second)
     if event == "PLAYER_TARGET_CHANGED" then
         spAICombatTarget, spAIPlayerKill, spAIPlayerKillAt = nil, nil, nil
         spAIPreviousTarget = nil
-        spAIHitTarget, spAIHitCount, spAIHitAt = nil, 0, nil
         spAILootSlots = {}
-        return
-    end
-    if event == "COMBAT_LOG_EVENT_UNFILTERED" then
-        if type(CombatLogGetCurrentEventInfo) == "function" then
-            pcall(function() spAICombatLog(CombatLogGetCurrentEventInfo()) end)
-        end
         return
     end
     if event == "PARTY_KILL" then
@@ -203,12 +180,18 @@ local function spAILootEvent(_, event, first, second)
 end
 
 if type(CreateFrame) == "function" then
+    local previousStage = spHoverStage
+    if previousStage then spHoverStage = "telemetry event frame" end
     local frame = CreateFrame("Frame")
+    -- Forever rejects COMBAT_LOG_EVENT_UNFILTERED at registration time, even under pcall.
     for _, event in ipairs({"LOOT_OPENED", "LOOT_SLOT_CLEARED", "LOOT_CLOSED", "PARTY_KILL",
-        "PLAYER_TARGET_CHANGED", "COMBAT_LOG_EVENT_UNFILTERED"}) do
+        "PLAYER_TARGET_CHANGED"}) do
+        if previousStage then spHoverStage = event end
         pcall(frame.RegisterEvent, frame, event)
     end
+    if previousStage then spHoverStage = "telemetry event handler" end
     frame:SetScript("OnEvent", function(...) pcall(spAILootEvent, ...) end)
+    if previousStage then spHoverStage = previousStage end
 end
 
 local spAIMotionCounter, spAIMotionSource, spAIPositionEpoch = 0, 0, 0
@@ -243,17 +226,58 @@ local function spAIProgression()
         .. string.char(math.floor(level / 256), level % 256, math.floor(quests / 256), quests % 256, 0, 0)
 end
 
+local function spAIUnprotectedFrame(frame)
+    if not spAIReadable(frame) or not frame or type(frame.IsForbidden) ~= "function" then return false end
+    local forbidden = frame:IsForbidden()
+    if not spAIReadable(forbidden) or forbidden ~= false or type(frame.IsProtected) ~= "function" then return false end
+    local protected = frame:IsProtected()
+    return spAIReadable(protected) and protected == false
+end
+
+local spAIHealthModalFrames = {
+    "WolkaraMobileMenu", "WolkaraMobilePicker", "WolkaraMobileSettings", "WolkaraMobileChat",
+    "GameMenuFrame", "SettingsPanel", "WorldMapFrame", "QuestFrame", "GossipFrame", "LootFrame",
+    "ContainerFrameCombinedBags", "CharacterFrame", "PlayerSpellsFrame",
+    "StaticPopup1", "StaticPopup2", "StaticPopup3", "StaticPopup4",
+}
+
+local function spAIHealthViewClear()
+    for _, name in ipairs(spAIHealthModalFrames) do
+        local frame = _G[name]
+        if not spAIReadable(frame) then return false end
+        if frame then
+            -- Visibility can be secret. Do not measure or operate on game modal frames.
+            if type(frame.IsForbidden) ~= "function" then return false end
+            local forbidden = frame:IsForbidden()
+            if not spAIReadable(forbidden) or forbidden ~= false or type(frame.IsVisible) ~= "function" then return false end
+            local visible = frame:IsVisible()
+            if not spAIReadable(visible) or visible ~= false then return false end
+        end
+    end
+    return true
+end
+
 local function spAIVisibleHealthBounds()
     local ok, bounds = pcall(function()
-        local player = _G.WolkaraMobilePlayer
-        local bar = player and player.health
-        if not bar or bar:IsForbidden() or not bar:IsVisible() or bar:GetEffectiveAlpha() < 0.8 then return end
-        local left, bottom, width, height = bar:GetRect()
-        local rootScale, scale = UIParent:GetEffectiveScale(), bar:GetEffectiveScale()
-        local w, h = UIParent:GetWidth() * rootScale, UIParent:GetHeight() * rootScale
+        -- This frame has no textures and is placed independently from the secure HUD.
+        local geometry = _G.WolkaraMobileHealthGeometry
+        if not spAIUnprotectedFrame(geometry) then return end
+        local visible = geometry:IsVisible()
+        if not spAIReadable(visible) or visible ~= true then return end
+        local crop = geometry.crop
+        if not spAIUnprotectedFrame(crop) or not spAIHealthViewClear() then return end
+        visible = crop:IsVisible()
+        if not spAIReadable(visible) or visible ~= true then return end
+        local alpha = crop:GetEffectiveAlpha()
+        if not spAIFinite(alpha) or alpha < 0.8 then return end
+        local rootScale, scale = UIParent:GetEffectiveScale(), crop:GetEffectiveScale()
+        local rootWidth, rootHeight = UIParent:GetWidth(), UIParent:GetHeight()
+        if not spAIFinite(rootScale) or not spAIFinite(rootWidth) or not spAIFinite(rootHeight) or
+            not spAIFinite(scale) or rootScale <= 0 or rootWidth <= 0 or rootHeight <= 0 or scale <= 0 then return end
+        local w, h = rootWidth * rootScale, rootHeight * rootScale
+        local left, bottom, width, height = crop:GetRect()
         if not spAIFinite(left) or not spAIFinite(bottom) or not spAIFinite(width) or not spAIFinite(height) or
-            not spAIFinite(scale) or not spAIFinite(w) or not spAIFinite(h) or
-            scale <= 0 or w <= 0 or h <= 0 or width <= 0 or height <= 0 then return end
+            not spAIFinite(w) or not spAIFinite(h) or w <= 0 or h <= 0 or width <= 0 or height <= 0 then return end
         local l, t = left * scale / w, 1 - (bottom + height) * scale / h
         local r, b = (left + width) * scale / w, 1 - bottom * scale / h
         if l < 0 or t < 0 or r > 1 or b > 1 then return end
@@ -261,7 +285,7 @@ local function spAIVisibleHealthBounds()
             local q = math.floor(4095 * value + 0.5)
             return string.char(math.floor(q / 256), q % 256)
         end
-        return string.char(65, 72, 1, 1) .. q12(l) .. q12(t) .. q12(r) .. q12(b) .. string.rep("\0", 6)
+        return string.char(65, 72, 2, 1) .. q12(l) .. q12(t) .. q12(r) .. q12(b) .. string.rep("\0", 6)
     end)
     return ok and bounds or nil
 end
@@ -430,11 +454,6 @@ local function spAIState()
                 + 4 * spAICorpseQuery(UnitHasLootInteraction) + 16 * spAICorpseQuery(UnitIsInInteractRange)
         end
         local healthStatus = 64 + spAIHealthStatus(hp, hpReason) * 4 + targetHealth * 16
-        local hitClock = spAIHitAt and spAIClock()
-        if foeID and spAIHitTarget == foeID and hitClock and hitClock >= spAIHitAt and hitClock - spAIHitAt < 1 then
-            corpseEvidence = corpseEvidence + 64 * spAIHitCount
-            healthStatus = healthStatus + 128
-        end
         return string.char(65, 73, flags, hp or 255, targetHP, meta, 75, spAIMovementBindings(),
             70, motionSource, motionCounter, corpseEvidence, 78, foeID and spAITargetEpoch or 0, positionEpoch,
             math.floor(distance / 256), distance % 256, bindings + healthStatus), worldPose

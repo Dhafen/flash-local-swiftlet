@@ -105,14 +105,14 @@ static inline void sp_ai_route_calibrate_leg(SPAIRouteLeg *leg, SPAIWorldPose fi
     leg->calibrated = along > 0 && 16 * cross * cross <= along * along;
 }
 
-static inline SPAIRouteDecision sp_ai_route_probe(const SPAIRoute *route, SPAIWorldPose pose) {
-    if (route->next >= route->count) return SP_ROUTE_COMPLETE;
+static inline SPAIRouteDecision sp_ai_route_probe_leg(const SPAIRoute *route, unsigned legIndex, SPAIWorldPose pose) {
+    if (legIndex >= route->count) return SP_ROUTE_COMPLETE;
     if (!pose.valid) return SP_ROUTE_UNKNOWN;
-    const SPAIRouteLeg *leg = &route->legs[route->next];
+    const SPAIRouteLeg *leg = &route->legs[legIndex];
     if (pose.map != leg->start.map) return SP_ROUTE_OFF_ROUTE;
     const double radius2 = SP_ROUTE_RADIUS_Q4 * SP_ROUTE_RADIUS_Q4;
     if (sp_ai_pose_distance2(pose, leg->end) <= radius2 &&
-        (route->next + 1 == route->count || sp_ai_pose_distance2(pose, route->legs[route->next + 1].start) <= radius2))
+        (legIndex + 1 == route->count || sp_ai_pose_distance2(pose, route->legs[legIndex + 1].start) <= radius2))
         return SP_ROUTE_REACHED;
     double x = (double)pose.firstQ4 - leg->start.firstQ4, y = (double)pose.secondQ4 - leg->start.secondQ4;
     double dx = (double)leg->end.firstQ4 - leg->start.firstQ4, dy = (double)leg->end.secondQ4 - leg->start.secondQ4;
@@ -122,6 +122,26 @@ static inline SPAIRouteDecision sp_ai_route_probe(const SPAIRoute *route, SPAIWo
         return SP_ROUTE_OFF_ROUTE;
     if (!pose.headingKnown) return SP_ROUTE_UNKNOWN;
     return sp_ai_heading_delta(leg->start.heading, pose.heading) <= 8 ? SP_ROUTE_FORWARD : SP_ROUTE_FACE;
+}
+
+static inline SPAIRouteDecision sp_ai_route_probe(const SPAIRoute *route, SPAIWorldPose pose) {
+    return sp_ai_route_probe_leg(route, route->next, pose);
+}
+
+static inline unsigned sp_ai_route_later_entry(const SPAIRoute *route, SPAIWorldPose pose) {
+    if (!pose.valid || !pose.headingKnown) return route->count;
+    unsigned match = route->count;
+    for (unsigned i = route->next + 1; i < route->count; ++i) {
+        const SPAIRouteLeg *leg = &route->legs[i];
+        if (!leg->calibrated || pose.epoch != leg->start.epoch) continue;
+        SPAIRouteDecision decision = sp_ai_route_probe_leg(route, i, pose);
+        bool canTurnAtStart = decision == SP_ROUTE_FACE &&
+            sp_ai_pose_distance2(pose, leg->start) <= SP_ROUTE_RADIUS_Q4 * SP_ROUTE_RADIUS_Q4;
+        if (decision != SP_ROUTE_FORWARD && !canTurnAtStart) continue;
+        if (match != route->count) return route->count;
+        match = i;
+    }
+    return match;
 }
 
 static inline double sp_ai_route_hold(const SPAIRoute *route, SPAIWorldPose pose) {

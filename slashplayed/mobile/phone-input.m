@@ -213,8 +213,32 @@ static UIButton *sp_mobile_button(NSString *title, NSString *label, id owner, SE
 
 // SPInputView methods follow.
 #if !TARGET_OS_VISION
-- (void)sp_mobile_ai_yield:(id)sender {
+- (void)sp_mobile_ai_status:(NSString *)status {
+    BOOL on = _mobileAIStartPending || (_mobileAI.active && !_mobileAI.manualPaused);
+    BOOL healthBlocked = [status isEqualToString:@"HP SECRET"] || [status isEqualToString:@"HP UNKNOWN"];
+    NSString *detail = healthBlocked ? @"HP BLOCKED" : status;
+    if ([status isEqualToString:@"AI ON"] || [status isEqualToString:@"AI OFF"]) detail = nil;
+    [_mobileAIButton setTitle:on ? @"AI ON" : @"AI OFF" forState:UIControlStateNormal];
+    _mobileAIButton.accessibilityHint = on ? @"Tap to stop AI" : @"Tap to start AI";
+    NSString *accessibilityState = on ? @"On" : @"Off";
+    _mobileAIButton.accessibilityValue = detail.length ?
+        [NSString stringWithFormat:@"%@, %@", accessibilityState, detail] : accessibilityState;
+    _mobileAIButton.backgroundColor = healthBlocked ? [UIColor colorWithRed:0.47 green:0.26 blue:0.06 alpha:0.95]
+        : on ? [UIColor colorWithRed:0.10 green:0.39 blue:0.22 alpha:0.92] : [UIColor colorWithWhite:0 alpha:0.55];
+    _mobileAIStatus.text = detail;
+    _mobileAIStatus.hidden = _mobileAIButton.hidden || !detail.length;
+}
+
+- (void)sp_mobile_ai_cancel_pending {
     ++_mobileAIKeyGeneration;
+    if (_mobileAIStartPending) {
+        _mobileAIStartPending = NO;
+        [self sp_mobile_ai_status:_mobileAI.manualPaused ? @"AI PAUSED" : nil];
+    }
+}
+
+- (void)sp_mobile_ai_yield:(id)sender {
+    [self sp_mobile_ai_cancel_pending];
     [self sp_mobile_ai_release_key];
     [_mobileAI yieldToManualInput];
     _mobileAIManualUntil = NSProcessInfo.processInfo.systemUptime + 1.0;
@@ -295,15 +319,25 @@ static UIButton *sp_mobile_button(NSString *title, NSString *label, id owner, SE
     _mobileRotation.hidden = YES;
     _mobileAI = [SPGameAIController new];
     _mobilePhysicalKeys = [NSMutableIndexSet indexSet];
-    _mobileAIButton = sp_mobile_button(@"AI MODE", @"Local AI", self, @selector(sp_mobile_ai_toggle:));
+    _mobileAIButton = sp_mobile_button(@"AI OFF", @"Local AI", self, @selector(sp_mobile_ai_toggle:));
     _mobileAIButton.titleLabel.font = [UIFont systemFontOfSize:10 weight:UIFontWeightSemibold];
     _mobileAIButton.titleLabel.adjustsFontSizeToFitWidth = YES;
     _mobileAIButton.titleLabel.minimumScaleFactor = 0.7;
     _mobileAIButton.layer.cornerRadius = 22;
     _mobileAIButton.hidden = YES;
-    _mobileAIButton.menu = [self sp_mobile_ai_menu];
-    _mobileAIButton.showsMenuAsPrimaryAction = YES;
-    _mobileAIButton.accessibilityHint = @"Choose an AI mode.";
+    _mobileAIStatus = [[UILabel alloc] initWithFrame:CGRectZero];
+    _mobileAIStatus.textColor = UIColor.whiteColor;
+    _mobileAIStatus.font = [UIFont systemFontOfSize:10 weight:UIFontWeightSemibold];
+    _mobileAIStatus.textAlignment = NSTextAlignmentCenter;
+    _mobileAIStatus.adjustsFontSizeToFitWidth = YES;
+    _mobileAIStatus.backgroundColor = [UIColor colorWithWhite:0 alpha:0.64];
+    _mobileAIStatus.layer.cornerRadius = 5;
+    _mobileAIStatus.clipsToBounds = YES;
+    _mobileAIStatus.layer.zPosition = _mobileAIButton.layer.zPosition;
+    _mobileAIStatus.userInteractionEnabled = NO;
+    _mobileAIStatus.isAccessibilityElement = NO;
+    [self addSubview:_mobileAIStatus];
+    [self sp_mobile_ai_status:nil];
     // The AI toggle is an explicit request to start or stop automation.
     // TouchDown on the other controls still yields to manual input.
     for (UIButton *button in @[_mobileRotation, _mobileUI, _mobileEdit, _mobileSpeed, _mobileReset, _softToggle])
@@ -359,19 +393,7 @@ static UIButton *sp_mobile_button(NSString *title, NSString *label, id owner, SE
         return YES;
     };
     _mobileAI.status = ^(NSString *status) {
-        SPInputView *input = weakSelf;
-        if (!input) return;
-        [input->_mobileAIButton setTitle:status forState:UIControlStateNormal];
-        input->_mobileAIButton.menu = input->_mobileAI.active && !input->_mobileAI.manualPaused ? nil : [input sp_mobile_ai_menu];
-        input->_mobileAIButton.showsMenuAsPrimaryAction =
-            !input->_mobileAI.active && !input->_mobileAI.autonomousTest && !input->_mobileAI.observationSelected;
-        input->_mobileAIButton.backgroundColor = input->_mobileAI.active
-            && !input->_mobileAI.manualPaused && input->_mobileAI.autonomousTest
-            ? [UIColor colorWithRed:0.10 green:0.39 blue:0.22 alpha:0.92] : [UIColor colorWithWhite:0 alpha:0.55];
-        input->_mobileAIButton.accessibilityHint = input->_mobileAI.manualPaused
-            ? @"Tap to stop. Hold to resume."
-            : input->_mobileAI.active
-            ? @"Tap to stop AI" : @"Tap to start. Hold for AI options.";
+        [weakSelf sp_mobile_ai_status:status];
     };
     _mobileReset.hidden = _mobileSpeed.hidden = YES;
     for (UIButton *button in @[_mobileJump, _mobileUI, _mobileEdit, _mobileSpeed, _mobileReset, _mobileRotation, _mobileAIButton]) {
@@ -388,20 +410,16 @@ static UIButton *sp_mobile_button(NSString *title, NSString *label, id owner, SE
 
 - (void)sp_mobile_deactivate:(NSNotification *)notification {
     if (notification.object == self.window.windowScene) {
-        // A ReplayKit consent sheet may temporarily deactivate the scene.
         [self sp_mobile_cancel];
-        if (!_mobileAI.starting) [_mobileAI stop];
+        [_mobileAI stop];
     }
 }
 - (void)sp_mobile_background:(NSNotification *)notification {
     if (notification.object == self.window.windowScene) {
         [_mobileAI stop];
-        if (_mobileAI.autonomousTest) {
-            _mobileAI.autonomousTest = NO;
-            _mobileAIButton.showsMenuAsPrimaryAction = YES;
-            [_mobileAIButton setTitle:@"AI MODE" forState:UIControlStateNormal];
-        }
+        _mobileAI.farmingAuthorized = NO;
         [self sp_mobile_cancel];
+        [self sp_mobile_ai_status:nil];
     }
 }
 - (void)sp_mobile_activate:(NSNotification *)notification {
@@ -474,34 +492,19 @@ static UIButton *sp_mobile_button(NSString *title, NSString *label, id owner, SE
     NSArray<UIMenuElement *> *controls = @[
         escape, jump, showJump, rotation, showRotation, resetRotation, play, mode
     ];
-    controls = [controls arrayByAddingObjectsFromArray:[self sp_mobile_ai_options].children];
+    controls = [controls arrayByAddingObject:[self sp_mobile_ai_options]];
     return [UIMenu menuWithTitle:@"Game controls" children:[controls arrayByAddingObject:legacy]];
-}
-
-- (UIMenu *)sp_mobile_ai_menu {
-    if (!_mobileAI.manualPaused) return [self sp_mobile_ai_options];
-    __weak SPInputView *weakSelf = self;
-    UIAction *resume = [UIAction actionWithTitle:@"Resume after manual control" image:nil identifier:nil handler:^(__kindof UIAction *action) {
-        SPInputView *input = weakSelf;
-        if (input && !input->_mobilePhysicalKeys.count && !input->_mobileLeft && !input->_mobileRight &&
-            !input->_mobileInterface && !input->_touches.count && !input->_mobileJumpHeld)
-            [input->_mobileAI resumeFromManualInput];
-    }];
-    return [UIMenu menuWithTitle:@"AI paused" children:@[resume]];
 }
 
 - (UIMenu *)sp_mobile_ai_options {
     __weak SPInputView *weakSelf = self;
-    UIAction *observe = [UIAction actionWithTitle:@"Observe only" image:nil identifier:nil handler:^(__kindof UIAction *action) {
+    UIAction *observe = [UIAction actionWithTitle:@"End farming test authorization" image:nil identifier:nil handler:^(__kindof UIAction *action) {
         SPInputView *input = weakSelf;
         if (!input) return;
+        [input sp_mobile_ai_cancel_pending];
         [input->_mobileAI stop];
-        input->_mobileAI.autonomousTest = NO;
-        input->_mobileAI.observationSelected = YES;
-        input->_mobileAI.modelDiagnostics = NO;
-        input->_mobileAI.healthDiagnostics = NO;
-        input->_mobileAIButton.showsMenuAsPrimaryAction = NO;
-        [input->_mobileAIButton setTitle:@"OBS READY" forState:UIControlStateNormal];
+        input->_mobileAI.farmingAuthorized = NO;
+        [input sp_mobile_ai_status:nil];
     }];
     UIAction *aiTest = [UIAction actionWithTitle:@"Test AI movement (forward)" image:nil identifier:nil handler:^(__kindof UIAction *action) {
         SPInputView *input = weakSelf;
@@ -514,51 +517,56 @@ static UIButton *sp_mobile_button(NSString *title, NSString *label, id owner, SE
     }];
     UIAction *aiTeach = [UIAction actionWithTitle:@"Teach AI approach (start / save)" image:nil identifier:nil handler:^(__kindof UIAction *action) {
         SPInputView *input = weakSelf;
-        if (input) [input->_mobileAI toggleTeaching];
+        if (!input) return;
+        [input sp_mobile_ai_cancel_pending];
+        [input->_mobileAI toggleTeaching];
     }];
     UIAction *markRoute = [UIAction actionWithTitle:@"Mark straight route leg (start or end)" image:nil identifier:nil handler:^(__kindof UIAction *action) {
         SPInputView *input = weakSelf;
-        if (input) [input->_mobileAI recordRouteMark];
+        if (!input) return;
+        [input sp_mobile_ai_cancel_pending];
+        [input->_mobileAI stop];
+        [input->_mobileAI recordRouteMark];
     }];
     UIAction *clearRoute = [UIAction actionWithTitle:@"Clear recorded grind route" image:nil identifier:nil handler:^(__kindof UIAction *action) {
         SPInputView *input = weakSelf;
-        if (input) [input->_mobileAI clearGrindRoute];
+        if (!input) return;
+        [input sp_mobile_ai_cancel_pending];
+        [input->_mobileAI stop];
+        [input->_mobileAI clearGrindRoute];
     }];
-    UIAction *aiTestMode = [UIAction actionWithTitle:@"Toggle automation on authorized test realm" image:nil identifier:nil handler:^(__kindof UIAction *action) {
+    UIAction *aiTestMode = [UIAction actionWithTitle:@"Authorize farming in this test session" image:nil identifier:nil handler:^(__kindof UIAction *action) {
+        SPInputView *input = weakSelf;
+        UIWindowScene *scene = input.window.windowScene;
+        if (!input || !scene || scene.activationState != UISceneActivationStateForegroundActive) return;
+        [input sp_mobile_ai_cancel_pending];
+        [input->_mobileAI stop];
+        input->_mobileAI.farmingAuthorized = YES;
+        [input sp_mobile_ai_status:@"TEST READY"];
+    }];
+    UIAction *aiModels = [UIAction actionWithTitle:@"Observe local models" image:nil identifier:nil handler:^(__kindof UIAction *action) {
         SPInputView *input = weakSelf;
         if (!input) return;
+        [input sp_mobile_ai_cancel_pending];
         [input->_mobileAI stop];
-        input->_mobileAI.autonomousTest = !input->_mobileAI.autonomousTest;
-        input->_mobileAI.observationSelected = !input->_mobileAI.autonomousTest;
-        input->_mobileAIButton.showsMenuAsPrimaryAction = NO;
-        [input->_mobileAIButton setTitle:input->_mobileAI.autonomousTest ? @"TEST READY" : @"OBS READY"
-            forState:UIControlStateNormal];
-    }];
-    UIAction *aiModels = [UIAction actionWithTitle:@"Toggle model diagnostics in observation mode" image:nil identifier:nil handler:^(__kindof UIAction *action) {
-        SPInputView *input = weakSelf;
-        if (!input) return;
-        [input->_mobileAI stop];
-        input->_mobileAI.modelDiagnostics = !input->_mobileAI.modelDiagnostics;
+        input->_mobileAI.farmingAuthorized = NO;
+        input->_mobileAI.modelDiagnostics = YES;
         input->_mobileAI.healthDiagnostics = NO;
-        input->_mobileAI.autonomousTest = NO;
-        input->_mobileAI.observationSelected = YES;
-        input->_mobileAIButton.showsMenuAsPrimaryAction = NO;
-        [input->_mobileAIButton setTitle:input->_mobileAI.modelDiagnostics ? @"MODEL ON" : @"MODEL OFF"
-            forState:UIControlStateNormal];
+        [input sp_mobile_ai_start];
     }];
     UIAction *inspectHealth = [UIAction actionWithTitle:@"Observe visible player health" image:nil identifier:nil handler:^(__kindof UIAction *action) {
         SPInputView *input = weakSelf;
         if (!input) return;
+        [input sp_mobile_ai_cancel_pending];
         [input->_mobileAI stop];
+        input->_mobileAI.farmingAuthorized = NO;
         input->_mobileAI.healthDiagnostics = YES;
         input->_mobileAI.modelDiagnostics = NO;
-        input->_mobileAI.autonomousTest = NO;
-        input->_mobileAI.observationSelected = YES;
-        input->_mobileAIButton.showsMenuAsPrimaryAction = NO;
-        [input->_mobileAIButton setTitle:@"HP READY" forState:UIControlStateNormal];
+        [input sp_mobile_ai_start];
     }];
+    UIMenu *authorization = [UIMenu menuWithTitle:@"Authorized test session" children:@[aiTestMode, observe]];
     UIMenu *route = [UIMenu menuWithTitle:@"Grind route" children:@[markRoute, clearRoute]];
-    return [UIMenu menuWithTitle:@"AI options" children:@[observe, aiTest, approachTest, aiTestMode, route, inspectHealth, aiModels, aiTeach]];
+    return [UIMenu menuWithTitle:@"AI diagnostics" children:@[authorization, aiTest, approachTest, route, inspectHealth, aiModels, aiTeach]];
 }
 
 - (void)sp_mobile_layout:(CGRect)game top:(CGFloat)top {
@@ -601,6 +609,11 @@ static UIButton *sp_mobile_button(NSString *title, NSString *label, id owner, SE
     _mobileAIButton.bounds = CGRectMake(0, 0, 64, 44);
     _mobileAIButton.center = [self sp_mobile_clamp_rotation:CGPointMake(
         game.origin.x + 0.88 * game.size.width, game.origin.y + 0.28 * game.size.height)];
+    CGFloat captionWidth = MIN(104, CGRectGetWidth(game));
+    CGFloat captionX = MAX(CGRectGetMinX(game), MIN(CGRectGetMaxX(game) - captionWidth,
+        _mobileAIButton.center.x - captionWidth * 0.5));
+    _mobileAIStatus.frame = CGRectMake(captionX, CGRectGetMaxY(_mobileAIButton.frame) + 2, captionWidth, 17);
+    _mobileAIStatus.hidden = _mobileAIButton.hidden || !_mobileAIStatus.text.length;
     _mobileRotation.bounds = CGRectMake(0, 0, 44, 44);
     if (_mobileRotationPan.state != UIGestureRecognizerStateBegan &&
         _mobileRotationPan.state != UIGestureRecognizerStateChanged) {
@@ -705,59 +718,64 @@ static void sp_mobile_ai_movement_key(unsigned char key, BOOL pressed) {
 }
 
 - (void)sp_mobile_ai_release_key {
-    if (!_mobileAIKeyHeld) return;
-    _mobileAIKeyHeld = NO;
-    ++_mobileAIKeyGeneration;
-    if (_mobileAIKeyboardHeld) {
-        sp_mobile_ai_movement_key(_mobileAIKeyboardHeld, NO);
-        _mobileAIKeyboardHeld = 0;
-    } else [_mobileStick stop];
+    SPMovementCommand command = sp_movement_release(&_mobileAIMovement, 0);
+    if (!command.deadline) return;
+    if (command.key) sp_mobile_ai_movement_key(command.key, NO);
+    else [_mobileStick stop];
 }
 - (BOOL)sp_mobile_ai_hold_axis:(CGPoint)axis duration:(NSTimeInterval)duration {
-    [self sp_mobile_ai_release_key];
     SPAIMove move = axis.y > 0 ? SP_MOVE_FORWARD : axis.y < 0 ? SP_MOVE_BACK :
         axis.x < 0 ? SP_MOVE_LEFT : axis.x > 0 ? SP_MOVE_RIGHT : SP_MOVE_NONE;
     NSTimeInterval now = NSProcessInfo.processInfo.systemUptime;
-    if (sp_ai_game_at > 0 && now-sp_ai_game_at < 3.0)
-        _mobileAIKeyboardHeld = sp_ai_movement_key(move, sp_ai_game_move_keys);
-    if (_mobileAIKeyboardHeld) {
-        sp_mobile_ai_movement_key(_mobileAIKeyboardHeld, YES);
-        sp_stub_log([[NSString stringWithFormat:@"AI input: held verified key %c", _mobileAIKeyboardHeld] UTF8String]);
+    uint8_t key = sp_ai_sample_fresh(sp_ai_game_at, now) ? sp_ai_movement_key(move, sp_ai_game_move_keys) : 0;
+    if (move == SP_MOVE_NONE || !sp_movement_begin(&_mobileAIMovement, key, now, duration)) return NO;
+    if (key) {
+        sp_mobile_ai_movement_key(key, YES);
+        sp_stub_log([[NSString stringWithFormat:@"AI input: held verified key %c", key] UTF8String]);
     } else if ([_mobileStick driveAI:axis]) {
         sp_stub_log([[NSString stringWithFormat:@"AI input: virtual stick %.1f %.1f", axis.x, axis.y] UTF8String]);
     } else {
+        sp_movement_release(&_mobileAIMovement, 0);
         sp_stub_log("AI input: no verified key and virtual controller not ready");
         return NO;
     }
-    [self sp_mobile_ai_schedule_release:duration];
+    [self sp_mobile_ai_schedule_release:_mobileAIMovement.generation];
     return YES;
 }
 - (BOOL)sp_mobile_ai_hold_turn:(SPAIMove)move duration:(NSTimeInterval)duration {
-    [self sp_mobile_ai_release_key];
-    if (!sp_ai_sample_fresh(sp_ai_game_at, NSProcessInfo.processInfo.systemUptime)) return NO;
-    _mobileAIKeyboardHeld = sp_ai_movement_key(move, sp_ai_game_move_keys);
-    if (!_mobileAIKeyboardHeld) return NO;
-    sp_mobile_ai_movement_key(_mobileAIKeyboardHeld, YES);
+    NSTimeInterval now = NSProcessInfo.processInfo.systemUptime;
+    if (!sp_ai_sample_fresh(sp_ai_game_at, now)) return NO;
+    uint8_t key = sp_ai_movement_key(move, sp_ai_game_move_keys);
+    if (!key || !sp_movement_begin(&_mobileAIMovement, key, now, duration)) return NO;
+    sp_mobile_ai_movement_key(key, YES);
     sp_stub_log(move == SP_TURN_LEFT ? "AI input: held verified left-arrow turn" : "AI input: held verified right-arrow turn");
-    [self sp_mobile_ai_schedule_release:duration];
+    [self sp_mobile_ai_schedule_release:_mobileAIMovement.generation];
     return YES;
 }
-- (void)sp_mobile_ai_schedule_release:(NSTimeInterval)duration {
-    _mobileAIKeyHeld = YES;
-    NSUInteger generation = ++_mobileAIKeyGeneration;
+- (void)sp_mobile_ai_schedule_release:(uint64_t)generation {
+    NSTimeInterval remaining = _mobileAIMovement.deadline - NSProcessInfo.processInfo.systemUptime;
     __weak SPInputView *weakSelf = self;
-    NSTimeInterval hold = duration > 0 ? MIN(duration, 0.70) : 0.55;
-    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(hold * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(MAX(remaining, 0.001) * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
         SPInputView *input = weakSelf;
-        if (input && input->_mobileAIKeyGeneration == generation) [input sp_mobile_ai_release_key];
+        if (!input || !input->_mobileAIMovement.deadline || input->_mobileAIMovement.generation != generation) return;
+        if (sp_movement_due(&input->_mobileAIMovement, generation, NSProcessInfo.processInfo.systemUptime))
+            [input sp_mobile_ai_release_key];
+        else [input sp_mobile_ai_schedule_release:generation];
     });
 }
 - (void)sp_mobile_ai_check_test:(SPAINavPulse)pulse generation:(NSUInteger)generation
     remaining:(unsigned)remaining lastSample:(SPAINavSample)lastSample {
-    if (_mobileAIKeyGeneration != generation && _mobileAIKeyGeneration != generation + 1) return;
+    if (_mobileAIKeyGeneration != generation) return;
     if (_mobileAI.active || self.window.windowScene.activationState != UISceneActivationStateForegroundActive) return;
     NSTimeInterval now = NSProcessInfo.processInfo.systemUptime;
     SPAINavSample after = sp_ai_game_sample();
+    if (remaining && (!sp_ai_sample_fresh(after.at, now) || sp_ai_player_health != SP_HEALTH_PUBLIC ||
+        !sp_ai_hp_known(sp_ai_game_hp) || sp_ai_game_hp < 35)) {
+        [self sp_mobile_ai_release_key];
+        [self sp_mobile_ai_status:@"HP BLOCKED"];
+        sp_stub_log("AI movement diagnostic: repeated approach stopped without fresh safe player health");
+        return;
+    }
     SPAINavOutcome outcome = sp_ai_nav_observe(pulse, &after, now, &lastSample);
     if (outcome == SP_NAV_PENDING) {
         __weak SPInputView *weakSelf = self;
@@ -775,7 +793,7 @@ static void sp_mobile_ai_movement_key(unsigned char key, BOOL pressed) {
         case SP_NAV_CONTEXT_CHANGED: status = @"TEST TARGET"; break;
         default: break;
     }
-    [_mobileAIButton setTitle:status forState:UIControlStateNormal];
+    [self sp_mobile_ai_status:status];
     sp_stub_log([[NSString stringWithFormat:@"AI movement diagnostic: %s distance-q4=%u->%u",
         sp_ai_nav_outcome_name(outcome), (unsigned)pulse.before.evidence.distance, (unsigned)after.evidence.distance] UTF8String]);
     [_mobileAI recordManualProbe:pulse outcome:outcome];
@@ -787,6 +805,7 @@ static void sp_mobile_ai_movement_key(unsigned char key, BOOL pressed) {
 
 // The standalone pulse and opt-in approach probe share the same input adapter.
 - (void)sp_mobile_ai_test:(unsigned)remaining {
+    [self sp_mobile_ai_cancel_pending];
     if (_mobileAI.active) [_mobileAI stop];
     [self sp_mobile_ai_release_key];
     [_mobileStick prepareAI];
@@ -806,51 +825,73 @@ static void sp_mobile_ai_movement_key(unsigned char key, BOOL pressed) {
             input->_touches.count || input->_mobilePhysicalKeys.count || sp_mouse_buttons) return;
         NSTimeInterval now = NSProcessInfo.processInfo.systemUptime;
         if (NSProcessInfo.processInfo.thermalState == NSProcessInfoThermalStateCritical) {
-            [input->_mobileAIButton setTitle:@"AI HEAT" forState:UIControlStateNormal];
+            [input sp_mobile_ai_status:@"AI HEAT"];
             return;
         }
         SPAINavSample before = sp_ai_game_sample();
         if (!sp_ai_heartbeat_seen || !sp_ai_sample_fresh(before.at, now)) before = (SPAINavSample){0};
         if (remaining) {
             NSString *blocked = nil;
-            if (!input->_mobileAI.autonomousTest) blocked = @"TEST MODE";
+            if (!input->_mobileAI.farmingAuthorized) blocked = @"TEST MODE";
+            else if (sp_ai_player_health != SP_HEALTH_PUBLIC || !sp_ai_hp_known(sp_ai_game_hp) ||
+                sp_ai_game_hp < 35) blocked = @"HP BLOCKED";
             else if (confirmed.at && (before.evidence.target != confirmed.evidence.target ||
                 before.evidence.position != confirmed.evidence.position)) blocked = @"TEST TARGET";
             else if (!sp_ai_forward_probe_ready(before, sp_ai_game_flags, sp_ai_game_move_keys, now) ||
-                (sp_ai_hp_known(sp_ai_game_hp) && sp_ai_game_hp < 35) ||
                 (confirmed.at && before.evidence.distance > confirmed.evidence.distance + 2)) blocked = @"TEST HOLD";
             if (blocked) {
-                [input->_mobileAIButton setTitle:blocked forState:UIControlStateNormal];
+                [input sp_mobile_ai_status:blocked];
                 sp_stub_log([[NSString stringWithFormat:@"AI movement diagnostic: %@", blocked] UTF8String]);
                 return;
             }
         }
         NSTimeInterval hold = 0.60;
         BOOL sent = [input sp_mobile_ai_hold_axis:CGPointMake(0,1) duration:hold];
-        [input->_mobileAIButton setTitle:sent ? @"TEST ACCEPT" : @"TEST INPUT" forState:UIControlStateNormal];
+        [input sp_mobile_ai_status:sent ? @"TEST ACCEPT" : @"TEST INPUT"];
         sp_stub_log(sent ? "AI movement diagnostic: adapter accepted" : "AI movement diagnostic: adapter rejected");
         if (sent) [input sp_mobile_ai_check_test:(SPAINavPulse){before, SP_MOVE_FORWARD, now+hold, now+1.8}
             generation:input->_mobileAIKeyGeneration remaining:remaining lastSample:(SPAINavSample){0}];
     });
 }
-- (void)sp_mobile_ai_toggle:(UIButton *)button {
-    if (_mobileAI.active) { [_mobileAI stop]; return; }
-    if (!_mobileAI.autonomousTest && !_mobileAI.observationSelected) return;
-    if (!sp_client_window || _softField.isFirstResponder || _mobileEditing ||
-        _mobileLeft || _mobileRight || _mobileInterface || _touches.count || _mobilePhysicalKeys.count || sp_mouse_buttons) return;
+- (BOOL)sp_mobile_ai_can_start {
+    UIWindowScene *scene = self.window.windowScene;
+    return sp_client_window && scene && scene.activationState == UISceneActivationStateForegroundActive &&
+        !_softField.isFirstResponder && !_mobileEditing && !_mobileJumpHeld &&
+        !_mobileLeft && !_mobileRight && !_mobileInterface && !_touches.count && !_mobilePhysicalKeys.count && !sp_mouse_buttons;
+}
+
+- (void)sp_mobile_ai_start {
+    if (_mobileAIStartPending || ![self sp_mobile_ai_can_start]) return;
     [self sp_mobile_ai_release_key];
-    ++_mobileAIKeyGeneration;
-    [_mobileStick prepareAI];
-    // Begin after UIKit finishes the button event, so its highlight cannot
-    // reject the first action. Gate the deferred task with the input generation.
-    NSUInteger generation = _mobileAIKeyGeneration;
+    NSUInteger generation = ++_mobileAIKeyGeneration;
+    if (_mobileAI.autonomousTest) [_mobileStick prepareAI];
+    _mobileAIStartPending = YES;
+    [self sp_mobile_ai_status:nil];
+    // Wait until UIKit finishes the button event before arming the executor.
     __weak SPInputView *weakSelf = self;
     dispatch_async(dispatch_get_main_queue(), ^{
         SPInputView *input = weakSelf;
-        if (!input || input->_mobileAIKeyGeneration != generation || !sp_client_window ||
-            input.window.windowScene.activationState != UISceneActivationStateForegroundActive) return;
-        [input->_mobileAI start];
+        if (!input || input->_mobileAIKeyGeneration != generation) return;
+        input->_mobileAIStartPending = NO;
+        if (![input sp_mobile_ai_can_start]) {
+            [input sp_mobile_ai_status:input->_mobileAI.manualPaused ? @"AI PAUSED" : nil];
+            return;
+        }
+        if (input->_mobileAI.manualPaused) [input->_mobileAI resumeFromManualInput];
+        else [input->_mobileAI start];
     });
+}
+
+- (void)sp_mobile_ai_toggle:(UIButton *)button {
+    if (_mobileAIStartPending || (_mobileAI.active && !_mobileAI.manualPaused)) {
+        [self sp_mobile_ai_cancel_pending];
+        [_mobileAI stop];
+        return;
+    }
+    if (_mobileAI.manualPaused && _mobileAI.modelDiagnostics) [_mobileAI stop];
+    _mobileAI.modelDiagnostics = NO;
+    _mobileAI.healthDiagnostics = NO;
+    [self sp_mobile_ai_start];
 }
 
 - (void)sp_mobile_rotation:(UIButton *)button {

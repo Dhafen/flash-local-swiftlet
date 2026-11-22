@@ -1,17 +1,23 @@
-// Experimental opt-in combat assistant. Local Apple Vision + Apple's on-device
-// Foundation Models bridge; no frame is stored or uploaded. All actions run on main.
-#import <ReplayKit/ReplayKit.h>
-#import <Vision/Vision.h>
-#import <CoreMedia/CoreMedia.h>
-#import <ImageIO/ImageIO.h>
+// Local iOS agent integration. Planner and input callbacks run on the main thread.
 #include <stdatomic.h>
 #include <stdbool.h>
 #include "ai-encounter.h"
 #include "ai-progression.h"
 #include "ai-health-vision.h"
+#include "ai-strip.h"
+#include "ai-movement.h"
+
+static void sp_ai_restriction_heartbeat(const uint8_t *bytes, unsigned length) {
+    static SPRuntimeRestriction previous;
+    SPRuntimeRestriction restriction = sp_ai_strip_restriction(bytes, length);
+    if (!restriction.kind || (restriction.kind == previous.kind && !strcmp(restriction.action, previous.action))) return;
+    previous = restriction;
+    sp_stub_log([[NSString stringWithFormat:@"SPHover restriction: %s action=%s",
+        restriction.kind == 1 ? "forbidden" : "blocked", restriction.action] UTF8String]);
+}
 
 static atomic_bool sp_p2p_capture_enabled;
-static atomic_bool sp_ai_health_capture_enabled;
+static atomic_uint sp_ai_health_interval_ms;
 static atomic_uint sp_ai_health_capture_epoch;
 static _Atomic(uint64_t) sp_ai_health_bounds, sp_ai_health_bounds_ms;
 static uint8_t sp_ai_health_visual_result = SP_VISUAL_HP_UNKNOWN;
@@ -35,7 +41,7 @@ static void sp_ai_finish_health_comparison(NSTimeInterval now) {
         (unsigned)sp_ai_health_visual_result, (unsigned)reference] UTF8String]);
 }
 static void sp_ai_record_health_reference(NSTimeInterval at, uint8_t hp) {
-    if (!atomic_load(&sp_ai_health_capture_enabled)) return;
+    if (!atomic_load(&sp_ai_health_interval_ms)) return;
     unsigned count = sp_ai_health_reference_count;
     if (count && at <= sp_ai_health_reference[count - 1].at) return;
     if (count == sizeof sp_ai_health_reference / sizeof sp_ai_health_reference[0]) {
@@ -46,10 +52,10 @@ static void sp_ai_record_health_reference(NSTimeInterval at, uint8_t hp) {
     sp_ai_health_reference_count = count + 1;
     sp_ai_finish_health_comparison(at);
 }
-static void sp_ai_health_enable(BOOL enabled) {
-    if (atomic_load(&sp_ai_health_capture_enabled) == enabled) return;
+static void sp_ai_health_set_interval(unsigned interval) {
+    unsigned previous = atomic_exchange(&sp_ai_health_interval_ms, interval);
+    if (interval || !previous) return;
     atomic_fetch_add(&sp_ai_health_capture_epoch, 1);
-    atomic_store(&sp_ai_health_capture_enabled, enabled);
     sp_ai_health_visual_result = SP_VISUAL_HP_UNKNOWN;
     sp_ai_health_visual_at = 0;
     sp_ai_clear_health_comparison();
@@ -94,7 +100,7 @@ static const char *sp_ai_nav_outcome_name(SPAINavOutcome outcome) {
     return names[outcome];
 }
 
-static NSString *const sp_ai_approach_model_key = @"sp_wolkara_approach_feedback_v1";
+static NSString *const sp_ai_approach_model_key = @"sp_wolkara_approach_feedback_v2";
 static SPAIApproachModel sp_ai_load_approach_model(void) {
     SPAIApproachModel model = {0};
     NSData *data = [NSUserDefaults.standardUserDefaults dataForKey:sp_ai_approach_model_key];
@@ -125,13 +131,19 @@ static NSTimeInterval sp_ai_pose_at;
 static NSTimeInterval sp_ai_xp_at;
 static uint8_t sp_ai_health_seq;
 static NSTimeInterval sp_ai_health_at;
-static void sp_ai_pose_heartbeat(uint8_t seq, const uint8_t *data, unsigned length, NSTimeInterval observedAt) {
-    if (observedAt <= sp_ai_pose_at || (sp_ai_pose_at > 0 && observedAt - sp_ai_pose_at < 1.0 && seq == sp_ai_pose_seq)) return;
-    sp_ai_pose = sp_ai_world_pose(data, length);
+static BOOL sp_ai_packed_heartbeat;
+static void sp_ai_set_pose(uint8_t seq, const uint8_t *data, unsigned length, NSTimeInterval observedAt) {
+    sp_ai_pose = data ? sp_ai_world_pose(data, length) : (SPAIWorldPose){0};
     sp_ai_pose.observedAt = observedAt;
     sp_ai_pose.sequence = seq;
     sp_ai_pose_seq = seq;
     sp_ai_pose_at = observedAt;
+}
+
+static void sp_ai_pose_heartbeat(uint8_t seq, const uint8_t *data, unsigned length, NSTimeInterval observedAt) {
+    if (sp_ai_packed_heartbeat || observedAt <= sp_ai_pose_at ||
+        (sp_ai_pose_at > 0 && observedAt - sp_ai_pose_at < 1.0 && seq == sp_ai_pose_seq)) return;
+    sp_ai_set_pose(seq, data, length, observedAt);
 }
 
 static SPAIWorldPose sp_ai_game_pose(SPAINavSample sample) {
@@ -178,6 +190,7 @@ static void sp_ai_game_update(const uint8_t *data, size_t length, NSTimeInterval
         sp_ai_state_reason = reason;
         sp_ai_payload_status = 0;
         sp_ai_game_at = 0;
+        sp_ai_game_hp = SP_VISUAL_HP_UNKNOWN;
         sp_ai_game_move_keys = 0;
         sp_ai_game_feedback = (SPAIFarmFeedback){0};
         sp_ai_game_corpse = 0;
@@ -187,15 +200,17 @@ static void sp_ai_game_update(const uint8_t *data, size_t length, NSTimeInterval
         sp_ai_record_health_reference(observedAt, SP_VISUAL_HP_UNKNOWN);
         return;
     }
+    SPAIHealthStatus player = sp_ai_health_status(data, (unsigned)length, false);
+    uint8_t publicHP = player == SP_HEALTH_PUBLIC ? data[3] : SP_VISUAL_HP_UNKNOWN;
     if (sp_ai_game_at <= 0 || sp_ai_packet_at - sp_ai_game_at >= 6.0 ||
-        sp_ai_health_known(sp_ai_game_hp) != sp_ai_health_known(data[3]) ||
+        sp_ai_health_known(sp_ai_game_hp) != sp_ai_health_known(publicHP) ||
         sp_ai_health_known(sp_ai_game_target_hp) != sp_ai_health_known(data[4]))
-        sp_stub_log((data[3] == 255 || data[4] == 255) ?
+        sp_stub_log((publicHP == SP_VISUAL_HP_UNKNOWN || data[4] == 255) ?
             "AI telemetry: public decision flags valid; health unknown" : "AI telemetry: valid game-state payload");
     sp_ai_payload_status = 1;
     sp_ai_state_reason = -1;
     sp_ai_game_flags = data[2];
-    sp_ai_game_hp = data[3];
+    sp_ai_game_hp = publicHP;
     sp_ai_game_target_hp = data[4];
     sp_ai_game_meta = data[5];
     sp_ai_game_move_keys = sp_ai_movement_bindings(data, (unsigned)length);
@@ -203,7 +218,6 @@ static void sp_ai_game_update(const uint8_t *data, size_t length, NSTimeInterval
     sp_ai_game_corpse = sp_ai_corpse_evidence(data, (unsigned)length);
     sp_ai_game_hit = sp_ai_own_hit(data, (unsigned)length);
     sp_ai_game_evidence = sp_ai_nav_evidence(data, (unsigned)length);
-    SPAIHealthStatus player = sp_ai_health_status(data, (unsigned)length, false);
     SPAIHealthStatus target = sp_ai_health_status(data, (unsigned)length, true);
     if (player != sp_ai_player_health || target != sp_ai_target_health) {
         static const char *const health[] = {"public", "unavailable", "restricted", "absent", "unspecified"};
@@ -212,26 +226,40 @@ static void sp_ai_game_update(const uint8_t *data, size_t length, NSTimeInterval
     sp_ai_player_health = player;
     sp_ai_target_health = target;
     sp_ai_game_at = observedAt;
-    sp_ai_record_health_reference(observedAt, player == SP_HEALTH_PUBLIC ? sp_ai_game_hp : SP_VISUAL_HP_UNKNOWN);
+    sp_ai_record_health_reference(observedAt, publicHP);
 }
 
-static void sp_ai_heartbeat(uint8_t seq, const uint8_t *data, size_t length, NSTimeInterval observedAt) {
+static BOOL sp_ai_accept_heartbeat(uint8_t seq, NSTimeInterval observedAt) {
     static NSTimeInterval lastHeartbeat;
-    if (observedAt <= lastHeartbeat) return;
-    if (sp_ai_heartbeat_seen && seq == sp_ai_heartbeat_seq) return;
+    if (observedAt <= lastHeartbeat || (sp_ai_heartbeat_seen && seq == sp_ai_heartbeat_seq)) return NO;
     if (!sp_ai_heartbeat_seen) sp_stub_log("AI telemetry: independent heartbeat detected");
     sp_ai_heartbeat_seen = YES;
     sp_ai_heartbeat_seq = seq;
     lastHeartbeat = observedAt;
+    return YES;
+}
+
+static void sp_ai_heartbeat(uint8_t seq, const uint8_t *data, size_t length, NSTimeInterval observedAt) {
+    if (!sp_ai_accept_heartbeat(seq, observedAt)) return;
+    sp_ai_packed_heartbeat = NO;
     sp_ai_game_update(data, length, observedAt);
+}
+
+static void sp_ai_bundle_heartbeat(uint8_t seq, const uint8_t *data, unsigned length, NSTimeInterval observedAt) {
+    SPAIObservationBundle bundle = sp_ai_strip_bundle(data, length);
+    if (!bundle.state || !sp_ai_accept_heartbeat(seq, observedAt)) return;
+    sp_ai_packed_heartbeat = YES;
+    sp_ai_set_pose(seq, bundle.pose, SP_AI_STRIP_RECORD_BYTES, observedAt);
+    if (bundle.progression) sp_ai_xp_heartbeat(seq, bundle.progression, SP_AI_STRIP_RECORD_BYTES, observedAt);
+    if (bundle.health) sp_ai_health_heartbeat(seq, bundle.health, SP_AI_STRIP_RECORD_BYTES, observedAt);
+    sp_ai_game_update(bundle.state, SP_AI_STRIP_RECORD_BYTES, observedAt);
 }
 
 @interface SPGameAIController : NSObject
 @property(nonatomic, readonly) BOOL active;
-@property(nonatomic, readonly) BOOL starting;
 @property(nonatomic, readonly) BOOL manualPaused;
-@property(nonatomic) BOOL autonomousTest;
-@property(nonatomic) BOOL observationSelected;
+@property(nonatomic, readonly) BOOL autonomousTest;
+@property(nonatomic) BOOL farmingAuthorized;
 @property(nonatomic) BOOL modelDiagnostics;
 @property(nonatomic) BOOL healthDiagnostics;
 @property(nonatomic, copy) BOOL (^action)(NSString *, CGPoint, NSTimeInterval, NSTimeInterval);
@@ -275,16 +303,15 @@ static void sp_ai_note_event(void *context, const char *message) {
 }
 
 @implementation SPGameAIController {
-    BOOL _active, _starting, _stopping, _ownsCapture;
+    BOOL _active;
     BOOL _manualPaused;
     NSTimeInterval _manualResumeAt;
     NSTimeInterval _lastFreshGameAt;
-    NSUInteger _run, _captureRun;
-    BOOL _busy;
-    NSTimeInterval _nextFrame, _lastFrame;
+    NSUInteger _run;
     BOOL _layaEnabled, _layaPending;
     NSString *_layaState, *_lastPhase;
     NSString *_lastWorldSummary;
+    NSString *_lastHealthCaptureState;
     NSString *_lastProgressSummary;
     SPAIProgression _lastProgress;
     NSTimeInterval _lastProgressAt;
@@ -308,19 +335,18 @@ static void sp_ai_note_event(void *context, const char *message) {
     NSTimeInterval _visualPreviewAt;
 }
 - (BOOL)active { return _active; }
-- (BOOL)starting { return _starting && _active; }
 - (BOOL)manualPaused { return _manualPaused; }
+- (BOOL)autonomousTest { return self.farmingAuthorized && !self.modelDiagnostics && !self.healthDiagnostics; }
 
 - (void)yieldToManualInput {
     if (!_active) return;
-    if (_starting || _ownsCapture) { [self stop]; return; }
     if (_manualPaused || (!self.autonomousTest && !self.modelDiagnostics)) return;
     _manualPaused = YES;
     SPAIEncounterAdapter adapter = {(__bridge void *)self, sp_ai_submit_input, sp_ai_release_input,
         sp_ai_navigation_outcome, sp_ai_note_event};
     sp_ai_suspend_encounter(&_encounter, adapter);
     sp_p2p_enable(NO);
-    sp_ai_health_enable(NO);
+    sp_ai_health_set_interval(0);
     [self invalidateDecision];
     [self showPhase:@"AI PAUSED"];
 }
@@ -329,6 +355,7 @@ static void sp_ai_note_event(void *context, const char *message) {
     if (!_active || !_manualPaused) return;
     _manualResumeAt = NSProcessInfo.processInfo.systemUptime + 1.0;
     _manualPaused = NO;
+    if (self.status) self.status(@"WAIT DATA");
 }
 
 - (void)sampleRecordedLeg:(NSUInteger)generation {
@@ -452,42 +479,6 @@ static void sp_ai_note_event(void *context, const char *message) {
     if ([p2p respondsToSelector:reset]) ((void (*)(id, SEL))objc_msgSend)(p2p, reset);
 }
 
-// Summarize the full video frame (BGRA or NV12) without storing any frame.
-// The coarse grid is used only for change detection, never semantic claims.
-static NSArray<NSNumber *> *sp_ai_luminance(CVPixelBufferRef buffer) {
-    NSMutableArray<NSNumber *> *result = [NSMutableArray arrayWithCapacity:96];
-    if (CVPixelBufferLockBaseAddress(buffer, kCVPixelBufferLock_ReadOnly) != kCVReturnSuccess) return result;
-    OSType format = CVPixelBufferGetPixelFormatType(buffer);
-    BOOL planar = CVPixelBufferIsPlanar(buffer) && CVPixelBufferGetPlaneCount(buffer) > 0 &&
-        (format == kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange || format == kCVPixelFormatType_420YpCbCr8BiPlanarFullRange);
-    BOOL bgra = format == kCVPixelFormatType_32BGRA;
-    size_t width = planar ? CVPixelBufferGetWidthOfPlane(buffer, 0) : CVPixelBufferGetWidth(buffer);
-    size_t height = planar ? CVPixelBufferGetHeightOfPlane(buffer, 0) : CVPixelBufferGetHeight(buffer);
-    size_t stride = planar ? CVPixelBufferGetBytesPerRowOfPlane(buffer, 0) : CVPixelBufferGetBytesPerRow(buffer);
-    const uint8_t *base = planar ? CVPixelBufferGetBaseAddressOfPlane(buffer, 0) : CVPixelBufferGetBaseAddress(buffer);
-    if ((planar || bgra) && base && width && height && stride >= width * (bgra ? 4 : 1)) {
-        for (size_t y = 0; y < 8; ++y) for (size_t x = 0; x < 12; ++x) {
-            const uint8_t *p = base + ((2*y+1)*height/16)*stride + ((2*x+1)*width/24)*(bgra ? 4 : 1);
-            unsigned value = planar ? p[0] : (29*p[0] + 150*p[1] + 77*p[2])/256;
-            [result addObject:@(value / 16)];
-        }
-    }
-    CVPixelBufferUnlockBaseAddress(buffer, kCVPixelBufferLock_ReadOnly);
-    return result;
-}
-
-- (void)haltCapture {
-    if (!_ownsCapture || _stopping) return;
-    _ownsCapture = NO;
-    _stopping = YES;
-    __weak SPGameAIController *weak = self;
-    [RPScreenRecorder.sharedRecorder stopCaptureWithHandler:^(NSError *error) {
-        dispatch_async(dispatch_get_main_queue(), ^{
-            SPGameAIController *strong = weak;
-            if (strong) strong->_stopping = NO;
-        });
-    }];
-}
 - (void)stop {
     if (!_active) return;
     _active = NO;
@@ -497,104 +488,15 @@ static NSArray<NSNumber *> *sp_ai_luminance(CVPixelBufferRef buffer) {
     _visualPreviewStatus = nil;
     _visualPreviewAt = 0;
     sp_p2p_enable(NO);
-    sp_ai_health_enable(NO);
+    sp_ai_health_set_interval(0);
     ++_run;
-    @synchronized(self) { _captureRun = 0; _busy = NO; }
     if (self.releaseInput) self.releaseInput();
     [self invalidateDecision];
-    [self haltCapture];
     if (self.status) self.status(@"AI OFF");
 }
 - (void)fail:(NSString *)reason {
     [self stop];
     if (self.status) self.status(reason);
-}
-- (void)finish:(NSString *)answer captured:(NSTimeInterval)captured run:(NSUInteger)run {
-    if (!_active || _run != run) return;
-    if ([answer isEqualToString:@"ERROR"] || [answer isEqualToString:@"UNAVAILABLE"]) {
-        [self fail:@"AI MODEL!"];
-        return;
-    }
-    NSString *display = NSProcessInfo.processInfo.systemUptime - captured <= 8.0 ? @"AI OBS" : @"AI SLOW";
-    if (self.status) self.status(display);
-    @synchronized(self) {
-        if (_captureRun == run) {
-            _busy = NO;
-            _nextFrame = NSProcessInfo.processInfo.systemUptime + 1.5;
-        }
-    }
-}
-- (void)inspect:(CMSampleBufferRef)sample run:(NSUInteger)run {
-    CVPixelBufferRef buffer = CMSampleBufferGetImageBuffer(sample);
-    if (!buffer) return;
-    @synchronized(self) {
-        if (_captureRun != run) return;
-        _lastFrame = NSProcessInfo.processInfo.systemUptime;
-        if (_busy || _lastFrame < _nextFrame) return;
-        _busy = YES;
-    }
-    NSTimeInterval captured = NSProcessInfo.processInfo.systemUptime;
-    NSNumber *orientation = (__bridge NSNumber *)CMGetAttachment(sample, (__bridge CFStringRef)RPVideoSampleOrientationKey, NULL);
-    NSInteger value = orientation ? orientation.integerValue : kCGImagePropertyOrientationUp;
-    CGImagePropertyOrientation exif = (value >= 1 && value <= 8) ? (CGImagePropertyOrientation)value : kCGImagePropertyOrientationUp;
-    // ReplayKit delivers buffers on its capture queue; OCR remains off main.
-    VNRecognizeTextRequest *request = [VNRecognizeTextRequest new];
-    request.recognitionLevel = VNRequestTextRecognitionLevelFast;
-    request.usesLanguageCorrection = NO;
-    request.regionOfInterest = CGRectMake(0, 0.24, 1, 0.76); // omit the chat end of the screen
-    VNImageRequestHandler *handler = [[VNImageRequestHandler alloc] initWithCVPixelBuffer:buffer orientation:exif options:@{}];
-    NSError *error = nil;
-    BOOL ok = [handler performRequests:@[request] error:&error];
-    NSMutableArray<NSDictionary *> *observedLabels = [NSMutableArray array];
-    if (ok) for (VNRecognizedTextObservation *observation in request.results) {
-        VNRecognizedText *text = [[observation topCandidates:1] firstObject];
-        if (text.confidence < 0.45 || text.string.length < 2) continue;
-        CGRect rect = observation.boundingBox;
-        CGPoint point = CGPointMake(CGRectGetMidX(rect), 1 - CGRectGetMidY(rect));
-        [observedLabels addObject:@{@"id": @(observedLabels.count + 1), @"x": @(point.x), @"y": @(point.y),
-            @"text": [text.string substringToIndex:MIN(text.string.length, 120)]}];
-        if (observedLabels.count >= 25) break;
-    }
-    // Whole-image classification is generic, not a WoW-trained detector.
-    VNClassifyImageRequest *classification = [VNClassifyImageRequest new];
-    NSMutableArray<NSString *> *tags = [NSMutableArray array];
-    if ([handler performRequests:@[classification] error:NULL]) {
-        for (VNClassificationObservation *label in classification.results) {
-            if (label.confidence < 0.08) continue;
-            [tags addObject:label.identifier];
-            if (tags.count >= 5) break;
-        }
-    }
-    NSDictionary *payload = @{@"labels": observedLabels, @"visualTags": tags, @"luminance": sp_ai_luminance(buffer)};
-    NSData *json = [NSJSONSerialization dataWithJSONObject:payload options:0 error:NULL];
-    NSString *observation = json ? [[NSString alloc] initWithData:json encoding:NSUTF8StringEncoding] : @"";
-    dispatch_async(dispatch_get_main_queue(), ^{
-        if (!self->_active || self->_run != run) return;
-        if (!ok || !observation.length || !observedLabels.count) {
-            [self finish:@"WAIT" captured:captured run:run];
-            if (self.status) self.status(@"AI NO TEXT");
-            return;
-        }
-        if (self.status) self.status(@"AI THINK");
-        Class bridge = NSClassFromString(@"SPGameAIModel");
-        SEL selector = NSSelectorFromString(@"decide:completion:");
-        if (![bridge respondsToSelector:selector]) { [self fail:@"AI MODEL!"]; return; }
-        void (^completion)(NSString *) = ^(NSString *answer) {
-            dispatch_async(dispatch_get_main_queue(), ^{ [self finish:answer captured:captured run:run]; });
-        };
-        ((void (*)(id, SEL, NSString *, void (^)(NSString *)))objc_msgSend)(bridge, selector, observation, completion);
-    });
-}
-- (void)watchCapture:(NSUInteger)run {
-    __weak SPGameAIController *weak = self;
-    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 5 * NSEC_PER_SEC), dispatch_get_main_queue(), ^{
-        SPGameAIController *strong = weak;
-        if (!strong || !strong->_active || strong->_run != run) return;
-        NSTimeInterval elapsed;
-        @synchronized(strong) { elapsed = NSProcessInfo.processInfo.systemUptime - strong->_lastFrame; }
-        if (elapsed > 15.0) { [strong fail:@"AI NO VID"]; return; }
-        [strong watchCapture:run];
-    });
 }
 // Read-only model diagnostics. Predictions have no connection to the executor.
 - (void)previewP2P:(NSUInteger)run {
@@ -773,20 +675,36 @@ static NSArray<NSNumber *> *sp_ai_luminance(CVPixelBufferRef buffer) {
     BOOL fresh = sp_ai_sample_fresh(sample.at, now);
     if (fresh) _lastFreshGameAt = now;
     else if (self.autonomousTest && now - _lastFreshGameAt >= 6.0) {
-        self.autonomousTest = NO;
-        [self fail:@"AI MODE"];
+        self.farmingAuthorized = NO;
+        [self fail:@"AI STALE"];
         return;
     }
     BOOL paused = _manualPaused || (_manualResumeAt > 0 && (!fresh || sample.at <= _manualResumeAt));
     if (!paused) _manualResumeAt = 0;
     BOOL preview = diagnosticsRequested && !paused && thermal == NSProcessInfoThermalStateNominal;
     BOOL healthDiag = self.healthDiagnostics && !self.autonomousTest;
-    BOOL healthPreview = healthDiag && !paused && fresh && thermal == NSProcessInfoThermalStateNominal;
-    sp_ai_health_enable(healthPreview);
+    BOOL waitingForHealth = self.autonomousTest && !sp_ai_health_known(sp_ai_game_hp);
+    _Static_assert(NSProcessInfoThermalStateNominal == 0 && NSProcessInfoThermalStateFair == 1 &&
+                   NSProcessInfoThermalStateSerious == 2 && NSProcessInfoThermalStateCritical == 3,
+                   "Health capture cadence must match iOS thermal states");
+    unsigned healthInterval = sp_ai_health_capture_interval_ms((unsigned)thermal, healthDiag || waitingForHealth, paused, fresh);
+    sp_ai_health_set_interval(healthInterval);
+    if (healthInterval) sp_ai_finish_health_comparison(now);
+    BOOL cropAvailable = (healthDiag || waitingForHealth) && atomic_load(&sp_ai_health_bounds) &&
+        sp_ai_health_bounds_fresh(atomic_load(&sp_ai_health_bounds_ms), (uint64_t)(now * 1000));
+    if (healthDiag || waitingForHealth) {
+        NSString *state = !fresh ? @"stale telemetry" : paused ? @"manual input" :
+            !healthInterval ? @"thermal pause" : !cropAvailable ? @"layout unavailable" :
+            [NSString stringWithFormat:@"layout available, interval %u ms", healthInterval];
+        if (![state isEqualToString:_lastHealthCaptureState]) {
+            _lastHealthCaptureState = state;
+            sp_stub_log([[NSString stringWithFormat:@"AI health capture: %@", state] UTF8String]);
+        }
+    } else _lastHealthCaptureState = nil;
     NSTimeInterval interval = reduced ? 0.8 : 0.4;
     if (thermal != _lastThermal || !_lastPhase) {
         _lastThermal = thermal;
-        if (thermal == NSProcessInfoThermalStateCritical) {
+        if (thermal >= NSProcessInfoThermalStateCritical) {
             sp_stub_log("AI thermal: critical, stopping");
         } else {
             NSString *diagnostics = preview ? @"allowed" : (diagnosticsRequested ? @"paused" : @"off");
@@ -794,7 +712,7 @@ static NSArray<NSNumber *> *sp_ai_luminance(CVPixelBufferRef buffer) {
                 (long)thermal, interval, diagnostics] UTF8String]);
         }
     }
-    if (thermal == NSProcessInfoThermalStateCritical) { [self fail:@"AI HEAT"]; return; }
+    if (thermal >= NSProcessInfoThermalStateCritical) { [self fail:@"AI HEAT"]; return; }
     if (fresh) {
         [self observeWorld:sample];
         [self observeProgression:now];
@@ -810,11 +728,16 @@ static NSArray<NSNumber *> *sp_ai_luminance(CVPixelBufferRef buffer) {
     } else if (self.autonomousTest) {
         [self showPhase:[self advance:sample now:now reduced:reduced]];
     } else if (healthDiag) {
-        sp_ai_finish_health_comparison(now);
-        NSString *status = !healthPreview ? (fresh ? @"HP PAUSED" : @"AI STALE") : @"HP NO VIEW";
-        if (healthPreview && sp_ai_health_visual_at > 0 && now - sp_ai_health_visual_at < 2.0 &&
-            sp_ai_health_visual_result != SP_VISUAL_HP_UNKNOWN)
-            status = [NSString stringWithFormat:@"HP≈%u%%", (unsigned)sp_ai_health_visual_result];
+        NSString *status = fresh ? @"HP PAUSED" : @"AI STALE";
+        if (healthInterval) {
+            BOOL sampleFresh = sp_ai_health_visual_at > 0 && now - sp_ai_health_visual_at < 2.0;
+            status = @"HP NO VIEW";
+            if (cropAvailable) {
+                if (!sampleFresh) status = @"HP WAIT";
+                else if (sp_ai_health_visual_result != SP_VISUAL_HP_UNKNOWN)
+                    status = [NSString stringWithFormat:@"HP≈%u%%", (unsigned)sp_ai_health_visual_result];
+            }
+        }
         [self showPhase:status];
     } else if (preview) {
         if (fresh) {
@@ -835,7 +758,7 @@ static NSArray<NSNumber *> *sp_ai_luminance(CVPixelBufferRef buffer) {
         dispatch_get_main_queue(), ^{ [weak pollDirect:run]; });
 }
 - (void)start {
-    if (_active || _starting || _stopping) return;
+    if (_active) return;
     _recordedLegStart = (SPAIWorldPose){0};
     ++_routeRecordingGeneration;
     if (_teaching) [self toggleTeaching];
@@ -862,6 +785,7 @@ static NSArray<NSNumber *> *sp_ai_luminance(CVPixelBufferRef buffer) {
     _manualResumeAt = 0;
     _lastFreshGameAt = NSProcessInfo.processInfo.systemUptime;
     _lastWorldSummary = nil;
+    _lastHealthCaptureState = nil;
     _lastProgressSummary = nil;
     _lastProgress = (SPAIProgression){0};
     _lastProgressAt = 0;
@@ -879,58 +803,4 @@ static NSArray<NSNumber *> *sp_ai_luminance(CVPixelBufferRef buffer) {
     [self pollDirect:run];
 }
 
-// Keep the earlier screen-based experiment available in source for later testing.
-- (void)startScreen {
-    if (_active || _starting || _stopping) return;
-    Class bridge = NSClassFromString(@"SPGameAIModel");
-    SEL ready = NSSelectorFromString(@"ready");
-    RPScreenRecorder *recorder = RPScreenRecorder.sharedRecorder;
-    if (![bridge respondsToSelector:ready] || !((BOOL (*)(id, SEL))objc_msgSend)(bridge, ready)) {
-        if (self.status) self.status(@"AI MODEL!");
-        return;
-    }
-    if (!recorder.isAvailable || recorder.isRecording) {
-        if (self.status) self.status(@"AI CAP!");
-        return;
-    }
-    [self invalidateDecision];
-    _active = YES;
-    _starting = YES;
-    NSUInteger run = ++_run;
-    @synchronized(self) { _captureRun = 0; _busy = NO; }
-    if (self.status) self.status(@"AI ON…");
-    recorder.microphoneEnabled = NO;
-    __weak SPGameAIController *weak = self;
-    [recorder startCaptureWithHandler:^(CMSampleBufferRef sample, RPSampleBufferType type, NSError *error) {
-        SPGameAIController *strong = weak;
-        if (!strong) return;
-        if (error) {
-            dispatch_async(dispatch_get_main_queue(), ^{
-                if (strong->_active && strong->_run == run) [strong fail:@"AI CAP!"];
-            });
-            return;
-        }
-        if (type == RPSampleBufferTypeVideo && sample) [strong inspect:sample run:run];
-    } completionHandler:^(NSError *error) {
-        dispatch_async(dispatch_get_main_queue(), ^{
-            SPGameAIController *strong = weak;
-            if (!strong) return;
-            strong->_starting = NO;
-            if (error) {
-                if (strong->_active && strong->_run == run) [strong fail:@"AI CAP!"];
-                return;
-            }
-            strong->_ownsCapture = YES;
-            if (!strong->_active || strong->_run != run) { [strong haltCapture]; return; }
-            @synchronized(strong) {
-                strong->_captureRun = run;
-                strong->_nextFrame = 0;
-                strong->_lastFrame = NSProcessInfo.processInfo.systemUptime;
-            }
-            if (strong.status) strong.status(@"AI VIDEO");
-            [strong watchCapture:run];
-        });
-    }];
-    // No session timeout: the same button toggles off. Lifecycle/errors still fail closed.
-}
 @end

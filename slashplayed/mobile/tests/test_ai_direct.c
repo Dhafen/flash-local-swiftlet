@@ -4,6 +4,78 @@
 #include "../ai-navigation.h"
 #include "../ai-progression.h"
 #include "../ai-health-vision.h"
+#include "../ai-strip.h"
+#include "../ai-movement.h"
+
+static void test_movement_ownership(void) {
+    SPMovementCommand command = {0};
+    assert(sp_movement_begin(&command, 'w', 5.0, 0.6));
+    uint64_t first = command.generation;
+    assert(!sp_movement_begin(&command, 'a', 5.2, 0.4));
+    assert(!sp_movement_due(&command, first, 5.5));
+    assert(sp_movement_due(&command, first, 5.7));
+    assert(sp_movement_release(&command, first).key == 'w');
+    assert(!sp_movement_release(&command, first).deadline);
+    assert(sp_movement_begin(&command, 0, 6.0, 0.2));
+    assert(!sp_movement_due(&command, first, 7.0));
+    assert(!sp_movement_release(&command, first).deadline && command.deadline > 6.0);
+    assert(sp_movement_release(&command, 0).deadline > 6.0 && !command.deadline);
+    assert(!sp_movement_begin(&command, 's', 7.0, 1.0));
+}
+
+static void test_padded_observation_strip(void) {
+    uint8_t pose[113] = {'A', 'P', 1, 3, 0, 0, 0, 7, 0, 0, 0, 8, 0, 0, 0, 9, 64, 1};
+    uint8_t xp[113] = {'A', 'X', 1, 1, 0, 0, 0, 15, 0, 0, 0, 40, 0, 12};
+    uint8_t health[113] = {'A', 'H', 2, 1, 0, 50, 0, 60, 0, 180, 0, 90};
+    assert(sp_ai_world_pose(pose, sp_ai_strip_payload_length(pose, sizeof pose)).headingKnown);
+    assert(sp_ai_progression(xp, sp_ai_strip_payload_length(xp, sizeof xp)).xpKnown);
+    assert(sp_ai_health_region(health, sp_ai_strip_payload_length(health, sizeof health)));
+    assert(!sp_ai_strip_payload_length(pose, 17));
+    pose[112] = 1;
+    assert(!sp_ai_strip_payload_length(pose, sizeof pose));
+}
+
+static void test_bundled_observation_strip(void) {
+    uint8_t payload[113] = {'A', 'I', 1};
+    static const uint8_t pose[] = {'A', 'P', 1, 3, 0, 0, 0, 7, 0, 0, 0, 8, 0, 0, 0, 9, 64, 1};
+    static const uint8_t xp[] = {'A', 'X', 1, 1, 0, 0, 0, 15, 0, 0, 0, 40, 0, 12};
+    static const uint8_t health[] = {'A', 'H', 2, 1, 0, 50, 0, 60, 0, 180, 0, 90};
+    memcpy(payload + 18, pose, sizeof pose);
+    memcpy(payload + 36, xp, sizeof xp);
+    memcpy(payload + 54, health, sizeof health);
+
+    SPAIObservationBundle decoded = sp_ai_strip_bundle(payload, sizeof payload);
+    assert(decoded.state == payload);
+    assert(sp_ai_world_pose(decoded.pose, 18).headingKnown);
+    assert(sp_ai_progression(decoded.progression, 18).xpKnown);
+    assert(sp_ai_health_region(decoded.health, 18));
+    assert(!sp_ai_strip_bundle(payload, 71).state);
+    payload[112] = 1;
+    assert(!sp_ai_strip_bundle(payload, sizeof payload).state);
+    payload[112] = 0;
+    payload[19] = 'X';
+    assert(!sp_ai_strip_bundle(payload, sizeof payload).state);
+    memset(payload + 18, 0, sizeof payload - 18);
+    decoded = sp_ai_strip_bundle(payload, sizeof payload);
+    assert(decoded.state && !decoded.pose && !decoded.progression && !decoded.health);
+    payload[21] = 3;
+    assert(!sp_ai_strip_bundle(payload, sizeof payload).state);
+}
+
+static void test_restriction_strip(void) {
+    uint8_t packet[113] = {'A', 'E', 1, 1, 0};
+    const char action[] = "SetPreferredGamepadInteractTarget()";
+    packet[4] = sizeof action - 1;
+    memcpy(packet + 5, action, sizeof action - 1);
+    SPRuntimeRestriction blocked = sp_ai_strip_restriction(packet, sizeof packet);
+    assert(blocked.kind == 1 && strcmp(blocked.action, action) == 0);
+    assert(!sp_ai_strip_restriction(packet, 7).kind);
+    packet[5] = '\n';
+    assert(!sp_ai_strip_restriction(packet, sizeof packet).kind);
+    packet[5] = 'S';
+    packet[112] = 1;
+    assert(!sp_ai_strip_restriction(packet, sizeof packet).kind);
+}
 
 typedef struct {
     const char *lastAction;
@@ -264,6 +336,14 @@ static void test_combat_feedback(void) {
     assert(!sp_ai_observe_own_damage(&combat, (SPAIOwnHit){1, true}, 9.5));
     assert(sp_ai_observe_own_damage(&combat, (SPAIOwnHit){2, true}, 10));
     assert(sp_ai_combat_budget_open(combat));
+
+    combat = (SPAICombatEvidence){.lastHP = 100};
+    sp_ai_accept_probe(&combat, 1);
+    assert(sp_ai_observe_damage(&combat, 80, 1.5));
+    for (unsigned i = 0; i < 3; ++i) sp_ai_accept_probe(&combat, 2 + i);
+    assert(!sp_ai_observe_damage(&combat, 80, 5));
+    assert(sp_ai_engagement(combat, SP_MOVE_NONE, 16, false, false) == SP_ENGAGE_DAMAGE_UNKNOWN);
+    assert(!sp_ai_combat_budget_open(combat));
 }
 
 static void test_health_status(void) {
@@ -341,6 +421,8 @@ static void test_approach_model_requires_measured_benefit(void) {
     SPAIApproachModel model = {0};
     SPAINavSample sample = {1, {SP_MOTION_POSITION, 2, false}, {9, 7, 0, 60}, 6};
     assert(sp_ai_predict_approach(&model, sample, SP_MOVE_LEFT, false) == SP_MOVE_LEFT);
+    assert(!sp_ai_train_approach(&model, sample, SP_MOVE_LEFT, SP_NAV_ALIGNED));
+    assert(model.trials[0][1] == 0 && model.progress[0][1] == 0);
     for (int i = 0; i < 6; ++i) {
         assert(sp_ai_train_approach(&model, sample, SP_MOVE_FORWARD, SP_NAV_CLOSER));
         assert(sp_ai_train_approach(&model, sample, SP_MOVE_LEFT, SP_NAV_STALLED));
@@ -422,7 +504,159 @@ static void test_route_turn_requires_binding_and_confirmed_heading(void) {
     assert(sp_ai_heading_error(250, 4) == -10);
 }
 
+static void append_verified_route_leg(SPAIRoute *route, SPAIWorldPose start, SPAIWorldPose end) {
+    end.heading = start.heading;
+    start.observedAt = 1;
+    end.observedAt = 2;
+    assert(sp_ai_route_append(route, start, end));
+    sp_ai_route_calibrate_leg(&route->legs[route->count - 1], start, end);
+    assert(route->legs[route->count - 1].calibrated);
+}
+
+static void test_route_start_partway(void) {
+    SPAIWorldPose start = {.map = 7, .valid = true, .headingKnown = true, .heading = 64, .epoch = 1};
+    SPAIWorldPose joint = start;
+    joint.secondQ4 = 40;
+    SPAIWorldPose end = joint;
+    end.firstQ4 = 40;
+    SPAIRoute route = {0};
+    append_verified_route_leg(&route, start, joint);
+    joint.heading = 0;
+    append_verified_route_leg(&route, joint, end);
+
+    SPAIWorldPose middle = joint;
+    middle.firstQ4 = 20;
+    middle.observedAt = 4;
+    SPAIEncounterObservation observation = {.sample.at = 4, .sample.evidence = {0, 1, SP_AI_TAB_BOUND, SP_AI_DISTANCE_UNKNOWN},
+        .flags = 1, .hp = 100, .movementKeys = 1 | 64 | 128, .playerHealth = SP_HEALTH_PUBLIC, .pose = middle};
+    SPAIApproachExamples examples = {0};
+    SPTestAdapter mock = {.accept = true};
+    SPAIEncounterAdapter adapter = {&mock, test_submit, test_release, test_outcome, NULL};
+    SPAIEncounter startLate = {.route = route, .searchAttempts = 4};
+    assert(!strcmp(sp_ai_advance(&startLate, observation, 4, false, &examples, adapter), "ROUTE"));
+    assert(startLate.route.next == 1 && startLate.routeMoves == 1 && startLate.searchAttempts == 4);
+    assert(mock.submissions == 1 && !strcmp(mock.lastAction, "FORWARD"));
+
+    mock = (SPTestAdapter){.accept = true};
+    for (unsigned i = 0; i < 6; ++i) {
+        SPAIEncounter blocked = {.route = route, .searchAttempts = 4};
+        observation.pose = middle;
+        switch (i) {
+            case 0: observation.pose.map = 8; break;
+            case 1: observation.pose.secondQ4 = 55; break;
+            case 2: observation.pose.headingKnown = false; break;
+            case 3: observation.pose.heading = 128; break;
+            case 4: observation.pose.observedAt = 3; break;
+            case 5: ++observation.pose.epoch; break;
+        }
+        assert(strcmp(sp_ai_advance(&blocked, observation, 4, false, &examples, adapter), "ROUTE") != 0);
+        assert(blocked.route.next == 0 && mock.submissions == 0);
+    }
+
+    observation.pose = middle;
+    SPAIEncounter unverified = {.route = route, .searchAttempts = 4};
+    unverified.route.legs[1].calibrated = false;
+    assert(!strcmp(sp_ai_advance(&unverified, observation, 4, false, &examples, adapter), "ROUTE HOLD"));
+    assert(unverified.route.next == 0 && mock.submissions == 0);
+
+    SPAIEncounter ambiguous = {.route = route, .searchAttempts = 4};
+    end.heading = 128;
+    append_verified_route_leg(&ambiguous.route, end, joint);
+    append_verified_route_leg(&ambiguous.route, joint, end);
+    assert(!strcmp(sp_ai_advance(&ambiguous, observation, 4, false, &examples, adapter), "ROUTE HOLD"));
+    assert(ambiguous.route.next == 0 && mock.submissions == 0);
+
+    SPAIEncounter continuing = {.route = route, .searchAttempts = 4};
+    observation.pose = start;
+    observation.pose.secondQ4 = 20;
+    observation.pose.observedAt = 4;
+    assert(!strcmp(sp_ai_advance(&continuing, observation, 4, false, &examples, adapter), "ROUTE"));
+    assert(continuing.route.next == 0 && continuing.routeDeadline && mock.submissions == 1);
+    observation.pose = middle;
+    for (double now = 4.5; now <= 5; now += 0.5) {
+        observation.sample.at = observation.pose.observedAt = now;
+        assert(!strcmp(sp_ai_advance(&continuing, observation, now, false, &examples, adapter), "ROUTE HOLD"));
+        assert(continuing.route.next == 0 && !continuing.routeDeadline && mock.submissions == 1);
+    }
+    assert(mock.releases == 1);
+}
+
+static void paint_health_bar(uint8_t *data, size_t width, size_t stride, size_t gutter, unsigned hp, bool bgra) {
+    size_t filled = (width - 2 * gutter) * hp / 100;
+    for (size_t row = 0; row < SP_HEALTH_SCAN_ROWS; ++row) {
+        for (size_t x = 0; x < width; ++x) {
+            uint8_t *pixel = data + row * stride + x * 4;
+            bool left = x < gutter, right = x >= width - gutter;
+            bool green = !left && !right && x < gutter + filled;
+            pixel[bgra ? 2 : 0] = left ? 255 : green ? 24 : 0;
+            pixel[1] = right ? 255 : green ? 170 : 0;
+            pixel[bgra ? 0 : 2] = left || right ? 255 : green ? 29 : 0;
+            pixel[3] = 255;
+        }
+    }
+}
+
+static void test_visible_health_bar(void) {
+    uint8_t data[SP_HEALTH_SCAN_ROWS * (410 * 4 + 16)];
+    const unsigned coverage[] = {20, 34, 35, 49, 50, 72, 100};
+    for (size_t scale = 1; scale <= 4; ++scale) {
+        size_t gutter = scale + 1;
+        size_t width = 100 * scale + 2 * gutter, stride = width * 4 + 16;
+        for (unsigned bgra = 0; bgra <= 1; ++bgra) {
+            for (size_t i = 0; i < sizeof coverage / sizeof coverage[0]; ++i) {
+                paint_health_bar(data, width, stride, gutter, coverage[i], bgra);
+                assert(sp_ai_visible_health(data, width, stride, bgra) == coverage[i]);
+            }
+            paint_health_bar(data, width, stride, 0, 100, bgra);
+            assert(sp_ai_visible_health(data, width, stride, bgra) == SP_VISUAL_HP_UNKNOWN);
+            paint_health_bar(data, width, stride, 0, 50, bgra);
+            assert(sp_ai_visible_health(data, width, stride, bgra) == SP_VISUAL_HP_UNKNOWN);
+            paint_health_bar(data, width, stride, gutter, 50, bgra);
+            memset(data + stride + (width - gutter) * 4, 0, gutter * 4);
+            assert(sp_ai_visible_health(data, width, stride, bgra) == SP_VISUAL_HP_UNKNOWN);
+            paint_health_bar(data, width, stride, gutter, 50, bgra);
+            assert(sp_ai_visible_health(data + 4, width - 1, stride, bgra) ==
+                (gutter > 2 ? 50 : SP_VISUAL_HP_UNKNOWN));
+            memset(data + stride, 255, width * 4);
+            assert(sp_ai_visible_health(data, width, stride, bgra) == SP_VISUAL_HP_UNKNOWN);
+            paint_health_bar(data, width, stride, gutter, 0, bgra);
+            assert(sp_ai_visible_health(data, width, stride, bgra) == SP_VISUAL_HP_UNKNOWN);
+        }
+    }
+    size_t width = 108, stride = width * 4;
+    paint_health_bar(data, width, stride, 4, 47, true);
+    assert(sp_ai_visible_health(data, width, stride, true) == 47);
+    for (size_t row = 0; row < SP_HEALTH_SCAN_ROWS; ++row) {
+        uint8_t *pixels = data + row * stride;
+        memcpy(pixels + 97 * 4, pixels + 104 * 4, 2 * 4);
+    }
+    assert(sp_ai_visible_health(data, width, stride, true) == SP_VISUAL_HP_UNKNOWN);
+    uint8_t region[] = {'A', 'H', 2, 1, 0, 10, 0, 20, 0, 150, 0, 75, 0, 0, 0, 0, 0, 0};
+    assert(sp_ai_health_region(region, sizeof region) == UINT64_C(0x000a00140096004b));
+    region[2] = 1;
+    assert(sp_ai_health_region(region, sizeof region) == 0);
+    region[2] = 2;
+    region[3] = 0;
+    assert(sp_ai_health_region(region, sizeof region) == 0);
+}
+
 int main(void) {
+    assert(sp_ai_health_capture_interval_ms(0, true, false, true) == 1000);
+    assert(sp_ai_health_capture_interval_ms(1, true, false, true) == 2500);
+    assert(sp_ai_health_capture_interval_ms(2, true, false, true) == 4000);
+    assert(sp_ai_health_capture_interval_ms(3, true, false, true) == 0);
+    assert(sp_ai_health_capture_interval_ms(4, true, false, true) == 0);
+    assert(sp_ai_health_capture_interval_ms(2, false, false, true) == 0);
+    assert(sp_ai_health_capture_interval_ms(2, true, true, true) == 0);
+    assert(sp_ai_health_capture_interval_ms(2, true, false, false) == 0);
+    assert(!sp_ai_health_bounds_fresh(0, 500));
+    assert(!sp_ai_health_bounds_fresh(6000, 5999));
+    assert(sp_ai_health_bounds_fresh(6000, 7500));
+    assert(!sp_ai_health_bounds_fresh(6000, 7501));
+    test_restriction_strip();
+    test_movement_ownership();
+    test_padded_observation_strip();
+    test_bundled_observation_strip();
     SPHealthReference hp[] = {{1.0, 27}, {1.5, 27}};
     uint8_t actual = 255;
     assert(sp_ai_compare_visible_health(hp, 1, 1.25, 90, 1.5, &actual) == SP_HEALTH_COMPARE_PENDING);
@@ -489,22 +723,8 @@ int main(void) {
     onFoot.firstQ4 -= 4;
     assert(!sp_ai_projected_approach(selected, onFoot));
     test_route_turn_requires_binding_and_confirmed_heading();
-    uint8_t health[3][64][4] = {0};
-    for (unsigned row = 0; row < 3; ++row)
-        for (unsigned x = 0; x < 64; ++x) {
-            health[row][x][0] = 29;
-            health[row][x][1] = x < 40 ? 170 : 29;
-            health[row][x][2] = 29;
-        }
-    assert(sp_ai_visible_health(&health[0][0][0], 64, 64 * 4, true) == 63);
-    memset(health[1], 255, sizeof health[1]);
-    assert(sp_ai_visible_health(&health[0][0][0], 64, 64 * 4, true) == SP_VISUAL_HP_UNKNOWN);
-    uint8_t region[] = {65, 72, 1, 1, 0, 10, 0, 20, 0, 150, 0, 75, 0, 0, 0, 0, 0, 0};
-    assert(sp_ai_health_region(region, sizeof region) == UINT64_C(0x000a00140096004b));
-    region[3] = 0;
-    assert(sp_ai_health_region(region, sizeof region) == 0);
-    memset(health, 0, sizeof health);
-    assert(sp_ai_visible_health(&health[0][0][0], 64, 64 * 4, true) == SP_VISUAL_HP_UNKNOWN);
+    test_route_start_partway();
+    test_visible_health_bar();
     test_route_stops_when_pose_disappears();
     test_approach_model_requires_measured_benefit();
     uint8_t xpPacket[] = {65, 88, 1, 3, 0, 0, 3, 82, 0, 0, 4, 176, 0, 6, 0, 4, 0, 0};

@@ -4,7 +4,7 @@ import json
 import shutil
 from pathlib import Path
 from wolkara_english import translate
-from wolkara_hud import protect_cooldowns, protect_hud
+from wolkara_hud import protect_cooldowns, protect_hud, publish_applied_layout
 from wolkara_rotation import actions, picker, turn
 
 root = Path.cwd()
@@ -13,7 +13,7 @@ addon = root / "addon/WolkaraRoue"
 shutil.copytree(vendor / "addons/WolkaraRoue", addon)
 for path in addon.glob("*.lua"):
     original = path.read_text(encoding="utf-8")
-    adapt = {"Hud.lua": protect_hud, "Actions.lua": protect_cooldowns}
+    adapt = {"Core.lua": publish_applied_layout, "Hud.lua": protect_hud, "Actions.lua": protect_cooldowns}
     english = translate(adapt[path.name](original) if path.name in adapt else original)
     rotation = {"Actions.lua": actions, "Picker.lua": picker, "Turn.lua": turn}
     if path.name in rotation:
